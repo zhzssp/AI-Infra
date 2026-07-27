@@ -26,7 +26,8 @@
 ```
 mlir-toy-dialect/
 ├── CMakeLists.txt              # 顶层构建配置（find_package MLIR）
-├── README.md                   # 本文件
+├── README.md                   # 项目说明 / 启动流程 / 参考资料
+├── MLIR-运行流程与关键组件.md    # MLIR 运行流程与关键组件的详细讲解
 ├── .gitignore
 ├── include/Toy/
 │   ├── CMakeLists.txt          # 调用 mlir-tblgen 生成 .inc 文件
