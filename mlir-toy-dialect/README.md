@@ -214,4 +214,35 @@ func.func @fold_add_mul() -> i32 {
 - **链接报错找不到符号**：检查 `lib/CMakeLists.txt` 里的 `LINK_LIBS` 是否漏了对应 MLIR 库。
 - **Windows 下 `cl.exe` 找不到**：确保是在 **x64 Native Tools Command Prompt** 里运行，而不是普通 PowerShell。
 
+---
+
+## 七、参考资料（外部文档与论文）
+
+> 以下为学习本项目时最值得查阅的官方文档与论文，按推荐阅读顺序排列。
+
+### 官方文档（https://mlir.llvm.org/）
+
+| 主题 | 链接 | 与本项目的对应关系 |
+|------|------|-------------------|
+| **MLIR 主页 / 文档总入口** | https://mlir.llvm.org/ | 所有文档的索引 |
+| **Getting Started（构建 MLIR）** | https://mlir.llvm.org/getting_started/ | 对应启动流程「阶段 1」编译 LLVM+MLIR |
+| **Creating a Dialect 教程** | https://mlir.llvm.org/docs/Tutorials/CreatingADialect/ | **最重要**——本项目即按此教程实现，可逐段对照 `ToyOps.td` / `ToyOps.cpp` |
+| **OpDefinitions（ODS / TableGen 参考）** | https://mlir.llvm.org/docs/OpDefinitions/ | 查 `assemblyFormat`、`hasFolder`、`Trait` 等字段的权威含义 |
+| **Canonicalization（规范化）** | https://mlir.llvm.org/docs/Canonicalization/ | 理解 `fold()` 与 `--canonicalize` 的底层机制，以及为何 `materializeConstant` 不可或缺 |
+| **Pass Management（Pass 基础设施）** | https://mlir.llvm.org/docs/PassManagement/ | 理解 Pass 如何调度、遍历 IR |
+| **LangRef（MLIR 规范）** | https://mlir.llvm.org/docs/LangRef/ | `.mlir` 文本语法的完整定义 |
+| **Rationale（设计动机）** | https://mlir.llvm.org/docs/Rationale/ | 解释 MLIR 为何这样设计 |
+
+### 官方最小示例（本项目的"亲兄弟"）
+
+- **`mlir/examples/standalone`**（llvm-project 源码树内）
+  GitHub：https://github.com/llvm/llvm-project/tree/main/mlir/examples/standalone
+  说明：官方版的 out-of-tree 极小 dialect，同样有 `standalone-opt`。本项目在其基础上增加了中文教学注释、显式的 `fold`/`materializeConstant` 演示以及 lit 测试。建议对照阅读其 `README.md`。
+
+### 论文
+
+- **MLIR: A Compiler Infrastructure for the End of Moore's Law**（Lattner, Amini, et al., 2020 IEEE HCS）
+  arXiv：https://arxiv.org/abs/2002.11054
+  说明：MLIR 的设计哲学必读，解释了"为什么需要 dialect / 多层 IR"。对应学习计划第二阶段。
+
 祝学习愉快！从 `include/Toy/ToyOps.td` 开始读起。
