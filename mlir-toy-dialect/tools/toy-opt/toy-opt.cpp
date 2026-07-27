@@ -1,0 +1,34 @@
+//===- toy-opt.cpp - Toy dialect 的命令行驱动 -----------------------------===//
+//
+// 这是一个 mlir-opt 风格的工具。它能：
+//   1. 读入一个 .mlir 文件；
+//   2. 解析其中的 toy 操作（以及内置 dialect 的操作）；
+//   3. 按命令行指定的 Pass（如 --canonicalize）做变换；
+//   4. 把结果打印出来。
+//
+// 用法示例：
+//   toy-opt input.mlir                 # 仅解析并回显
+//   toy-opt input.mlir --canonicalize  # 跑规范化（含常量折叠）
+//
+//===----------------------------------------------------------------------===//
+
+#include "Toy/ToyDialect.h"
+
+#include "mlir/IR/DialectRegistry.h"
+#include "mlir/InitAllDialects.h"
+#include "mlir/InitAllPasses.h"
+#include "mlir/Tools/mlir-opt/MlirOptMain.h"
+
+int main(int argc, char **argv) {
+  // 注册所有内置的 Pass（包括 --canonicalize、--cse 等）。
+  mlir::registerAllPasses();
+
+  // 建立一个 dialect 注册表：注册 MLIR 内置 dialect，再加上我们自己的 Toy。
+  mlir::DialectRegistry registry;
+  mlir::registerAllDialects(registry);
+  registry.insert<mlir::toy::ToyDialect>();
+
+  // 复用 MLIR 提供的 opt 主流程。它会自动处理命令行参数、文件读写、Pass 调度。
+  return mlir::asMainReturnCode(
+      mlir::MlirOptMain(argc, argv, "Toy optimizer driver\n", registry));
+}

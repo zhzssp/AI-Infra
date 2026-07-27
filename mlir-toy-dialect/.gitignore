@@ -1,0 +1,8 @@
+# CMake / Ninja 构建产物
+/build/
+build/
+
+# 编辑器
+.vscode/
+.idea/
+*.swp

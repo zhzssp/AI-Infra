@@ -1,0 +1,16 @@
+#===- lit.site.cfg.py.in - 模板，由 CMake 生成 lit.site.cfg.py ----------===#
+#
+# 这个文件里的 @VAR@ 占位符会在 cmake 配置阶段被真实路径替换，
+# 生成到 build/test/lit.site.cfg.py，供 lit 读取。
+#===========================================================================#
+
+import sys
+
+# 让 lit 能 import 到 LLVM 的 lit 模块（通常已在其 PYTHONPATH 中）
+config.toy_obj_root = "@CMAKE_BINARY_DIR@"
+config.toy_opt = "@TOY_OPT@"
+config.filecheck = "@FILECHECK@"
+
+# lit 的 ShTest 需要 LLVM 自带的 lit 包；配置阶段已通过 LLVM_EXTERNAL_LIT 提供。
+# 加载真正的测试配置（lit.cfg.py）
+lit_config.load_config(config, "@CMAKE_CURRENT_SOURCE_DIR@/lit.cfg.py")
