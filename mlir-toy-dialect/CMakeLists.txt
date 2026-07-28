@@ -50,6 +50,7 @@ add_definitions(${LLVM_DEFINITIONS})
 
 # --- 子目录 ---
 add_subdirectory(include/Toy)
+add_subdirectory(include/Low)
 add_subdirectory(lib)
 add_subdirectory(tools/toy-opt)
 

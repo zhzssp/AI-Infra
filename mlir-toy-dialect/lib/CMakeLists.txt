@@ -11,16 +11,26 @@
 add_mlir_dialect_library(MLIRToy
   ToyDialect.cpp
   ToyOps.cpp
+  ToyPasses.cpp
+  # low dialect（低层）及其相关 Pass：降低(toy->low) + 强度削减。
+  LowDialect.cpp
+  LowOps.cpp
+  LowPasses.cpp
 
   ADDITIONAL_HEADER_DIRS
   ${CMAKE_CURRENT_SOURCE_DIR}/../include/Toy
+  ${CMAKE_CURRENT_SOURCE_DIR}/../include/Low
 
   DEPENDS
   MLIRToyOpsIncGen
+  MLIRLowOpsIncGen
 
   LINK_LIBS PUBLIC
   MLIRIR
   MLIRSupport
   MLIRInferTypeOpInterface
   MLIRSideEffectInterfaces
+  # ToyPasses.cpp 需要：Pass 基础设施 + 贪心改写驱动器。
+  MLIRPass
+  MLIRTransformUtils
   )

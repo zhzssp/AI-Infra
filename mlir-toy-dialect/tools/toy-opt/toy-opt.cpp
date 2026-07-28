@@ -13,6 +13,9 @@
 //===----------------------------------------------------------------------===//
 
 #include "Toy/ToyDialect.h"
+#include "Toy/ToyPasses.h"
+#include "Low/LowDialect.h"
+#include "Low/LowPasses.h"
 
 #include "mlir/IR/DialectRegistry.h"
 #include "mlir/InitAllDialects.h"
@@ -23,10 +26,18 @@ int main(int argc, char **argv) {
   // 注册所有内置的 Pass（包括 --canonicalize、--cse 等）。
   mlir::registerAllPasses();
 
-  // 建立一个 dialect 注册表：注册 MLIR 内置 dialect，再加上我们自己的 Toy。
+  // 注册本项目自定义的 Pass。
+  //   toy 层：--toy-simplify
+  //   low 层：--toy-to-low（降低） / --low-strength-reduce（强度削减）
+  mlir::toy::registerToyPasses();
+  mlir::low::registerLowPasses();
+
+  // 建立一个 dialect 注册表：注册 MLIR 内置 dialect，再加上我们自己的
+  // 两个 dialect —— 高层 toy 与低层 low。
   mlir::DialectRegistry registry;
   mlir::registerAllDialects(registry);
   registry.insert<mlir::toy::ToyDialect>();
+  registry.insert<mlir::low::LowDialect>();
 
   // 复用 MLIR 提供的 opt 主流程。它会自动处理命令行参数、文件读写、Pass 调度。
   return mlir::asMainReturnCode(

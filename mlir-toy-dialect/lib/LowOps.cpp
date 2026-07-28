@@ -1,0 +1,27 @@
+//===- LowOps.cpp - Low dialect 操作的实现 --------------------------------===//
+//
+// 引入 TableGen 生成的操作定义，并实现 low.constant 的 fold()。
+//
+// 注意：low.add / low.mul 这里【故意不做常量折叠】。
+// 常量折叠是"高层数学语义"的活儿，本项目安排在 toy 层完成；
+// low 层专注于"硬件指令代价"的优化（强度削减，见 LowPasses.cpp）。
+// 这种刻意的分工，正是为了让你看清"不同层级各司其职"。
+//
+//===----------------------------------------------------------------------===//
+
+#include "Low/LowOps.h"
+#include "Low/LowDialect.h"
+
+#include "mlir/IR/Builders.h"
+#include "mlir/IR/OpImplementation.h"
+
+using namespace mlir;
+using namespace mlir::low;
+
+#define GET_OP_CLASSES
+#include "Low/LowOps.cpp.inc"
+
+// 常量折叠成"它自己的值"，让常量能被其它改写识别到。
+OpFoldResult ConstantOp::fold(FoldAdaptor adaptor) {
+  return getValueAttr();
+}

@@ -105,6 +105,38 @@ Canonicalizer（规范化 Pass）遍历 IR，对**每个 Op 调用它的 `fold()
 
 ---
 
+## 三·五、MLIR 改写 IR 的【两条主线】（fold vs RewritePattern）
+
+上面的 `fold()` 只是改写 IR 的第一条主线。MLIR 里更通用、更常用的是第二条主线
+——**RewritePattern（模式改写）**。本项目用 `--toy-simplify` 这个自定义 Pass 演示它。
+
+| | **fold()** | **RewritePattern** |
+|---|-----------|--------------------|
+| 思路 | "把这个 op 算成一个常量值" | "匹配一个 IR 子图，重写成另一个子图" |
+| 能力 | 窄：主要用于常量折叠 | 宽：任意结构改写（化简、lowering、conversion 都靠它） |
+| 写在哪 | Op 的 `fold()`（`ToyOps.cpp`） | `OpRewritePattern::matchAndRewrite`（`ToyPasses.cpp`） |
+| 本项目例子 | `10 + 20 → 30`（常量+常量） | `x * 1 → x`、`x + 0 → x`（含非常量操作数） |
+
+`--toy-simplify` 的运行链路：
+
+```
+toy.mul %x, (toy.constant 1)
+      │  Pass: runOnOperation()
+      ▼
+RewritePatternSet{ SimplifyMulByOne, SimplifyAddZero }
+      │  applyPatternsAndFoldGreedily 反复遍历，命中即重写，直到不动点
+      ▼
+SimplifyMulByOne::matchAndRewrite 命中 → rewriter.replaceOp(mul, %x)
+      │  贪心驱动器顺带 DCE，清理变成死代码的 toy.constant 1
+      ▼
+只剩 %x（toy.mul 消失）
+```
+
+> 一句话：**`fold()` 是"算值"，`RewritePattern` 是"换结构"。** 真正写编译器
+> Pass、做多层 IR lowering 时，用得最多的是 RewritePattern 这条主线。
+
+---
+
 ## 四、关键组件清单（对照本项目文件）
 
 | 组件 | 作用 | 本项目位置 |
@@ -115,9 +147,12 @@ Canonicalizer（规范化 Pass）遍历 IR，对**每个 Op 调用它的 `fold()
 | **mlir-tblgen** | 把 `.td` 翻译成 C++ 的代码生成器 | 由 CMake `add_mlir_dialect` 触发 |
 | **Trait** | Op 的属性标记（如 `Pure`=无副作用，`Commutative`=可交换） | `ToyOps.td` 里 `[Pure, Commutative]` |
 | **assemblyFormat** | 声明 Op 的文本语法，自动生成 parse/print | `ToyOps.td` 各 Op 内 |
-| **fold()** | 常量折叠等编译期化简的入口 | `ToyOps.cpp` |
+| **fold()** | 常量折叠等编译期化简的入口（"算值"式改写） | `ToyOps.cpp` |
 | **materializeConstant** | 把折叠值物化成常量 Op | `ToyDialect.cpp` |
+| **RewritePattern** | 结构化"匹配子图 → 重写子图"的通用改写（"换结构"式改写） | `ToyPasses.cpp` |
+| **自定义 Pass** | 手写 `PassWrapper` + 贪心驱动器，实现 `x*1=x`、`x+0=x` | `ToyPasses.cpp` |
 | **Pass / canonicalize** | 优化趟，触发 fold | 命令行 `--canonicalize` |
+| **Pass / toy-simplify** | 我们自己的 Pass，触发 RewritePattern | 命令行 `--toy-simplify` |
 | **MlirOptMain** | `toy-opt` 复用的通用主循环 | `tools/toy-opt/toy-opt.cpp` |
 | **.mlir 文本** | IR 的人类可读序列化形式 | `test/*.mlir` |
 | **lit + FileCheck** | 自动化测试：跑命令 + 断言输出 | `test/lit*.py`、`// CHECK:` |
@@ -138,12 +173,18 @@ cmake --build build
 :: 3. 运行：解析回显
 build\bin\toy-opt.exe test\ops.mlir
 
-:: 4. 运行：常量折叠（重点！看 toy.add 消失）
+:: 4. 运行：常量折叠（fold 机制，看 toy.add 变常量）
 build\bin\toy-opt.exe test\canonicalize.mlir --canonicalize
 
-:: 5. 自动化测试（lit 一键跑全部用例）
+:: 5. 运行：代数化简（RewritePattern 机制，看 x*1、x+0 消失）
+build\bin\toy-opt.exe test\simplify.mlir --toy-simplify
+
+:: 6. 自动化测试（lit 一键跑全部用例）
 cmake --build build --target check-toy
 ```
+
+> Linux + conda 环境下更省事，直接用脚本（见 README「三、Linux + conda 一键启动」）：
+> `bash scripts/all.sh`（装依赖→构建→测试→演示），或分步 `build.sh` / `test.sh` / `run.sh`。
 
 ---
 

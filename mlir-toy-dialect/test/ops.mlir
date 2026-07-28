@@ -1,7 +1,7 @@
 // 基本语法测试：验证 toy dialect 的解析与打印。
 //
 // RUN 行会被 lit 解析执行；CHECK 行用于 FileCheck 断言输出。
-//   RUN: toy-opt %s | FileCheck %s
+//   RUN: %toy-opt %s | %FileCheck %s
 //
 // 运行方式：
 //   手动：  toy-opt test/ops.mlir

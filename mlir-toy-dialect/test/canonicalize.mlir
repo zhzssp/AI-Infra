@@ -1,6 +1,6 @@
 // 常量折叠测试：本项目的重点，展示 MLIR 的优化机制。
 //
-// RUN: toy-opt %s --canonicalize | FileCheck %s
+// RUN: %toy-opt %s --canonicalize | %FileCheck %s
 //
 // 经过 --canonicalize（调用我们实现的 fold()）后：
 //   - 10 + 20 应折叠为 toy.constant 30 : i32
