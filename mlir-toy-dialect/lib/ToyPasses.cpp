@@ -26,6 +26,7 @@
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
+#include "llvm/Support/raw_ostream.h"
 
 using namespace mlir;
 using namespace mlir::toy;
@@ -63,6 +64,7 @@ struct SimplifyMulByOne : public OpRewritePattern<MulOp> {
     // 因为 mul 带 Commutative，1 可能在左也可能在右，两边都查。
     if (isConstantWithValue(op.getRhs(), 1)) {
       // 用 op 的另一个操作数，整体替换掉这个 mul（连同它的所有使用者）。
+      llvm::errs() << "  [rewrite] toy-simplify: toy.mul x*1 -> x (rhs=1)\n";
       rewriter.replaceOp(op, op.getLhs());
       return success();
     }
@@ -83,10 +85,12 @@ struct SimplifyAddZero : public OpRewritePattern<AddOp> {
   LogicalResult matchAndRewrite(AddOp op,
                                 PatternRewriter &rewriter) const override {
     if (isConstantWithValue(op.getRhs(), 0)) {
+      llvm::errs() << "  [rewrite] toy-simplify: toy.add x+0 -> x (rhs=0)\n";
       rewriter.replaceOp(op, op.getLhs());
       return success();
     }
     if (isConstantWithValue(op.getLhs(), 0)) {
+      llvm::errs() << "  [rewrite] toy-simplify: toy.add x+0 -> x (lhs=0)\n";
       rewriter.replaceOp(op, op.getRhs());
       return success();
     }
@@ -115,6 +119,10 @@ struct ToySimplifyPass
 
   // runOnOperation() 是 Pass 的入口，框架对每个目标 op 调用一次。
   void runOnOperation() override {
+    llvm::errs() << "\n========== [Pass] --toy-simplify (Toy 层代数化简) ==========\n";
+    llvm::errs() << "--- 进入 Pass 前的 IR（输入快照）---\n";
+    getOperation()->print(llvm::errs());
+
     // 1) 把规则装进规则集合。
     RewritePatternSet patterns(&getContext());
     patterns.add<SimplifyMulByOne, SimplifyAddZero>(&getContext());
@@ -125,6 +133,9 @@ struct ToySimplifyPass
     if (failed(applyPatternsAndFoldGreedily(getOperation(),
                                             std::move(patterns))))
       signalPassFailure();
+
+    llvm::errs() << "--- 退出 Pass 后的 IR（输出快照）---\n";
+    getOperation()->print(llvm::errs());
   }
 };
 

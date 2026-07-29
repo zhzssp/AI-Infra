@@ -21,6 +21,7 @@ fi
 echo "[build] 阶段 1/2：CMake 配置 ..."
 cmake -G Ninja -S "${TOY_PROJECT_DIR}" -B "${TOY_BUILD_DIR}" \
   -DCMAKE_BUILD_TYPE=Release \
+  -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
   -DMLIR_DIR="${MLIR_DIR}" \
   -DLLVM_DIR="${LLVM_DIR}" \
   -DLLVM_EXTERNAL_LIT="${TOY_LIT}" \

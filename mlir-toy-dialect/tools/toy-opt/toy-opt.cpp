@@ -21,6 +21,7 @@
 #include "mlir/InitAllDialects.h"
 #include "mlir/InitAllPasses.h"
 #include "mlir/Tools/mlir-opt/MlirOptMain.h"
+#include "llvm/Support/raw_ostream.h"
 
 int main(int argc, char **argv) {
   // 注册所有内置的 Pass（包括 --canonicalize、--cse 等）。
@@ -40,6 +41,18 @@ int main(int argc, char **argv) {
   registry.insert<mlir::low::LowDialect>();
 
   // 复用 MLIR 提供的 opt 主流程。它会自动处理命令行参数、文件读写、Pass 调度。
+
+  // === 演示用：打印 pipeline 启动信息（仅用于观察，不影响编译功能）===
+  llvm::errs() << "############################################################\n"
+               << "# [Pipeline] toy-opt 启动\n"
+               << "#   阶段 A 构建: scripts/build.sh   ->  产出 build/bin/toy-opt\n"
+               << "#   阶段 B 输入: 读取 .mlir，解析为统一 MLIR IR（Operation 树）\n"
+               << "#   阶段 C 处理: toy / low 两个 dialect 在同一体系下逐层降低+优化\n"
+               << "#   阶段 D 输出: 最终 IR 打印到 stdout（各 Pass 前后另有 IR 快照）\n"
+               << "#   已注册 dialect: toy(高层) / low(低层)\n"
+               << "#   已注册 Pass: --toy-simplify / --toy-to-low / --low-strength-reduce\n"
+               << "############################################################\n";
+
   return mlir::asMainReturnCode(
       mlir::MlirOptMain(argc, argv, "Toy optimizer driver\n", registry));
 }

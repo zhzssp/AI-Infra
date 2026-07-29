@@ -17,24 +17,57 @@ if [[ ! -x "${TOY_OPT}" ]]; then
   exit 1
 fi
 
+# 最终输出落盘目录（与 build/ 同级的 out/）
+OUT_DIR="${TOY_PROJECT_DIR}/out"
+mkdir -p "${OUT_DIR}"
+
+# 全量日志：把本脚本终端所见的一切（横幅 + 最终 IR + 调试 trace）都镜像到
+# out/full_run.log。exec 之后的所有 stdout/stderr 都会经过这个 tee。
+exec > >(tee "${OUT_DIR}/full_run.log") 2>&1
+
+echo "############################################################"
+echo "# toy-opt Pipeline 演示"
+echo "#   构建: scripts/build.sh           -> build/bin/toy-opt"
+echo "#   输入: test/*.mlir  (MLIR IR 文本，统一 Operation 树)"
+echo "#   处理: 按 --xxx Pass 逐层降低/优化（含 IR 快照与 rewrite 日志）"
+echo "#   输出: 最终 IR -> stdout；调试 trace（Pass 快照/rewrite 日志）-> stderr"
+echo "#   落盘: 每个演示保存两份 —— out/<demo>.mlir(最终IR) + out/<demo>.log(调试trace)"
+echo "#         另存一份 out/full_run.log（终端所见的全部内容：IR + trace 合并）"
+echo "############################################################"
+echo "# 输出目录: ${OUT_DIR}"
+
 sep() { printf '\n========== %s ==========\n' "$1"; }
 
+# 运行一个演示，同时把两路输出都落盘（且终端实时可见）：
+#   stdout（最终 IR）      -> tee 到 out/<demo>.mlir
+#   stderr（调试 trace）   -> tee 到 out/<demo>.log
+# 用 process substitution 让两路各自 tee，互不污染。
+run_demo() {
+  local out_file="$1"; shift
+  local log_file="${out_file%.mlir}.log"
+  "${TOY_OPT}" "$@" \
+    > >(tee "${out_file}") \
+    2> >(tee "${log_file}" >&2)
+  wait   # 等待两个 tee 子进程把文件写完，避免顺序错乱
+}
+
 sep "演示 1：解析并回显（dialect Parser/Printer）"
-"${TOY_OPT}" "${TOY_PROJECT_DIR}/test/ops.mlir"
+run_demo "${OUT_DIR}/demo1_parse.mlir" "${TOY_PROJECT_DIR}/test/ops.mlir"
 
 sep "演示 2：常量折叠 --canonicalize（fold 机制：toy.add/mul 变常量）"
-"${TOY_OPT}" "${TOY_PROJECT_DIR}/test/canonicalize.mlir" --canonicalize
+run_demo "${OUT_DIR}/demo2_canonicalize.mlir" "${TOY_PROJECT_DIR}/test/canonicalize.mlir" --canonicalize
 
 sep "演示 3：代数化简 --toy-simplify（RewritePattern：x*1=x, x+0=x）"
-"${TOY_OPT}" "${TOY_PROJECT_DIR}/test/simplify.mlir" --toy-simplify
+run_demo "${OUT_DIR}/demo3_simplify.mlir" "${TOY_PROJECT_DIR}/test/simplify.mlir" --toy-simplify
 
 sep "演示 4：降低 --toy-to-low（高层 toy.* 改写成低层 low.*）"
-"${TOY_OPT}" "${TOY_PROJECT_DIR}/test/lowering.mlir" --toy-to-low
+run_demo "${OUT_DIR}/demo4_lowering.mlir" "${TOY_PROJECT_DIR}/test/lowering.mlir" --toy-to-low
 
 sep "演示 5-a：x*4 在【高层 toy 层】做代数化简 —— 纹丝不动（高层没有移位概念）"
-"${TOY_OPT}" "${TOY_PROJECT_DIR}/test/strength.mlir" --toy-simplify
+run_demo "${OUT_DIR}/demo5a_simplify.mlir" "${TOY_PROJECT_DIR}/test/strength.mlir" --toy-simplify
 
 sep "演示 5-b：同一个 x*4 降到【低层 low 层】做强度削减 —— x*4 变成 x<<2"
-"${TOY_OPT}" "${TOY_PROJECT_DIR}/test/strength.mlir" --toy-to-low --low-strength-reduce
+run_demo "${OUT_DIR}/demo5b_strength.mlir" "${TOY_PROJECT_DIR}/test/strength.mlir" --toy-to-low --low-strength-reduce
 
 printf '\n[run] 五个演示运行完毕。对比演示 5-a 与 5-b，即可看清不同层级的优化分工。\n'
+printf '[run] 各演示的最终 IR 已保存到：%s\n' "${OUT_DIR}"

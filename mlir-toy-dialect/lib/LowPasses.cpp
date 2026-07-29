@@ -31,6 +31,7 @@
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "llvm/Support/MathExtras.h"
+#include "llvm/Support/raw_ostream.h"
 
 using namespace mlir;
 
@@ -49,6 +50,7 @@ struct LowerConstant : public OpRewritePattern<toy::ConstantOp> {
   using OpRewritePattern<toy::ConstantOp>::OpRewritePattern;
   LogicalResult matchAndRewrite(toy::ConstantOp op,
                                 PatternRewriter &rewriter) const override {
+    llvm::errs() << "  [rewrite] toy-to-low: toy.constant -> low.constant\n";
     rewriter.replaceOpWithNewOp<low::ConstantOp>(op, op.getType(),
                                                  op.getValueAttr());
     return success();
@@ -60,6 +62,7 @@ struct LowerAdd : public OpRewritePattern<toy::AddOp> {
   using OpRewritePattern<toy::AddOp>::OpRewritePattern;
   LogicalResult matchAndRewrite(toy::AddOp op,
                                 PatternRewriter &rewriter) const override {
+    llvm::errs() << "  [rewrite] toy-to-low: toy.add -> low.add\n";
     rewriter.replaceOpWithNewOp<low::AddOp>(op, op.getType(), op.getLhs(),
                                             op.getRhs());
     return success();
@@ -71,6 +74,7 @@ struct LowerMul : public OpRewritePattern<toy::MulOp> {
   using OpRewritePattern<toy::MulOp>::OpRewritePattern;
   LogicalResult matchAndRewrite(toy::MulOp op,
                                 PatternRewriter &rewriter) const override {
+    llvm::errs() << "  [rewrite] toy-to-low: toy.mul -> low.mul\n";
     rewriter.replaceOpWithNewOp<low::MulOp>(op, op.getType(), op.getLhs(),
                                             op.getRhs());
     return success();
@@ -93,11 +97,18 @@ struct ToyToLowPass
   }
 
   void runOnOperation() override {
+    llvm::errs() << "\n========== [Pass] --toy-to-low (降低：toy.* -> low.*) ==========\n";
+    llvm::errs() << "--- 进入 Pass 前的 IR（高层快照）---\n";
+    getOperation()->print(llvm::errs());
+
     RewritePatternSet patterns(&getContext());
     patterns.add<LowerConstant, LowerAdd, LowerMul>(&getContext());
     if (failed(applyPatternsAndFoldGreedily(getOperation(),
                                             std::move(patterns))))
       signalPassFailure();
+
+    llvm::errs() << "--- 退出 Pass 后的 IR（低层快照）---\n";
+    getOperation()->print(llvm::errs());
   }
 };
 
@@ -128,11 +139,15 @@ struct MulToShift : public OpRewritePattern<low::MulOp> {
     unsigned shift = 0;
     // 因为 mul 是 Commutative，2 的幂可能在左也可能在右，两边都试。
     if (isPowerOfTwoConst(op.getRhs(), shift)) {
+      llvm::errs() << "  [rewrite] low-strength-reduce: low.mul x*2^" << shift
+                   << " -> low.shl x," << shift << " (rhs 是 2 的幂)\n";
       rewriter.replaceOpWithNewOp<low::ShlOp>(
           op, op.getType(), op.getLhs(), rewriter.getI32IntegerAttr(shift));
       return success();
     }
     if (isPowerOfTwoConst(op.getLhs(), shift)) {
+      llvm::errs() << "  [rewrite] low-strength-reduce: low.mul x*2^" << shift
+                   << " -> low.shl x," << shift << " (lhs 是 2 的幂)\n";
       rewriter.replaceOpWithNewOp<low::ShlOp>(
           op, op.getType(), op.getRhs(), rewriter.getI32IntegerAttr(shift));
       return success();
@@ -151,11 +166,18 @@ struct LowStrengthReducePass
   }
 
   void runOnOperation() override {
+    llvm::errs() << "\n========== [Pass] --low-strength-reduce (低层强度削减) ==========\n";
+    llvm::errs() << "--- 进入 Pass 前的 IR（低层快照）---\n";
+    getOperation()->print(llvm::errs());
+
     RewritePatternSet patterns(&getContext());
     patterns.add<MulToShift>(&getContext());
     if (failed(applyPatternsAndFoldGreedily(getOperation(),
                                             std::move(patterns))))
       signalPassFailure();
+
+    llvm::errs() << "--- 退出 Pass 后的 IR（削减后快照）---\n";
+    getOperation()->print(llvm::errs());
   }
 };
 
