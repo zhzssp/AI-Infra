@@ -42,9 +42,12 @@ namespace {
 // ConstantOp::getValue() 由 ODS 生成，返回 uint32_t（因为属性是 I32Attr）。
 //
 static bool isConstantWithValue(Value v, uint32_t target) {
+  bool hit = false;
   if (auto c = v.getDefiningOp<ConstantOp>())
-    return c.getValue() == target;
-  return false;
+    hit = (c.getValue() == target);
+  llvm::errs() << "[trace] match: isConstantWithValue 目标=" << target
+               << " 命中=" << (hit ? "yes" : "no") << "\n";
+  return hit;
 }
 
 //===----------------------------------------------------------------------===//
@@ -61,6 +64,7 @@ struct SimplifyMulByOne : public OpRewritePattern<MulOp> {
 
   LogicalResult matchAndRewrite(MulOp op,
                                 PatternRewriter &rewriter) const override {
+    llvm::errs() << "[trace] match: SimplifyMulByOne 进入，检查 " << op << "\n";
     // 因为 mul 带 Commutative，1 可能在左也可能在右，两边都查。
     if (isConstantWithValue(op.getRhs(), 1)) {
       // 用 op 的另一个操作数，整体替换掉这个 mul（连同它的所有使用者）。
@@ -72,6 +76,7 @@ struct SimplifyMulByOne : public OpRewritePattern<MulOp> {
       rewriter.replaceOp(op, op.getRhs());
       return success();
     }
+    llvm::errs() << "[trace] match: SimplifyMulByOne 无匹配，返回 failure\n";
     return failure();
   }
 };
@@ -84,6 +89,7 @@ struct SimplifyAddZero : public OpRewritePattern<AddOp> {
 
   LogicalResult matchAndRewrite(AddOp op,
                                 PatternRewriter &rewriter) const override {
+    llvm::errs() << "[trace] match: SimplifyAddZero 进入，检查 " << op << "\n";
     if (isConstantWithValue(op.getRhs(), 0)) {
       llvm::errs() << "  [rewrite] toy-simplify: toy.add x+0 -> x (rhs=0)\n";
       rewriter.replaceOp(op, op.getLhs());
@@ -94,6 +100,7 @@ struct SimplifyAddZero : public OpRewritePattern<AddOp> {
       rewriter.replaceOp(op, op.getRhs());
       return success();
     }
+    llvm::errs() << "[trace] match: SimplifyAddZero 无匹配，返回 failure\n";
     return failure();
   }
 };

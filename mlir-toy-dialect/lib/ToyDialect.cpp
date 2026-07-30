@@ -6,6 +6,7 @@
 
 #include "Toy/ToyDialect.h"
 #include "Toy/ToyOps.h"
+#include "llvm/Support/raw_ostream.h"
 
 using namespace mlir;
 using namespace mlir::toy;
@@ -21,6 +22,7 @@ using namespace mlir::toy;
 // initialize() 由 MLIR 在 dialect 加载时调用。
 // 我们在这里把所有操作注册进来 —— 这样解析器才认识 toy.constant 等操作。
 void ToyDialect::initialize() {
+  llvm::errs() << "[trace] dialect: ToyDialect::initialize 开始注册 toy 操作\n";
   addOperations<
 #define GET_OP_LIST
 #include "Toy/ToyOps.cpp.inc"
@@ -45,8 +47,13 @@ mlir::Operation *ToyDialect::materializeConstant(mlir::OpBuilder &builder,
                                                  mlir::Type type,
                                                  mlir::Location loc) {
   auto intAttr = llvm::dyn_cast<mlir::IntegerAttr>(value);
-  if (!intAttr)
+  if (!intAttr) {
+    llvm::errs() << "[trace] dialect: ToyDialect::materializeConstant 收到非整数属性，无法物化\n";
     return nullptr;
+  }
+
+  llvm::errs() << "[trace] dialect: ToyDialect::materializeConstant 物化 toy.constant 值="
+               << intAttr.getValue() << "\n";
 
   // 用 ODS 自动生成的 builder 造一个 toy.constant。
   return builder.create<ConstantOp>(loc, type, intAttr);

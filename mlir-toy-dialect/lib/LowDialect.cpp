@@ -7,6 +7,7 @@
 
 #include "Low/LowDialect.h"
 #include "Low/LowOps.h"
+#include "llvm/Support/raw_ostream.h"
 
 using namespace mlir;
 using namespace mlir::low;
@@ -17,6 +18,7 @@ using namespace mlir::low;
 // initialize() 在 dialect 加载时被调用，注册所有操作，
 // 这样解析器才认识 low.constant / low.add / low.mul / low.shl。
 void LowDialect::initialize() {
+  llvm::errs() << "[trace] dialect: LowDialect::initialize 开始注册 low 操作\n";
   addOperations<
 #define GET_OP_LIST
 #include "Low/LowOps.cpp.inc"

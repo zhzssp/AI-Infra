@@ -13,6 +13,7 @@
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/OpImplementation.h"
 #include "llvm/ADT/APInt.h"
+#include "llvm/Support/raw_ostream.h"
 
 using namespace mlir;
 using namespace mlir::toy;
@@ -30,6 +31,8 @@ using namespace mlir::toy;
 // 对于 ConstantLike 的 op，返回它的 value 属性即可。
 //
 OpFoldResult ConstantOp::fold(FoldAdaptor adaptor) {
+  llvm::errs() << "[trace] dialect: ConstantOp::fold 进入，直接返回常量值 "
+               << getValueAttr() << "\n";
   // 直接返回该常量携带的属性值。
   return getValueAttr();
 }
@@ -48,12 +51,24 @@ OpFoldResult AddOp::fold(FoldAdaptor adaptor) {
   auto lhs = llvm::dyn_cast_or_null<IntegerAttr>(adaptor.getLhs());
   auto rhs = llvm::dyn_cast_or_null<IntegerAttr>(adaptor.getRhs());
 
+  llvm::errs() << "[trace] dialect: AddOp::fold 进入，lhs=";
+  if (lhs) llvm::errs() << lhs.getValue().getZExtValue();
+  else llvm::errs() << "(非常量)";
+  llvm::errs() << " rhs=";
+  if (rhs) llvm::errs() << rhs.getValue().getZExtValue();
+  else llvm::errs() << "(非常量)";
+  llvm::errs() << "\n";
+
   // 两个操作数都必须是常量，否则无法折叠。
-  if (!lhs || !rhs)
+  if (!lhs || !rhs) {
+    llvm::errs() << "[trace] dialect: AddOp::fold 操作数非全常量，跳过\n";
     return {};
+  }
 
   // 计算 lhs + rhs，构造一个新的 IntegerAttr 作为折叠结果。
   APInt result = lhs.getValue() + rhs.getValue();
+  llvm::errs() << "[trace] dialect: AddOp::fold 常量折叠结果="
+               << result.getZExtValue() << "\n";
   return IntegerAttr::get(getType(), result);
 }
 
@@ -69,9 +84,21 @@ OpFoldResult MulOp::fold(FoldAdaptor adaptor) {
   auto lhs = llvm::dyn_cast_or_null<IntegerAttr>(adaptor.getLhs());
   auto rhs = llvm::dyn_cast_or_null<IntegerAttr>(adaptor.getRhs());
 
-  if (!lhs || !rhs)
+  llvm::errs() << "[trace] dialect: MulOp::fold 进入，lhs=";
+  if (lhs) llvm::errs() << lhs.getValue().getZExtValue();
+  else llvm::errs() << "(非常量)";
+  llvm::errs() << " rhs=";
+  if (rhs) llvm::errs() << rhs.getValue().getZExtValue();
+  else llvm::errs() << "(非常量)";
+  llvm::errs() << "\n";
+
+  if (!lhs || !rhs) {
+    llvm::errs() << "[trace] dialect: MulOp::fold 操作数非全常量，跳过\n";
     return {};
+  }
 
   APInt result = lhs.getValue() * rhs.getValue();
+  llvm::errs() << "[trace] dialect: MulOp::fold 常量折叠结果="
+               << result.getZExtValue() << "\n";
   return IntegerAttr::get(getType(), result);
 }

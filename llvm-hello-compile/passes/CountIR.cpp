@@ -16,6 +16,8 @@
 using namespace llvm;
 
 PreservedAnalyses CountIRPass::run(Module &M, ModuleAnalysisManager & /*AM*/) {
+  errs() << "[trace] LLVM Pass: CountIRPass::run 进入，开始遍历模块 "
+         << M.getName() << "\n";
   errs() << "==================== [CountIR 分析型 Pass] ====================\n";
   errs() << "  模块: " << M.getName() << "\n";
 
@@ -48,5 +50,6 @@ PreservedAnalyses CountIRPass::run(Module &M, ModuleAnalysisManager & /*AM*/) {
   errs() << "===============================================================\n";
 
   // 分析型 Pass：没改 IR，保留所有已有分析结果。
+  errs() << "[trace] LLVM Pass: CountIRPass::run 退出\n";
   return PreservedAnalyses::all();
 }

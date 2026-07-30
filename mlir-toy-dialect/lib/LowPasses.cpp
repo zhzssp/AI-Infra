@@ -50,6 +50,7 @@ struct LowerConstant : public OpRewritePattern<toy::ConstantOp> {
   using OpRewritePattern<toy::ConstantOp>::OpRewritePattern;
   LogicalResult matchAndRewrite(toy::ConstantOp op,
                                 PatternRewriter &rewriter) const override {
+    llvm::errs() << "[trace] match: LowerConstant 进入，检查 " << op << "\n";
     llvm::errs() << "  [rewrite] toy-to-low: toy.constant -> low.constant\n";
     rewriter.replaceOpWithNewOp<low::ConstantOp>(op, op.getType(),
                                                  op.getValueAttr());
@@ -62,6 +63,7 @@ struct LowerAdd : public OpRewritePattern<toy::AddOp> {
   using OpRewritePattern<toy::AddOp>::OpRewritePattern;
   LogicalResult matchAndRewrite(toy::AddOp op,
                                 PatternRewriter &rewriter) const override {
+    llvm::errs() << "[trace] match: LowerAdd 进入，检查 " << op << "\n";
     llvm::errs() << "  [rewrite] toy-to-low: toy.add -> low.add\n";
     rewriter.replaceOpWithNewOp<low::AddOp>(op, op.getType(), op.getLhs(),
                                             op.getRhs());
@@ -74,6 +76,7 @@ struct LowerMul : public OpRewritePattern<toy::MulOp> {
   using OpRewritePattern<toy::MulOp>::OpRewritePattern;
   LogicalResult matchAndRewrite(toy::MulOp op,
                                 PatternRewriter &rewriter) const override {
+    llvm::errs() << "[trace] match: LowerMul 进入，检查 " << op << "\n";
     llvm::errs() << "  [rewrite] toy-to-low: toy.mul -> low.mul\n";
     rewriter.replaceOpWithNewOp<low::MulOp>(op, op.getType(), op.getLhs(),
                                             op.getRhs());
@@ -126,8 +129,11 @@ static bool isPowerOfTwoConst(Value v, unsigned &shift) {
     uint32_t val = c.getValue();
     if (val != 0 && (val & (val - 1)) == 0) { // 判断 2 的幂：只有一个比特为 1
       shift = llvm::Log2_32(val);
+      llvm::errs() << "[trace] match: isPowerOfTwoConst 命中 low.constant=" << val
+                   << " = 2^" << shift << "\n";
       return true;
     }
+    llvm::errs() << "[trace] match: isPowerOfTwoConst 值=" << val << " 非 2 的幂\n";
   }
   return false;
 }
@@ -137,6 +143,7 @@ struct MulToShift : public OpRewritePattern<low::MulOp> {
   LogicalResult matchAndRewrite(low::MulOp op,
                                 PatternRewriter &rewriter) const override {
     unsigned shift = 0;
+    llvm::errs() << "[trace] match: MulToShift 进入，检查 " << op << "\n";
     // 因为 mul 是 Commutative，2 的幂可能在左也可能在右，两边都试。
     if (isPowerOfTwoConst(op.getRhs(), shift)) {
       llvm::errs() << "  [rewrite] low-strength-reduce: low.mul x*2^" << shift
@@ -152,6 +159,7 @@ struct MulToShift : public OpRewritePattern<low::MulOp> {
           op, op.getType(), op.getRhs(), rewriter.getI32IntegerAttr(shift));
       return success();
     }
+    llvm::errs() << "[trace] match: MulToShift 无匹配（非 2 的幂），返回 failure\n";
     return failure(); // 非 2 的幂（如 x*3）：保持 low.mul 不动。
   }
 };

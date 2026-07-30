@@ -23,6 +23,7 @@ using namespace llvm;
 
 PreservedAnalyses InjectLoggingPass::run(Module &M,
                                          ModuleAnalysisManager & /*AM*/) {
+  errs() << "[trace] LLVM Pass: InjectLoggingPass::run 进入，准备为各函数插桩\n";
   LLVMContext &Ctx = M.getContext();
 
   // printf 原型：i32 printf(ptr, ...)  —— LLVM 17 用不透明指针 ptr
@@ -39,6 +40,7 @@ PreservedAnalyses InjectLoggingPass::run(Module &M,
       continue;              // 别给 printf 自己插桩
 
     // 在入口基本块的第一个"可插入点"处准备构造指令
+    errs() << "[trace] LLVM Pass: 处理函数 @" << F.getName() << "\n";
     BasicBlock &Entry = F.getEntryBlock();
     IRBuilder<> Builder(&*Entry.getFirstInsertionPt());
 
@@ -56,5 +58,7 @@ PreservedAnalyses InjectLoggingPass::run(Module &M,
   errs() << "===============================================================\n";
 
   // 改动了 IR：保守地让所有分析失效（教学场景足够）
+  errs() << "[trace] LLVM Pass: InjectLoggingPass::run 退出，共注入 " << injected
+         << " 处\n";
   return injected ? PreservedAnalyses::none() : PreservedAnalyses::all();
 }

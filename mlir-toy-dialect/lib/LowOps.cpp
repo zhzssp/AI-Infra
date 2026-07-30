@@ -14,6 +14,7 @@
 
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/OpImplementation.h"
+#include "llvm/Support/raw_ostream.h"
 
 using namespace mlir;
 using namespace mlir::low;
@@ -23,5 +24,7 @@ using namespace mlir::low;
 
 // 常量折叠成"它自己的值"，让常量能被其它改写识别到。
 OpFoldResult ConstantOp::fold(FoldAdaptor adaptor) {
+  llvm::errs() << "[trace] dialect: low::ConstantOp::fold 进入，返回常量值 "
+               << getValueAttr() << "\n";
   return getValueAttr();
 }
