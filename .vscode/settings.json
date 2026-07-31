@@ -1,0 +1,14 @@
+{
+  // ===== 方案 B：微软 C/C++ 扩展（ms-vscode.cpptools）=====
+  // 指向 CMake 导出的编译数据库，IntelliSense 据此解析每个 .cpp 的
+  // 头文件搜索路径（含 conda 里的 MLIR/LLVM include），从而支持
+  // Ctrl+点击跳转到 mlir::/llvm:: 的定义。
+  "C_Cpp.default.compileCommands": "/home/hanishzheng/AI-Infra/mlir-toy-dialect/build/compile_commands.json",
+
+  // 兜底配置（当某文件不在 compile_commands.json 中时使用）
+  "C_Cpp.default.cppStandard": "c++17",
+  "C_Cpp.default.intelliSenseMode": "linux-gcc-x64",
+
+  // 使用默认的 Tag Parser/IntelliSense 引擎
+  "C_Cpp.intelliSenseEngine": "default"
+}
