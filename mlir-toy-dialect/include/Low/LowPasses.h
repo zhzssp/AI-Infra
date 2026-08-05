@@ -29,7 +29,15 @@ std::unique_ptr<mlir::Pass> createToyToLowPass();
 // 低层优化：low.mul %x, 2^k -> low.shl %x, k
 std::unique_ptr<mlir::Pass> createLowStrengthReducePass();
 
-// 注册以上 Pass，使 toy-opt 能识别 --toy-to-low / --low-strength-reduce。
+// 降低的【正规写法】：toy.* -> low.*，但走 Dialect Conversion 框架
+// （ConversionTarget 描述合法终点 + TypeConverter 翻译 !toy.num -> i32）。
+// 与上面 createToyToLowPass 的贪心版做同一件事，放在一起是为了对比。
+// 实现见 lib/ConvertToyToLow.cpp。
+std::unique_ptr<mlir::Pass> createConvertToyToLowPass();
+void registerConvertToyToLowPass();
+
+// 注册以上 Pass，使 toy-opt 能识别
+// --toy-to-low / --low-strength-reduce / --toy-to-low-convert。
 void registerLowPasses();
 
 } // namespace low

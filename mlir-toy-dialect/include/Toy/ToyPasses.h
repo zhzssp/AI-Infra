@@ -31,8 +31,15 @@ namespace toy {
 //       "匹配-重写"这条通用机制，方便对照理解两者差异。
 std::unique_ptr<mlir::Pass> createToySimplifyPass();
 
+// 创建"代价统计" Pass（--toy-print-cost，实现在 ToyCostPass.cpp）。
+// 它演示的是 MLIR 的第三条主线：【接口(OpInterface)】。
+// 这个 Pass 里没有出现任何具体 op 类型，只问 "你实现 ToyCostOpInterface 了吗"，
+// 因此它同时适用于 toy 层和 low 层，将来加新 dialect 也不用改。
+std::unique_ptr<mlir::Pass> createToyPrintCostPass();
+void registerToyPrintCostPass();
+
 // 把本 dialect 的所有 Pass 注册到全局 Pass 列表，
-// 这样 toy-opt 命令行才能识别 --toy-simplify。
+// 这样 toy-opt 命令行才能识别 --toy-simplify / --toy-print-cost。
 void registerToyPasses();
 
 } // namespace toy

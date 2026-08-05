@@ -12,6 +12,12 @@
 include "Low/LowDialect.td"
 include "mlir/Interfaces/SideEffectInterfaces.td"
 
+// 复用【toy 层定义的】代价接口。
+// 这一行是本文件最值得注意的地方：接口不属于任何一个 dialect，
+// low 层的 op 照样可以实现它，于是 --toy-print-cost 这个 Pass
+// 不用改一行代码就能同时给 toy 层和 low 层算代价。
+include "Toy/ToyInterfaces.td"
+
 //===----------------------------------------------------------------------===//
 // low.constant —— 低层常量，语义等价于 toy.constant
 //===----------------------------------------------------------------------===//
@@ -26,7 +32,8 @@ def Low_ConstantOp : Low_Op<"constant", [Pure, ConstantLike]> {
 //===----------------------------------------------------------------------===//
 // low.add —— 低层加法
 //===----------------------------------------------------------------------===//
-def Low_AddOp : Low_Op<"add", [Pure, Commutative]> {
+// 用接口的默认实现：代价 = 1。
+def Low_AddOp : Low_Op<"add", [Pure, Commutative, ToyCostOpInterface]> {
   let summary = "两个 i32 相加（低层）";
   let arguments = (ins I32:$lhs, I32:$rhs);
   let results = (outs I32:$result);
@@ -36,7 +43,11 @@ def Low_AddOp : Low_Op<"add", [Pure, Commutative]> {
 //===----------------------------------------------------------------------===//
 // low.mul —— 低层乘法（强度削减的改写目标）
 //===----------------------------------------------------------------------===//
-def Low_MulOp : Low_Op<"mul", [Pure, Commutative]> {
+// 覆盖接口默认实现：代价 = 5（见 LowOps.cpp 的 MulOp::getCost）。
+// 强度削减把它换成 low.shl（代价 1）之后，--toy-print-cost 算出来的
+// 总代价会从 5 掉到 1 —— 这就是"优化到底赚了多少"的量化证据。
+def Low_MulOp : Low_Op<"mul",
+    [Pure, Commutative, DeclareOpInterfaceMethods<ToyCostOpInterface>]> {
   let summary = "两个 i32 相乘（低层）";
   let arguments = (ins I32:$lhs, I32:$rhs);
   let results = (outs I32:$result);
@@ -52,7 +63,7 @@ def Low_MulOp : Low_Op<"mul", [Pure, Commutative]> {
 //
 // 强度削减 Pass 会把 "low.mul %x, 4" 改写成 "low.shl %x, 2"。
 //
-def Low_ShlOp : Low_Op<"shl", [Pure]> {
+def Low_ShlOp : Low_Op<"shl", [Pure, ToyCostOpInterface]> {
   let summary = "逻辑左移 amount 位（等价于乘以 2^amount）";
   let arguments = (ins I32:$operand, I32Attr:$amount);
   let results = (outs I32:$result);

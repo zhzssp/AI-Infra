@@ -37,6 +37,11 @@ def Toy_Dialect : Dialect {
   // 重新变成一个真正的常量 Op(toy.constant) 才能替换原来的 op。
   // 这个方法就是负责"从属性值造出一个 toy.constant"。
   let hasConstantMaterializer = 1;
+
+  // 本 dialect 有自定义类型（见 ToyTypes.td 的 !toy.num）。
+  // 打开这个开关后，mlir-tblgen 会自动生成 parseType()/printType()，
+  // 让解析器认识 "!toy.num" 这样的写法——否则你得手写文本解析代码。
+  let useDefaultTypePrinterParser = 1;
 }
 
 // 一个便捷基类：本 dialect 内所有 Op 都继承它，

@@ -206,4 +206,8 @@ std::unique_ptr<Pass> mlir::low::createLowStrengthReducePass() {
 void mlir::low::registerLowPasses() {
   PassRegistration<ToyToLowPass>();
   PassRegistration<LowStrengthReducePass>();
+
+  // Dialect Conversion 版的降低（--toy-to-low-convert，
+  // 定义在 ConvertToyToLow.cpp）。与上面的贪心版并存，方便对比。
+  registerConvertToyToLowPass();
 }

@@ -49,8 +49,12 @@ int main(int argc, char **argv) {
                << "#   阶段 B 输入: 读取 .mlir，解析为统一 MLIR IR（Operation 树）\n"
                << "#   阶段 C 处理: toy / low 两个 dialect 在同一体系下逐层降低+优化\n"
                << "#   阶段 D 输出: 最终 IR 打印到 stdout（各 Pass 前后另有 IR 快照）\n"
-               << "#   已注册 dialect: toy(高层) / low(低层)\n"
-               << "#   已注册 Pass: --toy-simplify / --toy-to-low / --low-strength-reduce\n"
+               << "#   已注册 dialect: toy(高层，含自定义类型 !toy.num) / low(低层)\n"
+               << "#   已注册 Pass: --toy-simplify        代数化简（RewritePattern）\n"
+               << "#                --toy-to-low         降低（贪心驱动器版）\n"
+               << "#                --toy-to-low-convert 降低（Dialect Conversion 版）\n"
+               << "#                --low-strength-reduce 强度削减 x*2^k -> x<<k\n"
+               << "#                --toy-print-cost     基于接口的代价统计（跨 dialect）\n"
                << "############################################################\n";
 
   return mlir::asMainReturnCode(

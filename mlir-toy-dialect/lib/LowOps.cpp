@@ -28,3 +28,15 @@ OpFoldResult ConstantOp::fold(FoldAdaptor adaptor) {
                << getValueAttr() << "\n";
   return getValueAttr();
 }
+
+//===----------------------------------------------------------------------===//
+// MulOp::getCost —— 实现 toy 层定义的 ToyCostOpInterface
+//===----------------------------------------------------------------------===//
+//
+// low.add / low.shl 沿用接口默认实现（代价 1），只有 low.mul 覆盖成 5。
+// 于是 "x*4 -> x<<2" 这个强度削减，在 --toy-print-cost 眼里就是
+// 总代价从 5 降到 1。真实编译器的 cost model 就是这个套路的放大版。
+//
+unsigned MulOp::getCost() {
+  return 5;
+}

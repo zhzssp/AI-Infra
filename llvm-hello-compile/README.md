@@ -6,8 +6,17 @@ LLVM 从「源码」到「可执行文件」的完整编译链路，每一步都
 除了跑内置 Pass（`mem2reg`/`-O2`），本项目还**手写了两个自定义 Pass**（`passes/`），
 用 New PassManager 插件方式挂进同一套管线，让你亲眼看到「优化 = 一串可插拔的 Pass 在 IR 上变换」。
 
-它对应学习路线第二阶段的 **「LLVM：建立编译器 IR 的系统认知（SSA、Pass Manager、CodeGen 流程）」**，
-是读 [LLVM LangRef](https://llvm.org/docs/LangRef.html) 前后最好的动手实践。
+## 在自学体系中的位置
+
+| | |
+|--|--|
+| **角色** | 编译器地基（P2）：建立「单层 IR + Pass + CodeGen」手感 |
+| **总规划** | [`../README.md`](../README.md) §5.1 |
+| **配套教材** | [`../docs/llvm-learning-guide.md`](../docs/llvm-learning-guide.md)（机制）· [`../docs/paper-notes/02-llvm.md`](../docs/paper-notes/02-llvm.md)（动机） |
+| **阶段导航** | [`../docs/README.md` 阶段 0](../docs/README.md#阶段-0编译器地基半天1-天可与阶段-1-并行) |
+| **下一站** | [`../mlir-toy-dialect/`](../mlir-toy-dialect/) —— 同一套心智模型升到多层 dialect |
+
+> 建议在啃 MLIR 之前先跑通本项目（半天）；卡在 `llvm` dialect / `poison` / 向量化时再回 [`llvm-learning-guide`](../docs/llvm-learning-guide.md) 深挖。
 
 ---
 
@@ -222,13 +231,14 @@ sum_of_squares(5) = 55
 
 | 主题 | 链接 | 对应本项目 |
 |------|------|-----------|
-| **LLVM LangRef（IR 语言参考）** | https://llvm.org/docs/LangRef.html | 读懂 `02_*.ll` / `03_*.ll` 的语法 |
-| **LLVM 编译流程总览** | https://llvm.org/docs/CommandGuide/ | `clang`/`opt`/`llc`/`lli` 各工具手册 |
+| **本仓库 LLVM 学习文档（优先）** | [`../docs/llvm-learning-guide.md`](../docs/llvm-learning-guide.md) | 跑完本项目后对照读：四层 IR、New PM、CodeGen |
+| **自学体系枢纽** | [`../docs/README.md`](../docs/README.md) | 本项目在整条学习路径中的位置 |
+| **LLVM LangRef** | https://llvm.org/docs/LangRef.html | 读懂 `02_*.ll` / `03_*.ll` 的语法 |
 | **Writing an LLVM Pass** | https://llvm.org/docs/WritingAnLLVMNewPMPass.html | 理解步骤 ③ 的 Pass 机制 |
 | **Mem2Reg / SSA** | https://llvm.org/docs/Passes.html#mem2reg-promote-memory-to-register | 步骤 ③a 的原理 |
-| **Kaleidoscope 教程** | https://llvm.org/docs/tutorial/ | 想进一步"用 C++ API 亲手造 IR"时的下一站 |
+| **Kaleidoscope 教程** | https://llvm.org/docs/tutorial/ | 想进一步「用 C++ API 亲手造 IR」时的下一站 |
 
-学完这个项目，再回头看隔壁 `../mlir-toy-dialect`，你会发现 MLIR 的
+学完这个项目，再去隔壁 [`../mlir-toy-dialect`](../mlir-toy-dialect/)，你会发现 MLIR 的
 Operation / BasicBlock / SSA / Pass / Lowering 全都源自这里——只是把「单层 LLVM IR」
 扩展成了「多层可扩展 IR」。
 

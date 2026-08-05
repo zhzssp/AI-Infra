@@ -160,4 +160,7 @@ void mlir::toy::registerToyPasses() {
   // PassRegistration 把 Pass 登记到全局，使 MlirOptMain 能通过
   // getArgument() 的名字（toy-simplify）在命令行找到并运行它。
   PassRegistration<ToySimplifyPass>();
+
+  // 基于接口的代价统计 Pass（--toy-print-cost，定义在 ToyCostPass.cpp）。
+  registerToyPrintCostPass();
 }

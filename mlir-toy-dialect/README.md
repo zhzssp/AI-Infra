@@ -1,7 +1,19 @@
 # mlir-toy-dialect —— 一个极小的 MLIR Dialect 学习项目
 
 这是一个**树外（out-of-tree）** 的最小 MLIR Dialect 示例，专为学习 MLIR 的核心概念而设计。
-它对应学习路线第二阶段中的 **"MLIR：实现一个非常小的 MLIR Dialect"** 这一动手实践环节。
+
+## 在自学体系中的位置
+
+| | |
+|--|--|
+| **角色** | MLIR 深化的动手主战场（P0）：双 dialect · Region · Interface · Dialect Conversion |
+| **总规划** | [`../README.md`](../README.md) §3.2（必学清单 + 端到端验收） |
+| **配套教材** | [`../docs/paper-notes/03-mlir.md`](../docs/paper-notes/03-mlir.md) |
+| **阶段导航** | [`../docs/README.md` 阶段 2](../docs/README.md#阶段-2mlir-深化p0约-2-周) |
+| **上一站** | [`../llvm-hello-compile/`](../llvm-hello-compile/) —— SSA / Pass / lit 的同构预习 |
+| **下一站** | [`../docs/iree-learning-guide.md`](../docs/iree-learning-guide.md) —— 把多层 lowering 接到工业运行时 |
+
+> 本项目的核心机制（对照表见下）已经齐；按总规划验收，下一步是把 Toy 接到 `linalg → scf → llvm` 端到端链路上。
 
 ---
 
@@ -10,19 +22,73 @@
 | 概念 | 在本项目中的体现 |
 |------|-----------------|
 | **Dialect（方言）** | `toy`（高层，数学语义）与 `low`（低层，贴近硬件）**两个** dialect，MLIR 中扩展 IR 的基本单位 |
-| **Operation（操作）** | `toy.constant`、`toy.add`、`toy.mul`；`low.constant`、`low.add`、`low.mul`、`low.shl`，即 IR 中的指令 |
-| **ODS / TableGen** | 用 `ToyOps.td` / `LowOps.td` 声明式地定义 Dialect 和 Operation |
-| **Trait（特征）** | `Pure`、`Commutative`、`ConstantLike` 等 Op 属性标记 |
-| **Verifier / Builder** | 由 ODS 自动生成的解析、打印、构造样板 |
-| **Folder / Canonicalization** | 常量折叠优化，理解 MLIR 的 rewrite 机制 |
+| **Operation（操作）** | `toy.constant/add/mul/box/unbox/repeat/yield`；`low.constant/add/mul/shl`，即 IR 中的指令 |
+| **Type（自定义类型）** | `!toy.num`（`ToyTypes.td`）——可扩展性的第二根支柱，降低时由 TypeConverter 换成 `i32` |
+| **Attribute（属性）** | `I32Attr` 承载常量值与移位量；`--toy-print-cost` 动态挂上 `toy.cost` 这类可丢弃属性 |
+| **Region / Block / Terminator** | `toy.repeat` 带一个 Region，`toy.yield` 是终结符——**MLIR 相对 LLVM IR 最本质的区别：IR 是可嵌套的树** |
+| **ODS / TableGen** | 用 `ToyOps.td` / `LowOps.td` / `ToyTypes.td` / `ToyInterfaces.td` 声明式地定义一切 |
+| **Trait（特征）** | `Pure`、`Commutative`、`ConstantLike`、`Terminator`、`SingleBlock` |
+| **OpInterface（操作接口）** | `ToyCostOpInterface`：`toy` 与 `low` 两个 dialect 的 op 都实现它，于是 `--toy-print-cost` 这个 Pass **不认识任何具体 dialect 也能工作** |
+| **Verifier（验证器）** | ODS 自动生成的类型/结构检查 + 手写的 `RepeatOp::verify()`（`count > 0`、交还类型匹配） |
+| **Diagnostics（诊断）** | `emitOpError()` + `-verify-diagnostics` 测试（`test/verify.mlir`） |
+| **Folder / Canonicalization** | 两种 fold 都有：`add/mul` 返回 **Attribute**（算出新常量）、`unbox` 返回 **Value**（复用已有值） |
 | **Constant Materializer** | 把 fold 算出的"值"重新物化成 `toy.constant` |
 | **RewritePattern（模式改写）** | `toy-simplify` Pass 里用 `OpRewritePattern` 实现 `x*1=x`、`x+0=x` |
 | **自定义 Pass** | 手写 `ToySimplifyPass`（`PassWrapper` + 贪心驱动器），亲手写一个 Pass |
-| **Lowering（降低）** | `--toy-to-low` Pass 用 `replaceOpWithNewOp` 把高层 `toy.*` 翻译成低层 `low.*` |
+| **Lowering（降低）—— 两种写法** | ① `--toy-to-low`：贪心驱动器版；② `--toy-to-low-convert`：**Dialect Conversion 版**（`ConversionTarget` + `TypeConverter` + `OpConversionPattern`）。真实编译器一律用后者 |
 | **Strength Reduction（强度削减）** | `--low-strength-reduce` 把 `low.mul %x, 2^k` 改写成更廉价的 `low.shl %x, k` |
+| **Cost Model（代价模型）** | 借接口给每个 op 标价，量化强度削减的收益：`low.mul(5)` → `low.shl(1)` |
 | **多层 IR 分工（Multi-Level）** | 同一段 `x*4`：在 `toy` 层无从优化，降到 `low` 层才削减为 `x<<2`——直观演示"不同层级看到不同信息" |
-| **Pass（编译趟）** | 通过 `toy-opt --canonicalize` / `--toy-simplify` / `--toy-to-low` / `--low-strength-reduce` 触发优化 |
+| **Pass（编译趟）** | `--canonicalize` / `--toy-simplify` / `--toy-to-low` / `--toy-to-low-convert` / `--low-strength-reduce` / `--toy-print-cost` |
 | **mlir-opt 风格工具** | 自己的 `toy-opt`，可读入 `.mlir` 文件并跑 Pass |
+| **lit + FileCheck 测试** | 9 个用例，含 `-split-input-file`、`-verify-diagnostics`、`--check-prefix` 等常用姿势 |
+
+> 想知道**还有哪些 MLIR 特性本项目故意没做、以及为什么**，见下面的
+> 「一点五、MLIR 核心特性覆盖对照表」。
+
+---
+
+## 一点五、MLIR 核心特性覆盖对照表
+
+MLIR 的核心特性可以归成 **五组**。下表说明每一组在本项目里落在哪个文件，
+以及**哪些刻意留白**——留白的判断标准是："它是不是理解 MLIR 心智模型的必需品？"
+不是的话，就属于"遇到再学"。
+
+### ✅ 已覆盖（构成 MLIR 的完整心智模型）
+
+| # | 特性组 | 具体机制 | 代码位置 |
+|---|--------|---------|---------|
+| 1 | **IR 数据结构** | Operation / Value / Type / Attribute | `ToyOps.td`、`ToyTypes.td` |
+| | | **Region / Block / Terminator（嵌套 IR）** | `toy.repeat`、`toy.yield` |
+| 2 | **可扩展性三支柱** | 自定义 Operation | `ToyOps.td` / `LowOps.td` |
+| | | 自定义 **Type**（`!toy.num`） | `ToyTypes.td` + `ToyDialect.cpp` 的 `addTypes` |
+| | | Attribute（内置 + 动态挂载 `toy.cost`） | `ToyCostPass.cpp` |
+| 3 | **抽象与复用** | Trait（是/否的标记） | 各 `.td` 的 `[Pure, Commutative, ...]` |
+| | | **OpInterface（能力查询）** | `ToyInterfaces.td` + `ToyCostPass.cpp` |
+| 4 | **变换机制** | `fold()` → Attribute（算常量） | `ToyOps.cpp` 的 `AddOp/MulOp::fold` |
+| | | `fold()` → Value（复用已有值） | `ToyOps.cpp` 的 `UnboxOp::fold` |
+| | | `RewritePattern` + 贪心驱动器 | `ToyPasses.cpp` |
+| | | **Dialect Conversion**（Target/TypeConverter） | `ConvertToyToLow.cpp` |
+| | | 自定义 Pass、Pass 注册与调度 | 各 `*Passes.cpp`、`toy-opt.cpp` |
+| 5 | **正确性与工程化** | Verifier + `emitOpError` 诊断 | `ToyOps.cpp` 的 `RepeatOp::verify` |
+| | | ODS/TableGen 全链路（op/type/interface） | `include/*/CMakeLists.txt` |
+| | | lit + FileCheck 测试 | `test/` |
+
+### ⏸ 刻意留白（遇到再学，不影响理解 MLIR）
+
+| 特性 | 为什么现在不学 | 什么时候会撞上 |
+|------|--------------|--------------|
+| **DRR（`Pat<>` 声明式重写）** | 只是 `RewritePattern` 的 TableGen 糖衣，机制完全一样。先看懂 C++ 版，DRR 半小时就能上手 | 写大量简单一对一改写规则时 |
+| **TableGen 定义 Pass（`Passes.td` + `GEN_PASS_DEF`）** | 只是 `PassWrapper` 的工程化包装，多了 Pass 选项/统计/依赖声明 | 给 Pass 加命令行选项时 |
+| **`--pass-pipeline` 文本管线、PassManager 嵌套** | 属于调度层，理解"Pass 是什么"之后自然会用 | 组织真实编译流水线时 |
+| **Symbol / SymbolTable / 模块间引用** | 本项目直接复用内置 `func.func` | 做跨函数分析、内联时 |
+| **Bufferization（tensor → memref）** | 是一整套独立子系统，需要先有张量语义 | 做真实的 AI 编译器降低时 |
+| **降低到 LLVM Dialect + JIT 执行** | 只是再多一次 lowering，机制与 `toy→low` 完全同构 | 需要真的把 IR 跑起来时 |
+| **数据流分析框架、DataLayout、位置追踪** | 高级话题，用得着的场景很窄 | 写复杂分析型 Pass 时 |
+
+**一句话结论**：跑通本项目的 9 组演示 + 读完 10 个测试用例，
+你就已经掌握了阅读任意一个 MLIR 项目（IREE / Triton / Torch-MLIR）所需的全部基础概念，
+剩下的都是"某个具体 dialect 的领域知识"，而不是"MLIR 本身的机制"。
 
 ---
 
@@ -35,35 +101,42 @@ mlir-toy-dialect/
 ├── MLIR-运行流程与关键组件.md    # MLIR 运行流程与关键组件的详细讲解
 ├── .gitignore
 ├── include/Toy/                # 【高层】toy dialect（数学语义）
-│   ├── CMakeLists.txt          # 调用 mlir-tblgen 生成 .inc 文件
+│   ├── CMakeLists.txt          # 调用 mlir-tblgen 生成 .inc（op / type / interface 三套）
 │   ├── ToyDialect.td           # Dialect 定义（TableGen/ODS）
-│   ├── ToyOps.td               # Operation 定义（TableGen/ODS）
+│   ├── ToyOps.td               # Operation 定义：算术 / 装箱拆箱 / 带 Region 的 repeat
+│   ├── ToyTypes.td             # ★ 自定义类型 !toy.num
+│   ├── ToyInterfaces.td        # ★ 操作接口 ToyCostOpInterface
 │   ├── ToyDialect.h            # Dialect C++ 声明
 │   ├── ToyOps.h                # Operation C++ 声明
+│   ├── ToyTypes.h              # ★ 自定义类型 C++ 声明
+│   ├── ToyInterfaces.h         # ★ 接口 C++ 声明
 │   └── ToyPasses.h             # 自定义 Pass 声明
 ├── include/Low/                # 【低层】low dialect（贴近硬件，含 shl 移位）
 │   ├── CMakeLists.txt          # 调用 mlir-tblgen 生成 .inc 文件
 │   ├── LowDialect.td           # Dialect 定义
-│   ├── LowOps.td               # low.constant/add/mul/shl 定义
+│   ├── LowOps.td               # low.constant/add/mul/shl 定义（也实现了代价接口）
 │   ├── LowDialect.h            # Dialect C++ 声明
 │   ├── LowOps.h                # Operation C++ 声明
-│   └── LowPasses.h             # 降低 / 强度削减 Pass 声明
+│   └── LowPasses.h             # 降低 / 强度削减 / 转换 Pass 声明
 ├── lib/
 │   ├── CMakeLists.txt
-│   ├── ToyDialect.cpp          # Dialect 注册 + materializeConstant
-│   ├── ToyOps.cpp              # Operation 实现（含 fold/canonicalize）
+│   ├── ToyDialect.cpp          # Dialect 注册 + 类型注册 + materializeConstant
+│   ├── ToyOps.cpp              # fold（两种）/ verify / 接口方法 getCost
+│   ├── ToyInterfaces.cpp       # ★ 接口生成代码的落地点
 │   ├── ToyPasses.cpp           # 自定义 Pass + RewritePattern（x*1=x, x+0=x）
+│   ├── ToyCostPass.cpp         # ★ 只依赖接口、不认识任何 dialect 的通用 Pass
 │   ├── LowDialect.cpp          # low dialect 注册
-│   ├── LowOps.cpp              # low.constant 的 fold()
-│   └── LowPasses.cpp           # 【核心】降低 Pass(toy→low) + 强度削减 Pass(mul→shl)
+│   ├── LowOps.cpp              # low.constant 的 fold() + low.mul 的 getCost()
+│   ├── LowPasses.cpp           # 【核心】降低 Pass(toy→low) + 强度削减 Pass(mul→shl)
+│   └── ConvertToyToLow.cpp     # ★ 同一个降低的 Dialect Conversion 版（对照阅读）
 ├── tools/toy-opt/
 │   ├── CMakeLists.txt
-│   └── toy-opt.cpp             # mlir-opt 风格的命令行工具（注册两个 dialect + 四个 Pass）
+│   └── toy-opt.cpp             # mlir-opt 风格的命令行工具（注册两个 dialect + 五个 Pass）
 ├── scripts/                    # 一键启动/构建/测试脚本（Linux + conda）
 │   ├── env.sh                  # 公共环境（激活 conda、导出路径）
 │   ├── setup.sh                # 安装依赖（幂等）
 │   ├── build.sh                # 配置 + 编译
-│   ├── run.sh                  # 手动运行五个演示
+│   ├── run.sh                  # 手动运行九个演示
 │   ├── test.sh                 # lit 自动化测试
 │   └── all.sh                  # 一键跑通全流程
 └── test/
@@ -74,8 +147,15 @@ mlir-toy-dialect/
     ├── canonicalize.mlir       # 常量折叠优化测试
     ├── simplify.mlir           # 代数化简（RewritePattern）测试
     ├── lowering.mlir           # 降低测试：toy.* → low.*
-    └── strength.mlir           # 强度削减测试：x*4 → x<<2（多层分工对比）
+    ├── strength.mlir           # 强度削减测试：x*4 → x<<2（多层分工对比）
+    ├── region.mlir             # ★ Region 嵌套：Pass 自动递归进区域
+    ├── verify.mlir             # ★ Verifier + 诊断（-verify-diagnostics）
+    ├── types.mlir              # ★ 自定义类型 !toy.num + fold 返回 Value
+    ├── convert.mlir            # ★ Dialect Conversion 版降低 + 类型转换
+    └── cost.mlir               # ★ OpInterface 驱动的跨 dialect 代价统计
 ```
+
+> 打 ★ 的是为了补齐 MLIR 核心特性而后加的部分。
 
 ---
 
@@ -96,8 +176,8 @@ bash scripts/all.sh          # 装依赖 → 构建 → 自动化测试 → 手�
 ```bash
 bash scripts/setup.sh        # ① 安装依赖：conda 环境 mlir-env（mlir/llvm/cmake/ninja/编译器/lit），幂等
 bash scripts/build.sh        # ② 配置+编译，产出 build/bin/toy-opt（加 clean 可全新构建）
-bash scripts/test.sh         # ③ lit 自动化测试（check-toy，共 5 个用例）
-bash scripts/run.sh          # ④ 手动运行五个演示，肉眼观察输出
+bash scripts/test.sh         # ③ lit 自动化测试（check-toy，共 10 个用例）
+bash scripts/run.sh          # ④ 手动运行九组演示，肉眼观察输出
 ```
 
 ### 3.2 环境要点（脚本已自动处理，了解即可）
@@ -319,15 +399,60 @@ low.shl %x, 2                          ← 低层：x*4 = x<<2，用更廉价的
 
 ## 六、建议的学习顺序
 
-1. **先看 `include/Toy/ToyOps.td`** —— 理解如何用声明式的 TableGen 定义一个 Operation（输入/输出/trait）。
-2. **看生成的 `.inc` 文件**（构建后在 `build/include/Toy/` 下）—— 理解 TableGen 到底生成了什么 C++ 代码。
-3. **看 `lib/ToyOps.cpp` 中的 `fold()`** —— 理解 MLIR 优化是怎么写的；注意它与 `materializeConstant` 的配合。
-4. **看 `lib/LowPasses.cpp`** —— 理解"降低（lowering）"与"跨层优化（强度削减）"，体会 MLIR 多层 IR 的核心价值（配合第「五点五」节与 `scripts/run.sh` 演示 4、5 一起看）。
-5. **动手改**：
-   - 加一个新 Op（比如 `toy.sub`），走一遍完整流程；
-   - 给 `toy.mul` 加代数化简：`x * 1 = x`、`x * 0 = 0`；
-   - 写一个自定义 Pass，把 `toy.add` 换成 `toy.mul`；
-   - 在 `low` 层再加一个跨层优化（比如把 `low.mul %x, 0` 直接削减为常量 0），体会"每层做各自最擅长的优化"。
+按下面的顺序读，每一步只解决一个问题，大约 3～4 小时能把 MLIR 的心智模型建起来。
+
+**第 1 步：IR 长什么样（30 分钟）**
+1. `include/Toy/ToyOps.td` —— 声明式地定义 Operation：输入、输出、属性、trait、装配格式。
+2. 构建后看 `build/include/Toy/ToyOps.h.inc` —— 亲眼确认 TableGen 到底替你生成了多少样板。
+3. `test/ops.mlir` + `scripts/run.sh` 演示 1 —— 解析/打印往返。
+
+**第 2 步：IR 是一棵树，不是一条指令流（20 分钟）**
+
+4. `ToyOps.td` 第三部分的 `toy.repeat` / `toy.yield` + `test/region.mlir`。
+   这是**MLIR 区别于 LLVM IR 的最本质一点**：Operation 里可以嵌 Region，
+   Region 里嵌 Block，Block 里再嵌 Operation。`scf.for`、`gpu.launch`、
+   `linalg.generic`、`func.func` 全是这么来的。
+   同时注意：你写 Pass 时**不用管嵌套**，框架会自动递归。
+
+**第 3 步：怎么改 IR —— 三条主线（60 分钟）**
+
+5. `lib/ToyOps.cpp` 的 `fold()` —— 最窄的一条：就地算值。
+   看两种返回值的区别：`AddOp::fold` 返回 Attribute（新常量，配合 `materializeConstant`），
+   `UnboxOp::fold` 返回 Value（复用已有值）。
+6. `lib/ToyPasses.cpp` —— 第二条：`RewritePattern` + 贪心驱动器，通用的子图改写。
+7. `lib/ConvertToyToLow.cpp` —— 第三条：**Dialect Conversion**。
+   一定要和 `lib/LowPasses.cpp` 的贪心版**并排对比着读**，文件开头有一张对照表。
+   记住结论：真实编译器的 lowering 一律用 Dialect Conversion，因为它把
+   "我到底降完了没有"变成框架强制检查的契约，还顺带解决类型转换。
+
+**第 4 步：多层分工与可扩展性（60 分钟）**
+
+8. `lib/LowPasses.cpp` 的强度削减 + 第「五点五」节 + `run.sh` 演示 5-a/5-b ——
+   体会"优化机会在高层不是没做，而是根本无法表达"。
+9. `include/Toy/ToyTypes.td` + `test/types.mlir` —— 类型也是可扩展的，
+   而且降低时会被 `TypeConverter` 换掉。
+10. `include/Toy/ToyInterfaces.td` + `lib/ToyCostPass.cpp` + `test/cost.mlir` ——
+    **本项目观念密度最高的一处**：一个 Pass 不认识任何 dialect，
+    只问 op "你实现接口了吗"，就能同时服务 toy 层和 low 层。
+    这就是 MLIR 能容纳上百个 dialect 却共用一套通用 Pass 的原因。
+
+**第 5 步：正确性（20 分钟）**
+
+11. `RepeatOp::verify()` + `test/verify.mlir` —— 验证器在每个 Pass 之后自动跑，
+    是 MLIR 的安全网。注意"结构约束交给 trait，语义约束才手写 verifier"的分工。
+
+**第 6 步：动手改（越久越好）**
+
+- 加一个新 Op（比如 `toy.sub`），走一遍 `.td` → `.cpp` → 测试的完整流程；
+- 给 `toy.mul` 加代数化简：`x * 1 = x`、`x * 0 = 0`；
+- 把 `ConvertToyToLow.cpp` 里的 `MulOpLowering` 从 `patterns.add<>` 删掉再跑，
+  观察 `failed to legalize operation 'toy.mul'` 这条报错——然后换成贪心版
+  `--toy-to-low` 跑同样的输入，你会看到它**一声不吭**地留下了 `toy.mul`。
+  这一个实验就足以说明为什么真实编译器不用贪心版做 lowering；
+- 给 `toy.repeat` 加上 `IsolatedFromAbove` trait，看看会报什么错，
+  想清楚"隔离区域"为什么是函数和 GPU kernel 的必需品；
+- 给 `low.shl` 也实现一次 `getCost()` 返回 0，再跑 `--toy-print-cost`，
+  体会 cost model 是怎么影响"优化到底值不值"这个判断的。
 
 ---
 

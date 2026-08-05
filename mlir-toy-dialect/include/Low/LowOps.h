@@ -12,6 +12,8 @@
 #include "mlir/IR/OpDefinition.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "Low/LowDialect.h"
+// low 层的 op 也实现了 toy 层定义的代价接口，所以要包含它的声明。
+#include "Toy/ToyInterfaces.h"
 
 #define GET_OP_CLASSES
 #include "Low/LowOps.h.inc"
