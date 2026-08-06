@@ -1,11 +1,15 @@
 # TVM：面向异构硬件后端的自动化端到端深度学习编译器
 
+> **导航**：[笔记索引](README.md) · [自学枢纽](../README.md)（阶段 4） · [横切概念](../ai-compiler-foundations.md) §3（融合）、§4（调度）
+
 > **论文元信息**
 > - 标题：*TVM: An Automated End-to-End Optimizing Compiler for Deep Learning*
 > - 作者/机构：Tianqi Chen, Thierry Moreau, Ziheng Jiang, Lianmin Zheng, Eddie Yan, Meghan Cowan, Haichen Shen, Leyuan Wang, Yuwei Hu, Luis Ceze, Carlos Guestrin, Arvind Krishnamurthy —— University of Washington（联合 AWS、上海交通大学、UC Davis、Cornell）
 > - 会议：OSDI 2018
 > - arXiv：<https://arxiv.org/abs/1802.04799>
 > - 开源项目：<https://github.com/apache/tvm>（现为 Apache TVM）
+>
+> **与工程学习文档的分工**：本文是 OSDI 2018 论文笔记（动机 / 历史框架）。今天的 Apache TVM 作为工程系统（流水线、融合细则、schedule 原语前后对比、MetaSchedule、动手清单）见 [`../tvm-learning-guide.md`](../tvm-learning-guide.md)。
 
 ## 1. 它解决什么问题
 

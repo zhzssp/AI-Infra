@@ -5,6 +5,13 @@
 > - 与 [`paper-notes/02-llvm.md`](./paper-notes/02-llvm.md) 分工明确：那篇是 **2004 年 CGO 论文**的笔记，讲的是"当年为什么要这样设计"（lifelong compilation、IR 三态等价、link-time 优化的动机）。本文讲**结构与机制**，尤其是论文里完全没有的**后端 CodeGen 七阶段**和**现代 New Pass Manager**。
 > - 服务目标：MLIR / IREE / TVM 这些栈最终都落到 LLVM，你需要知道"交给 LLVM 之后发生了什么"以及"在哪些地方可以插手"。
 >
+> **先修与邻接材料**
+> - **先修**：[`ai-compiler-foundations.md`](./ai-compiler-foundations.md) §6（SSA / Pass / 渐进 lowering）、§7（kernel 与 ISA 层级）。
+> - **动手**：[`../llvm-hello-compile/`](../llvm-hello-compile/)。
+> - **上游**：谁在给 LLVM 喂 IR —— [`mlir-learning-guide.md`](./mlir-learning-guide.md)（`llvm` dialect）与 [`iree-learning-guide.md`](./iree-learning-guide.md)（LLVM-CPU / NVPTX 后端）。
+> - **下游**：GPU 侧 `NVPTX → PTX` 之后如何打包分发 —— [`cuda-fatbin-learning-guide.md`](./cuda-fatbin-learning-guide.md) · [`../tvm-fatbin-lab/`](../tvm-fatbin-lab/) CUDA 轨。
+> - **图级委托（另一层问题）**：[`../onnx-delegate-lab/`](../onnx-delegate-lab/)。
+>
 > **一句话读法**：如果只有一小时，读[第 1 章的总图](#第-1-章-一张总图从源码到机器码)、[2.7 poison 语义](#27-undef--poison--freeze现代-llvm-最容易踩的坑)、[第 5 章后端七阶段](#第-5-章-后端-codegen七个阶段重点)。
 
 ---
@@ -979,7 +986,7 @@ clang -fsave-optimization-record foo.c                # 产出 .opt.yaml
 5. **属性与 metadata 是优化能力的来源**：`noalias`、`align`、`dereferenceable`、`!alias.scope`、`!llvm.loop.parallel_accesses`。
 6. **New PM 的四层嵌套与 PreservedAnalyses 四种写法**，以及"内层不能算外层分析"的两条理由。
 7. **别名分析的四种回答**与 `basic-aa` 知道哪些硬事实。
-8. **后端七阶段**，尤其是 SelectionDAG 的八步、legalize types 的四个手段（promote/expand/split/widen/scalarize）、legalize ops 的三个手段（expand/promote/custom）。
+8. **后端七阶段**，尤其是 SelectionDAG 的八步、legalize types 的五个手段（promote/expand/split/widen/scalarize）、legalize ops 的三个手段（expand/promote/custom）。
 9. **寄存器分配链条**：LiveVariables → LiveIntervals → PHIElimination → two-address → Greedy 分配 → 折叠。
 10. **TableGen 在 LLVM 和 MLIR 里是同一套语言**，Pattern 字段驱动指令选择。
 11. **TTI 是中端唯一的目标信息入口**——接新硬件时它决定了向量化/展开/内联的质量。
@@ -1034,7 +1041,7 @@ opt -passes='default<O2>' -print-changed loop.O0.ll -S -o /dev/null
 
 **第四步：写一个 pass**
 
-按 [3.3 节](#33-概念式多态写一个-pass)写一个 function pass（统计各类指令数量之类），用 pass plugin 方式编译，`opt -load-pass-plugin` 加载运行，再补一个 lit 测试。**你已经在 `mlir-toy-dialect` 里做过 MLIR 版的等价练习，对照着做会很快，重点体会两套 pass 基础设施的同构性。**
+按 [3.3 节](#33-概念式多态写一个-pass)写一个 function pass（统计各类指令数量之类），用 pass plugin 方式编译，`opt -load-pass-plugin` 加载运行，再补一个 lit 测试。**可与 `mlir-toy-dialect` 里的 MLIR Pass 对照，体会两套 Pass 基础设施的同构性。**
 
 **第五步：跨到 MLIR 边界**
 

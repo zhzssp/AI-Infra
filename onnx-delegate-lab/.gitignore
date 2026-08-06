@@ -1,0 +1,9 @@
+out/
+__pycache__/
+*.pyc
+*.onnx
+*.pte
+*.json
+!scripts/
+.pytest_cache/
+*.log

@@ -1,5 +1,8 @@
 # PagedAttention / vLLM：用操作系统的分页思想管理 LLM 推理的 KV Cache
 
+> **导航**：[笔记索引](README.md) · [自学枢纽](../README.md)（阶段 5） · [横切概念](../ai-compiler-foundations.md) §9.5（分页状态 / 块化迁移）  
+> **配套阅读**：本篇是研究问题④「运行状态低成本迁移」最直接的技术参照——**块化的状态才搬得动**；训练侧的访存优化对照见 [`08-flash-attention.md`](08-flash-attention.md)。
+
 > 论文元信息：*Efficient Memory Management for Large Language Model Serving with PagedAttention*
 > Woosuk Kwon, Zhuohan Li, Siyuan Zhuang, Ying Sheng, Lianmin Zheng, Cody Hao Yu, Joseph E. Gonzalez, Hao Zhang, Ion Stoica
 > UC Berkeley / Stanford University / UC San Diego，SOSP 2023

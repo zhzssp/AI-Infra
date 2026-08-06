@@ -1,5 +1,9 @@
 # FlashAttention：用 IO 感知的 tiling + 重计算，把 attention 从"算得快但搬得慢"变成真正的 wall-clock 加速
 
+> **导航**：[笔记索引](README.md) · [自学枢纽](../README.md)（阶段 5） · [横切概念](../ai-compiler-foundations.md) §4.3（Roofline）、§9.4（IO 感知方法论）  
+> **配套阅读**：本篇是「融合 + tiling + 重计算」最有说服力的实例，用来校准编译器优化的杠杆在哪；推理侧的对应物见 [`09-paged-attention-vllm.md`](09-paged-attention-vllm.md)。  
+> **本篇章号提示**：多一节「后续演进」，因此**最小必要集在 §8**。
+
 > 论文元信息：
 > - 标题：*FlashAttention: Fast and Memory-Efficient Exact Attention with IO-Awareness*
 > - 作者机构：Tri Dao, Daniel Y. Fu, Stefano Ermon, Atri Rudra, Christopher Ré（Stanford University / University at Buffalo, SUNY）

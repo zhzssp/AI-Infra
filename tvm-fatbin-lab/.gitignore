@@ -1,0 +1,11 @@
+out/
+__pycache__/
+*.pyc
+.pytest_cache/
+*.fatbin
+*.o
+*.cubin
+*.ptx
+.autotvm_tmp/
+*.log
+!scripts/

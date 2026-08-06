@@ -1,0 +1,9 @@
+# ONNX 轨（必装，可完成构图 / 改图 / ORT CPU EP）
+onnx>=1.14
+onnxruntime>=1.16
+numpy
+
+# ExecuTorch 轨（可选；未安装时脚本会走「概念模拟」并写清差异）
+# 官方安装见 https://pytorch.org/executorch/
+# torch
+# executorch

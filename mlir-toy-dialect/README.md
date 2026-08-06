@@ -8,7 +8,7 @@
 |--|--|
 | **角色** | MLIR 深化的动手主战场（P0）：双 dialect · Region · Interface · Dialect Conversion |
 | **总规划** | [`../README.md`](../README.md) §3.2（必学清单 + 端到端验收） |
-| **配套教材** | [`../docs/paper-notes/03-mlir.md`](../docs/paper-notes/03-mlir.md) |
+| **配套教材** | [`../docs/mlir-learning-guide.md`](../docs/mlir-learning-guide.md)（机制主教材）· [`../docs/paper-notes/03-mlir.md`](../docs/paper-notes/03-mlir.md)（论文动机） |
 | **阶段导航** | [`../docs/README.md` 阶段 2](../docs/README.md#阶段-2mlir-深化p0约-2-周) |
 | **上一站** | [`../llvm-hello-compile/`](../llvm-hello-compile/) —— SSA / Pass / lit 的同构预习 |
 | **下一站** | [`../docs/iree-learning-guide.md`](../docs/iree-learning-guide.md) —— 把多层 lowering 接到工业运行时 |

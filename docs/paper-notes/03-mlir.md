@@ -1,5 +1,8 @@
 # MLIR：面向异构硬件与多层抽象的可扩展编译器基础设施
 
+> **导航**：[笔记索引](README.md) · [自学枢纽](../README.md)（阶段 2） · [横切概念](../ai-compiler-foundations.md) §6.2（渐进 lowering）  
+> **配套阅读**：本篇讲**为什么需要多层 IR**；**机制怎么用**（Dialect Conversion / Interfaces / Linalg + Bufferize）见 [`mlir-learning-guide.md`](../mlir-learning-guide.md)；动手在 [`mlir-toy-dialect/`](../../mlir-toy-dialect/)；工业形态见 [`iree-learning-guide.md`](../iree-learning-guide.md)。
+
 > **论文元信息**
 > 标题：*MLIR: A Compiler Infrastructure for the End of Moore's Law*
 > 作者/机构：Chris Lattner（Google，发表时已加入 SiFive）、Mehdi Amini、Uday Bondhugula（IISc）、Albert Cohen、Andy Davis、Jacques Pienaar、River Riddle、Tatiana Shpeisman、Nicolas Vasilache、Oleksandr Zinenko（均 Google）

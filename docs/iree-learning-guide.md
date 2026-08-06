@@ -6,6 +6,15 @@
 > - **前 3 章建立坐标系（约 30% 篇幅），第 4 章是重点：IREE HAL 详解（约 55% 篇幅）**，第 5–7 章是落地与学习路径。
 > - TinyIREE 论文的简版印象见 [`paper-notes/07-tinyiree.md`](./paper-notes/07-tinyiree.md)；那篇讲得很浅，本文才是正式材料。
 >
+> **先修与邻接材料**
+> - **先修**：[`ai-compiler-foundations.md`](./ai-compiler-foundations.md) §3.3（子图划分）、§7.1（kernel）、§8（设备抽象机与同步）。
+> - **上游**：`linalg → flow` 之前的 MLIR 机制见 [`mlir-learning-guide.md`](./mlir-learning-guide.md)。
+> - **下游**：variant 里的机器码怎么来见 [`llvm-learning-guide.md`](./llvm-learning-guide.md) 第 5 章；多变体打包的 ISA 层同构物见 [`cuda-fatbin-learning-guide.md`](./cuda-fatbin-learning-guide.md)。
+> - **目标场景**：分布式训练侧的需求来自 [`paper-notes/01-efficient-training-distributed-infra.md`](./paper-notes/01-efficient-training-distributed-infra.md)。
+> - **划分对照（导出期 / Session 期）**：[`../onnx-delegate-lab/`](../onnx-delegate-lab/) —— 与 IREE 编译期 `flow.dispatch` 对照「决策时刻」差在哪。
+>
+> **一句话读法**：如果只有两小时，读[第 1 章总图](#第-1-章-iree-是什么一分钟建立坐标系)、[第 2 章 dialect 流水线](#第-2-章-编译侧dialect-流水线)、[4.2 对象模型总览](#42-对象模型总览)、[4.6 timeline semaphore](#46-同步timeline-semaphore-与-fencehal-的灵魂)、[4.7 variant](#47-设备代码executable--variant--export)、[附录速查](#附录一页速查)。
+>
 > **主要信息源**
 > - HAL 设计意图：`runtime/src/iree/hal/README.md`
 > - 执行模型：`developers/design-docs/invocation-execution-model.md`
@@ -36,6 +45,7 @@
 - [第 5 章 部署配置与命令行](#第-5-章-部署配置与命令行)
 - [第 6 章 与"算力网分布式基础设施"的对接点](#第-6-章-与算力网分布式基础设施的对接点)
 - [第 7 章 学习路径：最小必要集与动手清单](#第-7-章-学习路径最小必要集与动手清单)
+- [附录：一页速查](#附录一页速查)
 
 ---
 

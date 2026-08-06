@@ -1,9 +1,10 @@
 # 论文精读笔记索引
 
 > **自学体系入口**：[`../README.md`](../README.md)（本目录在整套体系中的位置、每阶段读→做→验）。  
-> **总规划 / 优先级 / 验收**：仓库根目录 [`../../README.md`](../../README.md)。
+> **总规划 / 优先级 / 验收**：仓库根目录 [`../../README.md`](../../README.md)。  
+> **横切词汇表**（把论文与各项目粘成一张图）：[`../ai-compiler-foundations.md`](../ai-compiler-foundations.md)——开局建议先扫总图与概念索引。
 
-本目录为 [`paper/`](../../paper/) 下每篇论文的中文精读笔记。所有笔记遵循同一套骨架：
+本目录为 [`paper/`](../../paper/) 下每篇论文的中文精读笔记。笔记遵循同一套骨架：
 
 1. **它解决什么问题** —— 动机与当时的技术背景
 2. **整体运行框架** —— ASCII 流程图 + 每个组件的输入/输出/职责
@@ -13,7 +14,15 @@
 6. **与本项目的关联** —— 对「算力网上大模型分布式运行基础设施」的启示
 7. **最小必要集** —— 必须掌握的点 vs 可以先跳过的内容
 
-> 每篇笔记的第 7 节是本阶段学习的**行动清单**。时间紧张时，先读第 2 节（框架）和第 7 节（必要集），其余按需展开。
+> **读法**：时间紧张时，只读**「整体运行框架」+「最小必要集」**两节，其余按需展开。
+
+**骨架的三个例外**（章号与上表不同，按下表跳转）：
+
+| 笔记 | 差异 | 「最小必要集」在哪 |
+|------|------|-------------------|
+| [01 分布式综述](01-efficient-training-distributed-infra.md) | 综述体例：§3–§9 对应论文各章 | **§12**（框架在 §2） |
+| [06 Glow](06-glow.md) · [08 FlashAttention](08-flash-attention.md) | 多一节横向对比 / 后续演进 | **§8** |
+| [07 TinyIREE](07-tinyiree.md) | 刻意写成简记，无「使用示例」「最小必要集」 | 用 [`../iree-learning-guide.md`](../iree-learning-guide.md) §7 代替 |
 
 ---
 
@@ -24,7 +33,7 @@
 | 笔记 | 论文 | 核心收获 |
 |------|------|----------|
 | [01 分布式训练综述](01-efficient-training-distributed-infra.md) | *Efficient Training of LLMs on Distributed Infrastructures: A Survey*（arXiv 2407.20018） | 五种并行的切分维度与通信原语、16Φ 显存账本、通信-计算重叠、**SPMD 分片标注范式**、容错三条线 |
-| [03 MLIR](03-mlir.md) | *MLIR: A Compiler Infrastructure for the End of Moore's Law* | Operation/Region/Block 的 IR 结构、Dialect 扩展机制、**Dialect Conversion**、Interface、渐进式 lowering |
+| [03 MLIR](03-mlir.md) | *MLIR: A Compiler Infrastructure for the End of Moore's Law* | Operation/Region/Block、Dialect、渐进式 lowering。**机制详解见 [`../mlir-learning-guide.md`](../mlir-learning-guide.md)** |
 
 > **IREE 不在这张表里**：老师要求的 IREE HAL 内容不来自某篇论文，而是官方文档与源码。主学习材料是专题文档 [`../iree-learning-guide.md`](../iree-learning-guide.md)，它同样是 **P0**。
 >
@@ -34,7 +43,7 @@
 
 | 笔记 | 论文 | 核心收获 |
 |------|------|----------|
-| [05 TVM](05-tvm.md) | *TVM: An Automated End-to-End Optimizing Compiler for Deep Learning*（OSDI 2018） | 算子融合的四类算子与规则、layout 传播、TE + schedule 原语、tensorize、AutoTVM 的搜索闭环与 tuning log 复用 |
+| [05 TVM](05-tvm.md) | *TVM: An Automated End-to-End Optimizing Compiler for Deep Learning*（OSDI 2018） | 四类融合、layout、TE+schedule、tensorize、AutoTVM。**工程机制见 [`../tvm-learning-guide.md`](../tvm-learning-guide.md)** |
 | [08 FlashAttention](08-flash-attention.md) | *FlashAttention* | IO 感知的复杂度分析方法论、online softmax 重标定、反向重计算的取舍 |
 | [09 PagedAttention / vLLM](09-paged-attention-vllm.md) | *Efficient Memory Management for LLM Serving with PagedAttention*（SOSP 2023） | KV Cache 的三类浪费、block table 分页、copy-on-write 共享、swap vs recompute 抢占 |
 
@@ -52,6 +61,9 @@
 ## 阅读路径建议
 
 ```
+开局：../ai-compiler-foundations.md（总图 + 公共词汇）
+                │
+                ▼
 01 分布式训练综述  ──┐
                      ├──→  理解「要解决什么问题」
 （可选）04 Halide ───┘      —— Halide 只看「算法/调度分离」这一节
@@ -73,5 +85,6 @@
 ```
 
 - **完整自学路径**（读什么 → 做什么 → 验什么）：[`../README.md`](../README.md)
+- **横切前置概念**：[`../ai-compiler-foundations.md`](../ai-compiler-foundations.md)
 - **优先级、必学/跳过、时间表、研究问题**：仓库根目录 [`../../README.md`](../../README.md)
-- **动手项目**：[`../../llvm-hello-compile/`](../../llvm-hello-compile/) · [`../../mlir-toy-dialect/`](../../mlir-toy-dialect/)
+- **动手项目**：[`../../llvm-hello-compile/`](../../llvm-hello-compile/) · [`../../mlir-toy-dialect/`](../../mlir-toy-dialect/) · [`../../tvm-fatbin-lab/`](../../tvm-fatbin-lab/) · [`../../onnx-delegate-lab/`](../../onnx-delegate-lab/)

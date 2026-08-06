@@ -1,5 +1,8 @@
 # TinyIREE：把 IREE 缩到嵌入式规模的一组部署选项（简版笔记）
 
+> **导航**：[笔记索引](README.md) · [自学枢纽](../README.md)（阶段 3） · [横切概念](../ai-compiler-foundations.md) §8（设备抽象机）  
+> **配套阅读**：本篇**只建立第一印象**，刻意不按七节骨架写；正式材料是 [`iree-learning-guide.md`](../iree-learning-guide.md)，最小必要集用它的 §7。
+
 > 论文元信息
 > - 标题：*TinyIREE: An ML Execution Environment for Embedded Systems from Compilation to Deployment*
 > - 作者/机构：Hsin-I Cindy Liu、Mahesh Ravishankar、Nicolas Vasilache、Ben Vanik、Stella Laurenzo（Google）+ Marius Brehler（Fraunhofer IML）

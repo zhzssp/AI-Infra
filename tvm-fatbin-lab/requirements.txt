@@ -1,0 +1,11 @@
+# Apache TVM（CPU 路径即可完成本项目核心步骤）
+# 优先用官方 wheel；若失败按 https://tvm.apache.org/docs/install/ 从源码构建。
+apache-tvm
+numpy
+decorator
+attrs
+psutil
+scipy
+tornado
+cloudpickle
+xgboost
