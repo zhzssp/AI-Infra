@@ -49,7 +49,7 @@
 **动手项目在主线上的位置**：
 
 1. **`llvm-hello-compile`**（P2 地基，建议先跑一遍）：建立「单层 IR + Pass + CodeGen」手感 → 对应 [`docs/llvm-learning-guide.md`](docs/llvm-learning-guide.md)。
-2. **`mlir-toy-dialect`**（P0 主战场）：建立「多层 dialect + 渐进 lowering」手感 → 对应 [`docs/mlir-learning-guide.md`](docs/mlir-learning-guide.md)；后续把 Toy→linalg→llvm 端到端打通。
+2. **`mlir-toy-dialect`**（P0 主战场）：建立「多层 dialect + 渐进 lowering」手感 → 对应 [`docs/mlir-learning-guide.md`](docs/mlir-learning-guide.md)；入门以 `all.sh` + Conversion/Interface 为准，Toy→linalg→llvm 端到端属加深项。
 3. **`tvm-fatbin-lab`**（P1 TVM 轨 → P2 CUDA 轨）：调度/融合/AutoTVM 在阶段 4；fatbin 多变体回填到阶段 6 → [`docs/tvm-learning-guide.md`](docs/tvm-learning-guide.md) · [`docs/cuda-fatbin-learning-guide.md`](docs/cuda-fatbin-learning-guide.md)。
 4. **`onnx-delegate-lab`**（P1，阶段 4）：ONNX/ORT EP 分区 + ExecuTorch Partitioner → [`docs/onnx-learning-guide.md`](docs/onnx-learning-guide.md) · [`docs/executorch-learning-guide.md`](docs/executorch-learning-guide.md)。
 
@@ -67,26 +67,30 @@ LLVM/MLIR 练 IR 基建；两 lab 正交——TVM 练「算得快 + 多变体」
 2. **能适配异构后端**——算力网必然是多厂商、多型号、跨地域的混合池，同一个模型要在不同后端上跑起来，需要统一的编译栈与设备抽象。
 3. **能在运行时做决策**——设备会变、负载会变、故障会发生，静态编译一次跑到底的假设在算力网上不成立。
 
-对照这三种能力，学习路线上的项目优先级如下（**这就是本文档最重要的一张表**）：
+对照这三种能力，学习路线上的项目优先级如下（**这就是本文档最重要的一张表**）。  
+「建议投入」是**相对比例**（合计约 80～120 小时的入门预算内怎么分），不是再叠一层工期。
 
 | 优先级 | 项目 | 为什么是这个优先级 | 建议投入 |
 |--------|------|---------------------|----------|
 | **P0** | **分布式训练综述** | 项目的正题。不懂并行策略与通信/显存约束，后面所有编译优化都无的放矢 | 20% |
-| **P0** | **MLIR（深化）** | 这类基础设施几乎一定是 MLIR 形态。重点在 Conversion / Interface / linalg 三块 | 20% |
+| **P0** | **MLIR（入门）** | 这类基础设施几乎一定是 MLIR 形态。重点在 Conversion / Interface / linalg 三块的**概念与最小动手** | 18% |
 | **P0** | **IREE + HAL** | **多后端统一运行时的现成样板**：device/buffer/command buffer/多目标变体，直接对应「异构算力池的统一设备抽象」 | 15% |
 | **P1** | **TVM** | 图级编译器的完整范式：融合、layout、调度、代价模型与搜索。对应「子图划分」与「配置组合爆炸」 | 12% |
-| **P1** | **ONNX + ExecuTorch/ORT 多后端委托** | 工程上绕不开的交换格式，且第五阶段六个研究问题就是从委托机制里长出来的 | 10% |
-| **P1** | **FlashAttention + PagedAttention** | 大模型负载的**真实形态**。不了解它们，做出来的基础设施会脱离实际负载 | 8% |
-| **P2** | **LLVM（复习）** | 地基性质：跑通 `llvm-hello-compile` 建立手感后按需回查，不单独投入大块时间 | 5% |
-| **P2** | **Halide** | 只为理解「算法与调度分离」这一个思想，1~2 天足够 | 4% |
+| **P1** | **ONNX + ExecuTorch/ORT 多后端委托** | 工程上绕不开的交换格式，且 §6 六个研究问题就是从委托机制里长出来的 | 12% |
+| **P1** | **FlashAttention + PagedAttention** | 大模型负载的**真实形态**；用来校正「基础设施到底在优化什么」 | 8% |
+| **P2** | **LLVM（复习）** | 地基性质：跑通 `llvm-hello-compile` 建立手感后按需回查 | 5% |
+| **P2** | **Halide** | 只为理解「算法与调度分离」这一个思想，约 0.5～1 天 | 4% |
 | **P2** | **Glow** | 与 TVM 对比阅读，理解「少量原语 + lowering」的低成本多后端策略 | 3% |
-| **P2** | **CUDA fatbin** | 半天。理解「一个二进制携带多架构变体」——它和 IREE ExecutableVariant 是同一个思想 | 3% |
+| **P2** | **CUDA fatbin** | 约半天。理解「一个二进制携带多架构变体」——与 IREE ExecutableVariant 同构 | 3% |
 
 **一句话总结优先级逻辑**：
-> **先把「分布式怎么切」和「多后端怎么统一」这两件事搞清楚（P0），再补「怎么编译得快」（P1），最后回填编译器基础与历史脉络（P2）。**
+> **先把「分布式怎么切」和「多后端怎么统一」这两件事搞清楚（P0），再补「怎么编译得快」与「委托边界」（P1），最后回填编译器基础与历史脉络（P2）。**
 
-> **本阶段的学习原则**（这条原则贯穿全文）：
-> **只学「一直要用的核心运行框架 + 核心特性」。** 每个项目下面都明确列出了「必须掌握」与「先跳过」两栏——凡是列在「先跳过」里的，遇到再学，现在花时间是浪费。判断标准很简单：**这个知识点在后续编码里会不会反复出现？** 会，就现在学；不会，就记下名字，遇到再查。
+> **本阶段的目标深度**（贯穿全文，决定时间表怎么估）：
+> 1. **工具/项目**：核心概念学明白 → 能读配套文档与笔记 → **入门并简单上手**（跑通仓库动手项目、能讲产物即可），不要求独立扩展工业栈或深潜源码。  
+> 2. **老师提出的研究问题（§6）**：借助本知识体系**充分理解其思考价值与意义**，并**形成自己的观点**；不要求现在就落地完整技术方案。  
+>
+> **学习原则**：只学「一直要用的核心运行框架 + 核心特性」。每个项目有「必须掌握」与「先跳过」——跳过栏遇到再学。判断标准：**不懂它，能不能讲清框架图 / 研究问题？** 不能，就现在学；能，就记下名字。
 
 ---
 
@@ -158,7 +162,7 @@ LLVM/MLIR 练 IR 基建；两 lab 正交——TVM 练「算得快 + 多变体」
                           ↓
 ┌─ P0 ───────────────────────────────────────────────────────────┐
 │  ① 分布式训练 ← paper-notes/01-…（对照 foundations §9 分片进 IR）│
-│  ② MLIR 深化  ← mlir-learning-guide + mlir-toy-dialect/         │
+│  ② MLIR 入门  ← mlir-learning-guide + mlir-toy-dialect/         │
 │  ③ IREE+HAL   ← iree-learning-guide（学完 MLIR 立刻接）         │
 └─────────────────────────────────────────────────────────────────┘
                           ↓
@@ -223,23 +227,21 @@ LLVM/MLIR 练 IR 基建；两 lab 正交——TVM 练「算得快 + 多变体」
 - 网内聚合的硬件实现（P4 编程、FPGA 原型）。只需知道 **SHARP 已集成进 NCCL，生产可用**。
 - 光电计算展望、400+ 篇引文。
 
-#### 动手验收
+#### 动手验收（入门：完成 1～2 条即可；其余有环境再补）
 
-1. 单机双卡跑 DDP vs FSDP，用 `torch.cuda.max_memory_allocated()` **实测验证 16Φ → 16Φ/N**。
-2. 开关 selective recompute，测量显存与吞吐变化。
-3. `NCCL_DEBUG=INFO` 观察 NCCL 在不同张量大小下选 Ring 还是 Tree。
-4. 用 PyTorch profiler 抓一次迭代 timeline，**亲眼确认 All-Reduce 是否与反向计算重叠**。
-5. 填一个简易性能模型（笔记 §10.6 有骨架），扫 (TP, PP, DP) 组合找最优配置。
+1. 单机双卡跑 DDP vs FSDP，用 `torch.cuda.max_memory_allocated()` **实测验证 16Φ → 16Φ/N**（最优先）。
+2. 开关 selective recompute，或用 profiler 看一次 All-Reduce 是否与反向重叠（二选一）。
+3. （加深）`NCCL_DEBUG=INFO` 观察 Ring/Tree；填简易性能模型扫 (TP, PP, DP)。
 
 ---
 
-### 3.2 MLIR 深化
+### 3.2 MLIR 入门（概念 + 最小动手）
 
 📘 **主学习材料**：[`docs/mlir-learning-guide.md`](docs/mlir-learning-guide.md) —— 基于官方文档蒸馏：IR 结构、Interfaces、**Dialect Conversion**、**Linalg + Bufferization**
 📄 **论文笔记**：[`03-mlir.md`](docs/paper-notes/03-mlir.md)（2020 论文，讲动机与历史）
 📌 **原文**：[MLIR: A Compiler Infrastructure for the End of Moore's Law](https://arxiv.org/abs/2002.11054)
 🛠 **动手主战场**：[`mlir-toy-dialect/`](mlir-toy-dialect/) —— 先 `bash scripts/all.sh` 跑通九组演示与 lit；项目 README 有「MLIR 核心特性覆盖对照表」
-🧭 **阶段导航**：[`docs/README.md` 阶段 2](docs/README.md#阶段-2mlir-深化p0约-2-周)
+🧭 **阶段导航**：[`docs/README.md` 阶段 2](docs/README.md#阶段-2mlir-入门p0约-1-周)
 
 #### 必须掌握的「核心运行框架」
 
@@ -276,12 +278,14 @@ Dialect = 一组 Op + Type + Attribute + Interface 的命名空间
 - 外围 dialect：`spirv` / `emitc` / `async` / `pdl` / `acc` / `omp` 的细节。
 - MLIR 的 C API、ExecutionEngine 内部实现。
 
-#### 动手验收（在 `mlir-toy-dialect` 上完成）
+#### 动手验收（入门 vs 加深）
 
-1. **给 Toy dialect 加一个 `TypeConverter`**：把自定义的 `!toy.tensor<...>` 转成 `memref<...>`，走完整的 `applyPartialConversion` 流程。
-2. **实现一个 OpInterface**（例如 `ToyShapeInferenceOpInterface`），写一个通用 shape inference pass，验证「同一个 pass 能作用于多个 dialect 的 op」。
-3. **把 Toy 降到 linalg**，再用现成的 `-linalg-tile` / `-convert-linalg-to-loops` 一路降到 `scf` + `memref`，最后到 `llvm` dialect 并用 `mlir-cpu-runner` 跑出结果。**这条端到端链路走通，MLIR 就算过关了。**
-4. 给每一步加 lit 测试（项目自带 lit 基础设施，直接扩展即可）。
+**入门过关（本阶段时间表按此估）**：
+
+1. `bash scripts/all.sh` 跑通；能讲清 `--toy-to-low-convert`（Dialect Conversion）与 `--toy-print-cost`（OpInterface）在产物上做了什么。
+2. 对照 lit 测试（`convert` / `cost` / `region`）说出 Operation⊃Region⊃Block 与 greedy vs Dialect Conversion 的差别。
+
+**加深（有余力再做，不计入主路径工期）**：自写 TypeConverter / 新 Interface；Toy→linalg→scf→llvm 端到端；扩展 lit。
 
 ---
 
@@ -340,13 +344,14 @@ Runtime：HAL driver + VM
 - VM bytecode 的指令格式、emitc / C 源码输出细节（知道存在即可）。
 - IREE 的构建系统与 CI 细节（用预编译包即可）。
 
-#### 动手验收
+#### 动手验收（入门 vs 加深）
 
-1. 用 `--compile-to=flow/stream/hal` **逐相位 dump IR**，在 `hal` 那份里找出并读懂：`hal.executable`/`variant`/`export` 的嵌套结构、`hal.command_buffer.dispatch`、`hal.device.queue.execute` 的 wait/signal fence、函数边界的 `hal.tensor.import/export`。
-2. 用 `iree-compile` 把同一个小模型分别编到 **CPU 和 Vulkan/CUDA** 两个后端，`iree-run-module` 跑出一致结果。
-3. `iree-run-module --dump_devices` 看设备能力；同一产物分别用 `local-sync` 与 `local-task` 跑，对比行为差异。
-4. 精读 `cuda-hal-driver.md` 的 semaphore 一节，能复述 IREE 用哪几个数据结构补齐 `CUevent` 的能力缺口。
-5. 写一个最小的 C 程序调用 IREE runtime 完成推理。
+**入门过关**：
+
+1. 用 `--compile-to=flow/stream/hal` **至少 dump 两层**，能指出 dispatch / fence / `hal.executable`+`variant` 各在哪一层出现。
+2. 同一小模型编到 **一个**后端（CPU 即可）并用 `iree-run-module` 跑通；能口述 HAL 对象关系与 timeline semaphore 为何比 `CUevent` 更强。
+
+**加深（不计入主路径工期）**：双后端对照；`local-sync` vs `local-task`；精读 CUDA HAL semaphore；最小 C runtime 调用。
 
 ---
 
@@ -490,6 +495,8 @@ Runtime：HAL driver + VM
 
 这是路线最终聚焦的研究课题，来自 ExecuTorch 与 ONNX Runtime 多后端委托机制衍生的六个关键挑战。**每个问题下列出「已有工作参照」——本仓库材料里已经部分触及该问题的工作。带着这些参照去想，比空想有效得多。**
 
+> **本阶段对这些问题的要求**：能讲清「为何值得研究 / 难在哪 / 已有工作碰到哪」并写出**自己的观点**即可；文中「可能的切入点」供形成判断时对照，**不要求现在选定题目或写实现方案**。
+
 ### 问题 1：子图划分与跨设备传输最小化
 
 > 怎么划分才能减少跨设备传输？
@@ -574,30 +581,43 @@ Runtime：HAL driver + VM
 
 ## 7. 时间安排建议
 
-按每周约 20 小时估算的 12 周计划。**这不是硬性排期，而是一个投入比例的参照**——关键是保证 P0 拿到一半以上的时间。  
-每周具体打开哪份文档、跑哪个脚本，跟 [`docs/README.md`](docs/README.md) §2 阶段表对齐即可。
+### 7.1 怎么估的（对应 §0 目标深度）
 
-| 周次 | 主题 | 产出物 |
-|------|------|--------|
-| **W0a（0.5 天）** | 读 [`ai-compiler-foundations`](docs/ai-compiler-foundations.md) §1–2 + 附录 | 能默画五层栈；说出融合≈分区、fatbin≈variant 等同构 |
-| **W0b（可选，0.5～1 天）** | 跑通 `llvm-hello-compile` + 扫 [`llvm-learning-guide`](docs/llvm-learning-guide.md) 总图 | `out/ANALYSIS.md` 能讲；知道四层 IR 长什么样 |
-| **W1-W2** | 分布式训练综述精读 + 动手验证（对照 foundations §9） | 能画六层图；DDP/FSDP 显存实测报告；性能模型脚本 |
-| **W3** | 补 SPMD 分片标注（GSPMD / Mesh-TF / SBP 三篇速读） | 一份「同一个并行策略在三种标注体系下怎么写」的对照笔记 |
-| **W4-W5** | MLIR 深化：Conversion + Interface + linalg | `mlir-toy-dialect` 先 `all.sh` 过关，再打通 Toy → linalg → scf → llvm |
-| **W6-W7** | IREE + HAL | 同一模型编到两个后端跑通；四层 IR 快照对照笔记；C runtime 调用示例 |
-| **W8** | TVM | 跑通 [`tvm-fatbin-lab`](tvm-fatbin-lab/) TVM 轨；`out/ANALYSIS.md` 能讲 |
-| **W9** | ONNX + ORT EP + ExecuTorch 委托 | 跑通 [`onnx-delegate-lab`](onnx-delegate-lab/)；`out/ANALYSIS.md` 能讲 |
-| **W10** | FlashAttention + PagedAttention | online softmax 手推；vLLM 关键参数与论文机制的对照表 |
-| **W11** | P2 回填：Halide + Glow + CUDA fatbin | 短笔记 + [`tvm-fatbin-lab`](tvm-fatbin-lab/) CUDA 轨 `cuobjdump` |
-| **W12** | 收束：针对六个研究问题写一份**自己的**问题分析 | 选定 1~2 个方向作为切入点，形成初步方案 |
+| 口径 | 估计 | 说明 |
+|------|------|------|
+| **推荐主路径** | **约 6～8 周** | 每周约 **12～15 小时**，合计约 **80～120 小时** |
+| **节奏偏紧** | **约 5～6 周** | 每周约 20 小时，仍只做「入门验收」，不做加深项 |
+| **应急压缩** | **约 3～4 周** | 只保 P0 + 委托 lab + 研究问题观点；TVM/负载/P2 可后补 |
 
-### 如果只有 4 周（应急最短路径）
+相对旧版「约 12 周 × 20 小时」的深潜排期，本表按**入门上手**砍掉了：Toy→llvm 端到端、IREE C runtime、完整性能模型扫参、研究问题「落地方案」等加深项。  
+**关键仍是：P0 拿一半以上时间；每个工具以「框架图能画 + lab/`ANALYSIS` 能讲」为停手线。**
 
-0. **半天**：[`ai-compiler-foundations`](docs/ai-compiler-foundations.md) 总图 + `llvm-hello-compile` 跑通（建立「栈有几层」和 SSA/Pass 手感）。
-1. **W1**：分布式综述的 §4（并行策略）+ §6（内存）+ §7（通信）三章，跳过其余；做完 DDP/FSDP 实测。
-2. **W2**：[`mlir-learning-guide`](docs/mlir-learning-guide.md) 重点章 + `mlir-toy-dialect` 的 `all.sh`；把 toy 往 linalg 推一刀。
-3. **W3**：IREE 全部（[`iree-learning-guide`](docs/iree-learning-guide.md)）——这是投入产出比最高的一周。
-4. **W4**：[`onnx-delegate-lab`](onnx-delegate-lab/) + onnx/executorch 学习文档；带着六个研究问题回看，用 foundations 的词汇写问题分析。
+每周打开哪份文档、跑哪个脚本，跟 [`docs/README.md`](docs/README.md) §2 阶段表对齐即可。
+
+### 7.2 推荐主路径（6～8 周）
+
+| 周次 | 主题 | 入门产出（做到即可停） |
+|------|------|------------------------|
+| **W0（约 1～2 天）** | [`ai-compiler-foundations`](docs/ai-compiler-foundations.md) §1–2 + 附录；跑通 `llvm-hello-compile` | 默画五层栈；`out/ANALYSIS.md` 能讲 mem2reg / Pass |
+| **W1** | 分布式综述：框架 + §12 最小必要集 + 并行/显存/通信要点；SPMD 三种标注**对照着扫**（不必三篇精读） | 能讲「70B→128 卡」切法；16Φ；Mesh/GSPMD/SBP 各用什么词；动手验收 1～2 条 |
+| **W2** | MLIR：学习文档重点章 + [`mlir-toy-dialect`](mlir-toy-dialect/) `all.sh` | Conversion / Interface 能对照产物讲；**不要求** Toy→llvm 打通 |
+| **W3** | IREE + HAL：[`iree-learning-guide`](docs/iree-learning-guide.md) 核心章 + `--compile-to` dump + 单后端跑通 | 画出 `linalg→flow→stream→hal`；口述 HAL 对象与 semaphore |
+| **W4** | TVM：[`tvm-fatbin-lab`](tvm-fatbin-lab/) TVM 轨 + 学习文档对应章 | `out/ANALYSIS.md`：两份 matmul lower + 融合直觉 |
+| **W5** | ONNX / ORT EP / ExecuTorch：[`onnx-delegate-lab`](onnx-delegate-lab/) + 两份学习文档 | `out/ANALYSIS.md`：EP 边界 + Partitioner tag；对照 IREE「何时划分」 |
+| **W6** | FlashAttention + PagedAttention（笔记最小必要集）；P2 回填 Halide/Glow/fatbin（各约半天内） | 能用 FA/PA 校正负载直觉；fatbin≈ExecutableVariant 能说清 |
+| **W7～W8（缓冲 / 收束）** | 回看 §6 六个研究问题；用 foundations 同一套词写**观点笔记** | 每个问题：为何有价值、已有工作边界、**我的判断**（不要求实现方案） |
+
+> 若每周只能投入约 10 小时，把上表按 **8 周**拉长即可（W4～W6 各多留几天）；若状态好，W6 与收束可压进第 6～7 周。
+
+### 7.3 应急最短路径（约 3～4 周）
+
+适合「先形成研究问题观点，工具只求能对话」：
+
+0. **1～2 天**：foundations 总图 + `llvm-hello-compile`。
+1. **约 1 周**：分布式综述核心三章（并行 / 显存 / 通信）+ DDP vs FSDP 一条实测。
+2. **约 1 周**：MLIR 重点章 + `mlir-toy-dialect` 的 `all.sh`（到此为止）。
+3. **约 1 周**：IREE 核心章 + 一次 `--compile-to`；再跑 [`onnx-delegate-lab`](onnx-delegate-lab/)。
+4. **收束数天**：带着六个研究问题回看，写出观点笔记；有余力再补 TVM lab。
 
 ---
 
@@ -608,21 +628,21 @@ Runtime：HAL driver + VM
 ### 8.1 三条硬性原则
 
 1. **每个项目先画框架图，再抠细节。** 如果画不出「输入是什么 → 经过哪几层 → 每层固化了什么决定 → 输出是什么」，说明还没入门，抠细节是浪费时间。
-2. **动手环节不可跳过。** 至少硬门槛两条：`llvm-hello-compile` 跑通并讲清 mem2reg；`mlir-toy-dialect` 跑通并讲清 Dialect Conversion 与 OpInterface。再加上 IREE 双后端、ORT 分区打印、`cuobjdump`——纸面知识才会变成手感。
-3. **读论文带着同一个问题**：*「这个设计如何应对『大模型 + 异构多后端 + 动态变化』的场景？它的局限在哪里？」* 每篇笔记的最后一节都在回答这个问题，读完对照检查自己的答案。
+2. **动手环节不可跳过，但停在入门线。** 硬门槛：`llvm-hello-compile` 与 `mlir-toy-dialect` 的 `ANALYSIS`/演示能讲；再加 IREE 一次 dump、两个 lab 的 ONNX/TVM 轨。双后端、端到端 lowering、C runtime 属加深，不挡「入门通过」。
+3. **读材料带着两个问题**：*「核心框架是什么？」* 以及 *「它如何帮助我理解 §6 研究问题的价值与边界？」* 每篇笔记的关联/最小必要集节读完，对照检查自己的答案。
 
-### 8.2 阶段性验收（能不能讲清楚）
+### 8.2 阶段性验收（入门通过线）
 
-给自己（或组会）讲清楚下面这几件事，就算通过：
+给自己（或组会）讲清楚下面这几件事，就算本阶段通过：
 
 - [ ] 默画 AI 编译栈五层（见 [`ai-compiler-foundations`](docs/ai-compiler-foundations.md) §1），每层能点出仓库里对应文档；能举至少三组「同构换名」例子。
 - [ ] 用五分钟讲清「一个 70B 模型是怎么被切到 128 张卡上的」，包括每一维并行切什么、通什么、放哪里；并说明分片如何变成 IR 属性。
 - [ ] 解释「为什么 MLIR 要分这么多层 dialect，一步降到 LLVM IR 不行吗」（最好能结合 `mlir-toy-dialect` 里 `x*4` 在 toy/low 两层的不同命运）。
 - [ ] 画出 IREE 的 `linalg → flow → stream → hal` 四层，说清每层固化了什么决定。
 - [ ] 说清「一个算子在 ORT 里从模型文件到某个 EP 上执行，中间经过了哪些决策点」。
-- [ ] 用 FlashAttention 为例，论证「融合 + tiling + 重计算」为什么是编译器优化的核心杠杆。
-- [ ] 对六个研究问题中的至少两个，说出「已有工作做到了哪一步、还差什么、我可能怎么做」（尽量用 foundations 同一套词）。
-- [ ] **动手硬门槛**：`llvm-hello-compile` / `mlir-toy-dialect` / `tvm-fatbin-lab` / `onnx-delegate-lab` 各自的 `out/ANALYSIS.md`（或项目等价验收）能讲；缺 CUDA/ExecuTorch 时允许对应轨降级，但 ONNX 轨与 TVM 轨不得缺。
+- [ ] 用 FlashAttention 为例，说明「融合 + tiling + 重计算」为何是关键杠杆（能复述论证即可）。
+- [ ] 对六个研究问题**逐个**能说出：问题在问什么、为何值得想、已有工作大致边界、**自己的观点**（用 foundations 同一套词；不要求实现方案）。
+- [ ] **动手硬门槛（入门）**：`llvm-hello-compile` / `mlir-toy-dialect` / `tvm-fatbin-lab`（TVM 轨）/ `onnx-delegate-lab`（ONNX 轨）各自产物能讲；缺 CUDA/ExecuTorch/多卡时允许对应项降级。
 
 ### 8.3 保持跟踪
 

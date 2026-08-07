@@ -90,56 +90,56 @@ AI-Infra/
 | **验** | 能指着 `02_sum_O0.ll` vs `03a_sum_mem2reg.ll` 讲清 SSA/`phi`；能说出 CountIR（分析）与 InjectLogging（变换）的差别 |
 | **回查触发** | 写 MLIR→LLVM lowering 踩到 `poison`/`noalias`/向量化失败 → 回 [`llvm-learning-guide.md`](./llvm-learning-guide.md) 第 2.7、4.2、5 章 |
 
-### 阶段 1｜分布式训练基础（P0，约 2～3 周）
+### 阶段 1｜分布式训练基础（P0，约 1 周；对应周次表 W1）
 
 | | 内容 |
 |--|------|
-| **读** | 对照 foundations §9（分片如何变成 IR）→ [`paper-notes/01-efficient-training-distributed-infra.md`](./paper-notes/01-efficient-training-distributed-infra.md) —— 先 §2 六层框架 + §12 最小必要集，再抠 SPMD / 16Φ / 五种并行（论文正文对应该笔记 §3–§9） |
-| **做** | 根 README §3.1「动手验收」：DDP vs FSDP 显存实测、selective recompute、NCCL debug、profiler 看 All-Reduce 重叠 |
-| **验** | 五分钟讲清「70B 怎么切到 128 卡」；背出 16Φ；三种分片标注（Mesh-TF / GSPMD / SBP）能对照写同一策略 |
+| **读** | 对照 foundations §9 → [`paper-notes/01-efficient-training-distributed-infra.md`](./paper-notes/01-efficient-training-distributed-infra.md)：先 §2 框架 + §12 最小必要集，再抠 SPMD / 16Φ / 五种并行；三种标注体系对照着扫即可 |
+| **做** | 根 README §3.1 入门验收：优先 DDP vs FSDP 显存实测（1～2 条即可） |
+| **验** | 五分钟讲清「70B 怎么切到 128 卡」；背出 16Φ；三种分片标注能对照说同一策略 |
 | **串到后面** | 「并行策略要变成 IR 属性」→ 阶段 2/3 的 MLIR + IREE 才有的放矢 |
 
-### 阶段 2｜MLIR 深化（P0，约 2 周）
+### 阶段 2｜MLIR 入门（P0，约 1 周；对应周次表 W2）
 
 | | 内容 |
 |--|------|
-| **读** | 先补 foundations §5–6（tensor/buffer、渐进 lowering）→ 扫 [`paper-notes/03-mlir.md`](./paper-notes/03-mlir.md) → 精读 [`mlir-learning-guide.md`](./mlir-learning-guide.md)（Conversion / Interface / Linalg 三章最重）+ [`mlir-toy-dialect/README.md`](../mlir-toy-dialect/README.md) 覆盖对照表 |
-| **做** | ① `cd mlir-toy-dialect && bash scripts/all.sh` 跑通 9 组演示 + lit；② 对照读 `ConvertToyToLow.cpp`（Dialect Conversion）与 `ToyCostPass.cpp`（Interface）；③ 按根 README §3.2 继续：Toy→linalg→scf→llvm 端到端 |
-| **验** | 默画 Operation⊃Region⊃Block；说清 greedy lowering vs Dialect Conversion；解释「为什么 Interface 让一个 Pass 跨 dialect 工作」 |
-| **与 LLVM 项目对照** | `toy-opt` ≈ `opt`；`--toy-to-low-convert` ≈ 一次完整的跨 IR 变换；lit 测试写法两边一样 |
+| **读** | 先补 foundations §5–6 → 扫 [`paper-notes/03-mlir.md`](./paper-notes/03-mlir.md) → [`mlir-learning-guide.md`](./mlir-learning-guide.md)（Conversion / Interface / Linalg 三章最重）+ [`mlir-toy-dialect/README.md`](../mlir-toy-dialect/README.md) |
+| **做** | `cd mlir-toy-dialect && bash scripts/all.sh`；对照读 `ConvertToyToLow.cpp` 与 `ToyCostPass.cpp`。Toy→llvm 端到端属加深，不挡入门 |
+| **验** | 默画 Operation⊃Region⊃Block；说清 greedy vs Dialect Conversion；解释 Interface 为何让一个 Pass 跨 dialect 工作 |
+| **与 LLVM 项目对照** | `toy-opt` ≈ `opt`；`--toy-to-low-convert` ≈ 一次跨 IR 变换；lit 写法两边一样 |
 
-### 阶段 3｜IREE + HAL（P0，约 2 周）——主线核心
+### 阶段 3｜IREE + HAL（P0，约 1 周；对应周次表 W3）——主线核心
 
 | | 内容 |
 |--|------|
-| **读** | 先补 foundations §8（设备抽象机）→ 扫 [`paper-notes/07-tinyiree.md`](./paper-notes/07-tinyiree.md) 建立印象 → 精读 [`iree-learning-guide.md`](./iree-learning-guide.md)（HAL 第 4 章最重） |
-| **做** | 根 README §3.3：`--compile-to=flow/stream/hal` 逐相位 dump；同一模型编 CPU + CUDA/Vulkan；精读 CUDA HAL driver 的 semaphore 一节 |
-| **验** | 画出 `linalg→flow→stream→hal`，每层说清「固化了什么决定」；默画 HAL 对象关系；讲清 timeline semaphore 为何 `CUevent` 不够 |
+| **读** | 先补 foundations §8 → 扫 [`paper-notes/07-tinyiree.md`](./paper-notes/07-tinyiree.md) → [`iree-learning-guide.md`](./iree-learning-guide.md)（HAL 第 4 章最重） |
+| **做** | `--compile-to` 至少 dump 两层；单后端（CPU 即可）`iree-run-module` 跑通。双后端 / C runtime 属加深 |
+| **验** | 画出 `linalg→flow→stream→hal`；口述 HAL 对象关系与 timeline semaphore 为何强于 `CUevent` |
 | **串到项目目标** | HAL 的 device/buffer/command_buffer/variant ≈ 算力网「异构设备统一抽象」的现成词汇表 |
 
-### 阶段 4｜图级编译与多后端委托（P1，约 2～2.5 周；对应周次表 W8+W9）
+### 阶段 4｜图级编译与多后端委托（P1，约 1～1.5 周；对应周次表 W4+W5）
 
 | | 内容 |
 |--|------|
-| **读** | 先补 foundations §3–4（融合/划分、算法与调度）→ TVM：[`05-tvm.md`](./paper-notes/05-tvm.md) → [`tvm-learning-guide.md`](./tvm-learning-guide.md)；委托：[`onnx-learning-guide.md`](./onnx-learning-guide.md) + [`executorch-learning-guide.md`](./executorch-learning-guide.md)；可选 [`04-halide.md`](./paper-notes/04-halide.md) / [`06-glow.md`](./paper-notes/06-glow.md) |
-| **做（建议顺序）** | ① TVM 轨：`cd tvm-fatbin-lab && bash scripts/run_tvm.sh`（或 `run.sh`）→ 读 `out/ANALYSIS.md`；② 委托：`cd onnx-delegate-lab && bash scripts/run.sh` → 读 `out/ANALYSIS.md`。**时间紧 / 冲六个研究问题：对调，先做 onnx-delegate-lab。** CUDA fatbin 轨留到阶段 6。 |
-| **验** | 说清四类融合；对着 `tvm.lower` 讲 schedule 原语；指出 EP/Partitioner 分区边界为什么在那里；对照 ExecuTorch / ORT / IREE 三种「子图划分」答案 |
+| **读** | 先补 foundations §3–4 → TVM：[`05-tvm.md`](./paper-notes/05-tvm.md) → [`tvm-learning-guide.md`](./tvm-learning-guide.md)；委托：[`onnx-learning-guide.md`](./onnx-learning-guide.md) + [`executorch-learning-guide.md`](./executorch-learning-guide.md) |
+| **做（建议顺序）** | ① `tvm-fatbin-lab` TVM 轨；② `onnx-delegate-lab`。时间紧 / 冲研究问题：对调。CUDA fatbin 轨留到阶段 6 |
+| **验** | 四类融合直觉；对着 lower 讲主要 schedule 原语；指出 EP/Partitioner 边界；对照 ET / ORT / IREE 三种划分答案 |
 
-### 阶段 5｜LLM 真实负载（P1，约 1 周，可穿插）
-
-| | 内容 |
-|--|------|
-| **读** | [`paper-notes/08-flash-attention.md`](./paper-notes/08-flash-attention.md) + [`09-paged-attention-vllm.md`](./paper-notes/09-paged-attention-vllm.md) |
-| **做** | 手推 online softmax；对照 vLLM 关键参数与论文机制 |
-| **验** | 用 FlashAttention 论证「融合+tiling+重计算」；用 PagedAttention 说明「块化状态」如何支撑低成本迁移（连研究问题④） |
-
-### 阶段 6｜回填与收束（P2 + 研究问题）
+### 阶段 5｜LLM 真实负载（P1，约 0.5 周，可穿插；对应周次表 W6 前半）
 
 | | 内容 |
 |--|------|
-| **读** | Halide / Glow；[`cuda-fatbin-learning-guide.md`](./cuda-fatbin-learning-guide.md)（根 README §5.4）；需要时回 [`llvm-learning-guide.md`](./llvm-learning-guide.md) 第 5 章 CodeGen |
-| **做** | `cd tvm-fatbin-lab && bash scripts/run_fatbin.sh`；对照 IREE [`ExecutableVariant`](./iree-learning-guide.md#47-设备代码executable--variant--export) |
-| **验** | 对根 README §6 六个研究问题中至少两个，写出「已有工作做到哪、还差什么、我可能怎么做」 |
+| **读** | [`paper-notes/08-flash-attention.md`](./paper-notes/08-flash-attention.md) + [`09-paged-attention-vllm.md`](./paper-notes/09-paged-attention-vllm.md)（最小必要集） |
+| **做** | 手推或跟推 online softmax；对照 vLLM 关键参数与论文机制 |
+| **验** | 能复述 FA「融合+tiling+重计算」论证；用 PA 说明块化状态与研究问题④的关联 |
+
+### 阶段 6｜回填与收束（P2 + 研究问题观点；约 1～2 周；对应周次表 W6 后半～W8）
+
+| | 内容 |
+|--|------|
+| **读** | Halide / Glow 短读；[`cuda-fatbin-learning-guide.md`](./cuda-fatbin-learning-guide.md)；需要时回 llvm 学习文档 CodeGen |
+| **做** | `tvm-fatbin-lab` CUDA 轨（有环境时）；对照 IREE [`ExecutableVariant`](./iree-learning-guide.md#47-设备代码executable--variant--export) |
+| **验** | 对根 README §6 **六个**研究问题写出观点笔记：价值 / 已有边界 / **自己的判断**（不要求实现方案） |
 
 ---
 
@@ -215,18 +215,17 @@ tvm-fatbin-lab（融合/schedule）     ≈     onnx-delegate-lab（EP/Partition
 
 ## 5. 怎么用这套体系（三种节奏）
 
-### A. 标准 12 周（推荐）
+### A. 标准 6～8 周（推荐，入门上手）
 
-按根 README §7 周次表走；每周固定动作：
+按根 README §7.2 周次表走（合计约 80～120 小时）；每周固定动作：
 
 1. 打开本页对应阶段的「读」  
-2. 完成「做」  
+2. 完成「做」（停在入门验收，不主动做加深项）  
 3. 用「验」自检；不过关只回查列出的文档章节，不另开战场  
 
-### B. 应急 4 周
+### B. 应急 3～4 周
 
-根 README §7「应急最短路径」：先扫 [foundations](./ai-compiler-foundations.md) 总图 → 分布式核心三章 → MLIR Conversion → IREE 全部 → **先** [`onnx-delegate-lab`](../onnx-delegate-lab/)（委托对准研究问题）→ 有余力再补 [`tvm-fatbin-lab`](../tvm-fatbin-lab/) TVM 轨。  
-动手地基：**至少**跑通 `llvm-hello-compile`（半天）+ `mlir-toy-dialect` 的 `all.sh`。
+根 README §7.3：foundations + llvm → 分布式核心 → MLIR `all.sh` → IREE dump + **先** [`onnx-delegate-lab`](../onnx-delegate-lab/) → 研究问题观点笔记；有余力再补 [`tvm-fatbin-lab`](../tvm-fatbin-lab/) TVM 轨。
 
 ### C. 只缺某一块时（索引式）
 
@@ -255,9 +254,9 @@ tvm-fatbin-lab（融合/schedule）     ≈     onnx-delegate-lab（EP/Partition
 - [ ] IREE `linalg → flow → stream → hal` 每层固化什么  
 - [ ] 一个算子从 ONNX 到某个 EP：中间有哪些决策点  
 - [ ] FlashAttention 为何证明「融合 + tiling + 重计算」是核心杠杆  
-- [ ] 六个研究问题里至少两个：已有工作边界 + 自己的切入点（尽量用 foundations 同一套词）  
+- [ ] 六个研究问题均能说出价值、已有边界与自己的观点（不要求实现方案）  
 
-四条动手硬门槛（没做等于没学）：
+四条动手硬门槛（入门线；没做等于没学）：
 
 - [ ] `llvm-hello-compile` 跑通，能讲解 mem2reg 前后 IR  
 - [ ] `mlir-toy-dialect` 跑通，能讲解 `--toy-to-low-convert` 与 `--toy-print-cost`  
