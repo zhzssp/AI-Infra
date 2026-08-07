@@ -186,6 +186,8 @@ LangRef 的 Instruction Reference 就是按这九类组织的，记住分类比�
 | **Conversion** | `trunc` `zext` `sext` `fptrunc` `fpext` `fptoui` `sitofp` `ptrtoint` `inttoptr` `bitcast` `addrspacecast` |
 | **Other** | `icmp` `fcmp` `phi` `select` `freeze` `call` `va_arg` `landingpad` `catchpad` |
 
+> **速记**：[notes/conversion-llvm-vs-mlir.md](./notes/conversion-llvm-vs-mlir.md) —— LLVM 的 Conversion 是 cast 指令类；MLIR Dialect Conversion 是跨 dialect 的 lowering 框架，勿混。
+
 两个观察：
 
 1. **没有隐式内存访问**。除了 `load`/`store`/原子指令，没有任何指令碰内存。这是别名分析能做得好的根本前提。
@@ -224,6 +226,8 @@ LangRef 的 Instruction Reference 就是按这九类组织的，记住分类比�
 
 其中 **`contract`** 对 AI 编译器很重要：它是允许把 `a*b+c` 融合成 FMA 的开关。
 
+> **速记**：[notes/llvm-fma-contract.md](./notes/llvm-fma-contract.md) —— FMA 一次舍入；`contract` 是软件许可；真融合靠硬件；与图级算子融合同思路、不同层级。
+
 **参数/返回值属性**：`noalias`（等价于 C 的 `restrict`）、`nocapture`、`readonly` / `writeonly`、`nonnull`、`dereferenceable(N)`、`align N`、`noundef`、`byval` / `sret`（ABI 相关）。
 
 **函数属性**：`memory(none)` / `memory(read)` / `memory(argmem: readwrite)`（取代了老的 `readnone`/`readonly`）、`nounwind`、`willreturn`、`speculatable`、`alwaysinline` / `noinline`、`optnone`、`"target-cpu"` / `"target-features"`。
@@ -235,6 +239,8 @@ LangRef 的 Instruction Reference 就是按这九类组织的，记住分类比�
 这是当代 LLVM IR 语义里最微妙、也最必须搞清楚的一块。
 
 **poison** 是"错误操作的结果"。设计动机是**便于投机执行**：很多指令拿到非法操作数时不立即触发 UB，而是返回 poison，让优化器可以放心地把它提到分支外面。
+
+> **速记**：[notes/llvm-poison-ub.md](./notes/llvm-poison-ub.md) —— poison≠空/≠异常；UB 是误用后引爆；`select` 只认选中臂；「坏路径不用」是优化器对承诺的假设。
 
 三条规则：
 
@@ -328,6 +334,8 @@ MPM.addPass(createModuleToPostOrderCGSCCPassAdaptor(
 ```
 
 **一个 PassManager 本身就是它那一层的 pass**，所以可以嵌套。
+
+> **速记**：[notes/llvm-pass-manager.md](./notes/llvm-pass-manager.md) —— New/Legacy 两套引擎；Module/CGSCC/Function/Loop 四层调度；默认 `default<O2>` 已含大量内置 pass；PM 对外也是 pass 故可嵌套。
 
 **一条重要的实践建议**（官方明确写了）：应该把同层的 pass**打包进一个 PassManager**，而不是给每个 pass 各套一个 adaptor。区别是：
 

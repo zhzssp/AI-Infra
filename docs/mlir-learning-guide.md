@@ -453,6 +453,8 @@ builtin.module(
 > 官方文档：https://mlir.llvm.org/docs/DialectConversion/  
 > 这是跨 dialect lowering 的主武器，也是根 README §3.2 标 ★ 的必补项。
 
+> **速记**：[notes/conversion-llvm-vs-mlir.md](./notes/conversion-llvm-vs-mlir.md) —— 与 LLVM IR「Conversion」指令类不是一回事：那边是值级 cast，这里是跨 dialect lowering。
+
 ### 6.1 框架三件套
 
 ```
