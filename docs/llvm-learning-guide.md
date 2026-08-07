@@ -166,6 +166,8 @@ merge:
 
 `phi` 必须放在基本块的最开头（在所有非 phi 指令之前），且**每个前驱恰好一个入口**。
 
+> **速记**：[notes/llvm-phi.md](./notes/llvm-phi.md) —— 汇合选值、两条规则、与 MLIR block argument 的对应。
+
 > **和 MLIR 的对比**：MLIR 用**基本块参数（block argument）**代替 `phi`——`^bb2(%r: i32):`，语义等价但避免了"phi 必须在块首""前驱顺序必须匹配"这些结构约束。这是 MLIR 相对 LLVM 的一个有意改进。
 
 ### 2.4 指令的九大类
