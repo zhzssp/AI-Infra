@@ -7,10 +7,12 @@
 >
 > **怎么用**
 > - **开局读一遍第 1～2 章**（总图 + 概念索引），建立坐标系。
+> - **本文不是「全读」文档，也不是开局一次读完的文档**：第 2 章每条概念都标了**优先级**（★★ / ★ / ◆ / ○）与**它直接服务于老师指定的哪个工具/项目**；标 ○ 的属于宏观 AI-Infra 体系，知道名字即可。
+> - **[§2.4 给出与根 README 周次表同步的概念路线](#24-与工具路线同步的概念学习路线)**：每一轮只补下一个工具真正要用到的那几节，概念比工具早半步、不早一整轮。
 > - 学某个项目卡住时，用[第 10 章对照表](#第-10-章-概念--深入材料对照)跳到对应章节补概念，再回去读项目文档。
 > - 不要试图在这里替代 MLIR Dialect Conversion 或 IREE HAL 的精读——那是各专题文档的事。
 >
-> **一句话读法**：如果只有一小时，读[第 1 章总图](#第-1-章-一张总图从模型到异构设备)、[第 2 章概念索引](#第-2-章-概念索引按学习目标分组)、[第 9 章分布式与编译的接缝](#第-9-章-分布式与编译的接缝分片如何变成-ir)。
+> **一句话读法**：如果只有一小时，读[第 1 章总图](#第-1-章-一张总图从模型到异构设备)、[§2.4 同步路线表](#24-与工具路线同步的概念学习路线)，然后**只**读该表 W0 行点到的那几节。
 
 ---
 
@@ -18,6 +20,7 @@
 
 - [第 1 章 一张总图：从模型到异构设备](#第-1-章-一张总图从模型到异构设备)
 - [第 2 章 概念索引：按学习目标分组](#第-2-章-概念索引按学习目标分组)
+  - [2.0 优先级标注怎么读](#20-优先级标注怎么读) · **[2.4 与工具路线同步的概念学习路线](#24-与工具路线同步的概念学习路线)** ←「哪一周学哪几条」看这里
 - [第 3 章 图级抽象：计算图、算子、融合、划分](#第-3-章-图级抽象计算图算子融合划分)
 - [第 4 章 调度与局部性：算法/调度分离、tiling、Roofline](#第-4-章-调度与局部性算法调度分离tilingroofline)
 - [第 5 章 数据形态：tensor / buffer / layout / 量化 / 地址空间](#第-5-章-数据形态tensor--buffer--layout--量化--地址空间)
@@ -98,46 +101,105 @@
 
 下面每条都会在后文展开。这里先当目录用。
 
-### 2.1 几乎所有编译栈共用（必补）
+### 2.0 优先级标注怎么读
 
-| # | 概念 | 一句话 | 深入见 |
-|---|------|--------|--------|
-| 1 | **计算图 / DFG** | 节点是算子，边是张量依赖 | §3.1 |
-| 2 | **算子（op）语义分类** | injective / reduction / … 决定能不能融合 | §3.2 |
-| 3 | **算子融合（fusion）** | 合并算子以减少中间结果写回 | §3.2 |
-| 4 | **子图划分 / 委托（partition / delegate）** | 决定哪些节点交给哪个后端 | §3.3 |
-| 5 | **算法 vs 调度（algorithm / schedule）** | 「算什么」与「怎么算」分离 | §4.1 |
-| 6 | **Tiling / 循环变换** | 把迭代空间切块以适配缓存与并行 | §4.2 |
-| 7 | **Roofline / 算力–带宽瓶颈** | 判断优化该砍 FLOPs 还是砍访存 | §4.3 |
-| 8 | **Tensor vs Buffer（值语义 vs 存储）** | 不可变 SSA 值 vs 可原地更新的内存 | §5.1 |
-| 9 | **Layout** | 同一逻辑张量在内存中的排布 | §5.2 |
-| 10 | **量化（quantization）基础** | 低精度表示 + scale/zero-point | §5.3 |
-| 11 | **地址空间 / 内存层次** | global/shared/local；HBM/SRAM/寄存器 | §5.4 |
-| 12 | **SSA + CFG** | 单赋值 + 显式控制流（一切 IR 的底座） | §6.1 |
-| 13 | **多层 IR / 渐进 lowering** | 每层只固化一类决定，避免过早丢失信息 | §6.2 |
-| 14 | **Pass / 分析 vs 变换** | 编译器优化的组织单位 | §6.3 |
-| 15 | **代价模型（cost model）** | 用估计代替穷举实测来做决策 | §6.4 |
+本文的概念**并不同等重要**。当前阶段的任务是「先学好老师指定的工具/项目」，所以每条都按**它对那些工具的作用**分了四档：
 
-### 2.2 对接异构后端时必补
+| 标记 | 含义 | 怎么处理 |
+|------|------|----------|
+| **★★** | **骨架**：老师指定内容的组织方式本身就是它；不懂就有一整块读不下去 | 该轮**必须吃透**（四根柱子分散在 W1～W3，见 §2.4） |
+| **★** | **硬前提**：专题文档或动手项目里直接、反复用到 | 对应工具那一轮**开头就补** |
+| **◆** | **强杠杆**：补了之后「为什么这样设计」立刻通；也是写研究问题观点的词汇 | 同轮**顺手补**，读一遍能复述即可 |
+| **○** | **体系辅助**：宏观 AI-Infra 概念，与老师指定内容只是间接相关 | **只记名字 + 一句话结论**，实际项目里再补 |
 
-| # | 概念 | 一句话 | 深入见 |
-|---|------|--------|--------|
-| 16 | **Kernel / Launch / Grid** | 设备上可执行的计算单元与启动配置 | §7.1 |
-| 17 | **虚拟 ISA vs 真实 ISA**（PTX vs SASS） | 可迁移的中间码 vs 芯片原生码 | §7.2 |
-| 18 | **多变体打包（fat binary / variant）** | 一份产物带多个目标实现，运行时选 | §7.3 |
-| 19 | **设备抽象机**（device/buffer/queue） | 编译器眼中的「硬件能力接口」 | §8.1 |
-| 20 | **异步执行与同步原语** | stream / event / fence / timeline semaphore | §8.2 |
-| 21 | **AOT vs JIT** | 编译期定死 vs 运行期再特化 | §8.3 |
+> **一句话**：★★ 与 ★ 是「学不学得懂」的问题，◆ 是「理解得深不深」的问题，○ 是「知识体系完不完整」的问题——后者可以推迟。
+>
+> **优先级 ≠ 学习顺序**：优先级说的是「值不值得花时间」，顺序由 [§2.4](#24-与工具路线同步的概念学习路线) 的轮次决定。★★ 的分片标注在 W1，★ 的 SSA 在 W0——**先学 W0 的 ★，不是先学所有 ★★**。
 
-### 2.3 对接分布式与大模型负载时必补
+### 2.1 几乎所有编译栈共用
 
-| # | 概念 | 一句话 | 深入见 |
-|---|------|--------|--------|
-| 22 | **并行策略四要素** | 切什么 / 通什么 / 放哪 / 代价 | §9.1 |
-| 23 | **SPMD + 分片标注** | 一份程序 + 每张量如何切到 mesh | §9.2 |
-| 24 | **集合通信原语** | AllReduce / AllGather / ReduceScatter / AllToAll | §9.3 |
-| 25 | **IO 感知算法**（FlashAttention 方法论） | 优化目标从 FLOPs 转向 HBM 访问次数 | §9.4 |
-| 26 | **分页状态 / 块化迁移**（PagedAttention 启示） | 大状态按块管理才能低成本搬 | §9.5 |
+> 「轮次」列 = 第一次补它的时机，对应根 [`README.md`](../README.md) §7.2 的 W0～W8；`Wx→Wy` 表示 Wx 先建立直觉、Wy 再坐实。完整安排见 [§2.4](#24-与工具路线同步的概念学习路线)。
+
+| # | 概念 | 优先级 | 轮次 | 直接服务于（老师指定内容） | 一句话 | 深入见 |
+|---|------|--------|------|---------------------------|--------|--------|
+| 1 | **计算图 / DFG** | ★ | W0→W5 | ONNX `GraphProto` · TVM Relay · IREE 前端导入；`onnx-delegate-lab` 第一步就是构图 | 节点是算子，边是张量依赖 | §3.1 |
+| 2 | **算子（op）语义分类** | ★ | W4 | TVM 必学第 1 条（四类融合规则） | injective / reduction / … 决定能不能融合 | §3.2 |
+| 3 | **算子融合（fusion）** | ★ | W4 | TVM 图级优化；同时是「委托」的单后端原型 | 合并算子以减少中间结果写回 | §3.2 |
+| 4 | **子图划分 / 委托** | **★★** | W3→W5 | ORT EP + ExecuTorch Partitioner + IREE `flow.dispatch`；整个 `onnx-delegate-lab`；**六个研究问题的源头** | 决定哪些节点交给哪个后端 | §3.3 |
+| 5 | **算法 vs 调度** | ★ | W4 | TVM TE/schedule；**Halide 唯一要学的思想** | 「算什么」与「怎么算」分离 | §4.1 |
+| 6 | **Tiling / 循环变换** | ★ | W4 | TVM schedule 原语（`tvm-fatbin-lab` 步骤 01）；MLIR linalg tiling | 把迭代空间切块以适配缓存与并行 | §4.2 |
+| 7 | **Roofline / 算力–带宽瓶颈** | ◆ | W4 开头 | 给 TVM / Halide 提供动机：为什么值得花力气融合与 tiling | 判断优化该砍 FLOPs 还是砍访存 | §4.3 |
+| 8 | **Tensor vs Buffer** | ★ | W2 | MLIR linalg + Bufferization（必学三章之一）；IREE `flow`(tensor) → `hal`(buffer) | 不可变 SSA 值 vs 可原地更新的内存 | §5.1 |
+| 9 | **Layout** | ◆ | W4 | TVM layout 传播；EP/Partitioner 边界代价；研究问题② | 同一逻辑张量在内存中的排布 | §5.2 |
+| 10 | **量化基础** | ○ | W5（只读结论） | 仅间接：只需知道「量化在图上是一等公民，且制造跨后端摩擦」。数值技巧根 README 已列入「先跳过」 | 低精度表示 + scale/zero-point | §5.3 |
+| 11 | **地址空间 / 内存层次** | ◆ | W1 | 01 综述的显存账本与带宽域；解释「tiling 为何有效」；MLIR memref memory space | global/shared/local；HBM/SRAM/寄存器 | §5.4 |
+| 12 | **SSA + CFG** | ★ | W0 | LLVM 全部；`llvm-hello-compile` 的 mem2reg 就是它；MLIR block argument | 单赋值 + 显式控制流（一切 IR 的底座） | §6.1 |
+| 13 | **多层 IR / 渐进 lowering** | **★★** | W2 | **MLIR 主战场 + IREE 五层 dialect 的组织方式本身**；`mlir-toy-dialect` | 每层只固化一类决定，避免过早丢失信息 | §6.2 |
+| 14 | **Pass / 分析 vs 变换** | ★ | W0→W2 | LLVM New PM · MLIR Pass/Dialect Conversion；两个动手项目都在写 Pass | 编译器优化的组织单位 | §6.3 |
+| 15 | **代价模型** | ◆ | W2→W4 | `mlir-toy-dialect` 的 `ToyCostOpInterface`；AutoTVM/MetaSchedule 搜索；研究问题⑥ | 用估计代替穷举实测来做决策 | §6.4 |
+
+### 2.2 对接异构后端
+
+| # | 概念 | 优先级 | 轮次 | 直接服务于（老师指定内容） | 一句话 | 深入见 |
+|---|------|--------|------|---------------------------|--------|--------|
+| 16 | **Kernel / Launch / Grid** | ◆ | W3 | IREE kernel ABI 五件套；CUDA fatbin；TVM GPU codegen | 设备上可执行的计算单元与启动配置 | §7.1 |
+| 17 | **虚拟 ISA vs 真实 ISA** | ◆ | W6 | `cuda-fatbin-learning-guide` 的核心（`compute_xx` vs `sm_xx`）；LLVM NVPTX | 可迁移的中间码 vs 芯片原生码 | §7.2 |
+| 18 | **多变体打包** | ◆ | W3→W6 | IREE `ExecutableVariant` ≈ fatbin（同构对照）；研究问题⑥ | 一份产物带多个目标实现，运行时选 | §7.3 |
+| 19 | **设备抽象机** | **★★** | W3 | **IREE HAL 第 4 章——老师点名要求的内容**；也是算力网设备抽象的词汇表 | 编译器眼中的「硬件能力接口」 | §8.1 |
+| 20 | **异步执行与同步原语** | **★★** | W3 | IREE timeline semaphore——根 README 标注的**最硬也最关键**知识点 | stream / event / fence / timeline semaphore | §8.2 |
+| 21 | **AOT vs JIT** | ◆ | W5 | IREE / ORT / ExecuTorch 三者「决策时刻」差异；研究问题③ | 编译期定死 vs 运行期再特化 | §8.3 |
+
+### 2.3 对接分布式与大模型负载
+
+> **提醒**：这一组容易被当成「宏观 AI-Infra」而推迟，但 [01 分布式综述](./paper-notes/01-efficient-training-distributed-infra.md) 本身就是老师指定的 **P0 正题**，所以 §9.1–9.3 属于必补；只有 §9.4–9.5（来自自选补充的两篇论文）可以推迟。
+
+| # | 概念 | 优先级 | 轮次 | 直接服务于（老师指定内容） | 一句话 | 深入见 |
+|---|------|--------|------|---------------------------|--------|--------|
+| 22 | **并行策略四要素** | ◆ | W1 | 01 综述的复习锚点（是 checklist，不是新概念） | 切什么 / 通什么 / 放哪 / 代价 | §9.1 |
+| 23 | **SPMD + 分片标注** | **★★** | W1 | 01 综述标注的「★最重要」；**「可编译的分布式」与 MLIR/IREE 的接缝** | 一份程序 + 每张量如何切到 mesh | §9.2 |
+| 24 | **集合通信原语** | ◆ | W1 | 01 综述；IREE HAL `channel`（§4.8） | AllReduce / AllGather / ReduceScatter / AllToAll | §9.3 |
+| 25 | **IO 感知算法** | ○ | W4 可选 | 仅服务自选补充的 FlashAttention；**结论在 §9.4 读完即可，不必读原文** | 优化目标从 FLOPs 转向 HBM 访问次数 | §9.4 |
+| 26 | **分页状态 / 块化迁移** | ○ | W7 可选 | 仅服务自选补充的 PagedAttention；写研究问题③④观点时再读 | 大状态按块管理才能低成本搬 | §9.5 |
+
+### 2.4 与工具路线同步的概念学习路线
+
+**这是本文最重要的一张表。** 上面 26 条概念**不是一次学完的**——它们按批次挂在根 [`README.md`](../README.md) §7.2 的周次表上，每一轮只补「下一个工具真正要用到的那几条」。
+
+> **一句话原则**：**概念永远比工具早半步，不早一整轮。** 每轮开头花半天到一天补概念，然后立刻进工具/动手项目验证；下一轮再补下一批。
+>
+> 注意四根 **★★ 骨架**（渐进 lowering、划分/委托、设备抽象机+同步、分片标注）**是分散在第 1～3 轮的**，不要试图在开局一次补完——它们各自要靠对应的工具才能坐实。
+
+```
+工具轨（README §7.2）      概念轨（本文，每轮只补下面这几节）
+─────────────────────      ──────────────────────────────────
+W0  llvm-hello-compile  ◄─ §1 总图 · §3.1 直觉 · §6.1 SSA · §6.3 Pass
+W1  分布式综述          ◄─ §9.1 · §9.2 ★★ · §9.3 · §5.4
+W2  MLIR / toy-dialect  ◄─ §6.2 ★★ · §5.1 · §6.4（浅）
+W3  IREE + HAL          ◄─ §8.1 ★★ · §8.2 ★★ · §3.3 ★★（引入）· §7.1 · §7.3（引入）
+W4  TVM / tvm-lab       ◄─ §3.2 · §4.1 · §4.2 · §4.3 · §5.2 ·（§6.4 深化）
+W5  ONNX/ET / onnx-lab  ◄─ §3.3 深化（四类边界代价）· §8.3 · §3.1 深化 · §5.3（结论）
+W6  P2 回填             ◄─ §7.2 ·（§7.3 深化：fatbin）
+W7–W8 研究问题收束      ◄─ §3.4 选型 · §9.5 ·（回看 §3.3 · §5.2 · §8.3 · §9）
+```
+
+| 轮次 | 同期在学的工具/项目 | 本轮要补的概念 | 为什么**这时候**补 | 补完能回答 |
+|------|--------------------|----------------|-------------------|-----------|
+| **W0**<br>开局 + LLVM | `llvm-hello-compile` | §1 五层栈总图<br>§3.1 计算图（只要直觉）<br>**§6.1 SSA + CFG** ★<br>**§6.3 Pass / 分析 vs 变换** ★ | 这两条在 `mem2reg` 与 `CountIR`/`InjectLogging` 里**当场看得见**，是最便宜的入门 | `phi` 从哪来；「优化 = 一串可插拔的 Pass」 |
+| **W1**<br>分布式 | 01 分布式综述 | §9.1 并行四要素 ◆<br>**§9.2 SPMD + 分片标注** ★★（柱子④）<br>§9.3 集合通信原语 ◆<br>§5.4 地址空间 / 内存层次 ◆ | 综述的 16Φ 账本与通信重叠**必须**有带宽层级直觉才读得动；分片标注是后面 MLIR/IREE 的接缝 | 70B 怎么切到 128 卡；策略如何变成 IR 属性 |
+| **W2**<br>MLIR | `mlir-toy-dialect` | **§6.2 多层 IR / 渐进 lowering** ★★（柱子①）<br>§5.1 Tensor vs Buffer ★<br>§6.4 代价模型 ◆（浅层）<br>（§6.3 Pass 深化到 Dialect Conversion） | toy→low 那一刀就是渐进 lowering 的实物；`ToyCostOpInterface` 正好是代价模型的教学版 | 为什么不能一步降到 LLVM IR；tensor/buffer 各适合什么优化 |
+| **W3**<br>IREE | IREE + HAL | **§8.1 设备抽象机** ★★ + **§8.2 异步与同步** ★★（柱子③）<br>**§3.3 划分 / 委托** ★★ 引入（柱子②上半）<br>§7.1 Kernel / Launch ◆<br>§7.3 多变体打包 ◆ 引入 | HAL 第 4 章直接就是 §8；`flow.dispatch` 是「编译期划分」，先在这里见一次；kernel ABI 五件套要 §7.1 打底 | `linalg→flow→stream→hal` 各固化什么；为什么 `CUevent` 不够 |
+| **W4**<br>TVM | `tvm-fatbin-lab` TVM 轨 | §3.2 算子分类 + 融合 ★<br>§4.1 算法 vs 调度 ★<br>§4.2 Tiling / 循环变换 ★<br>§4.3 Roofline ◆<br>§5.2 Layout ◆<br>（§6.4 深化到 AutoTVM 搜索） | 先有 Roofline 才知道为什么值得 tiling，再学 schedule 原语才不是背命令；layout 是 TVM 必学第 2 条 | 四类融合；对着 `tvm.lower` 讲原语；带宽墙 vs 算力墙 |
+| **W5**<br>委托 | `onnx-delegate-lab` | **§3.3 深化：四类边界代价** ★★（柱子②下半）<br>§8.3 AOT vs JIT ◆<br>§3.1 深化：opset / shape 推断 ★<br>§5.3 量化 ○（只看结论） | 此时已见过 IREE 的编译期划分，正好对照 ORT 的 session 期、ET 的导出期——「决策时刻」差异靠 §8.3 说清 | 边界为什么贵；三种划分归属的差别；研究问题①②在问什么 |
+| **W6**<br>P2 回填 | Halide / Glow / CUDA fatbin | §7.2 虚拟 ISA vs 真实 ISA ◆<br>（§7.3 深化：fatbin 实物）<br>（§4.1 回看 Halide 源头） | `compute_xx` vs `sm_xx` 只有在动手 dump 时才记得住；此时回看 §7.3 就能把 fatbin ≈ ExecutableVariant 钉死 | 多变体打包解决什么；PTX 与 SASS 各自代价 |
+| **W7–W8**<br>收束 | §6 六个研究问题 | §3.4 四条工业栈选型 ◆<br>§9.5 分页状态 / 块化迁移 ○<br>（回看 §3.3 · §5.2 · §8.3 · §9） | 四条栈都学过才有判断力去填选型表；这一轮的概念是**写观点用的词汇**，不是新知识 | 每条栈把决策权交给了谁；哪些决定必须留到运行时 |
+
+**同步纪律（三条）**
+
+1. **不预习下一轮的概念**——读了没有工具坐实，两周后照样忘。
+2. **每轮结束回填一句话**：用自己的话把本轮概念与刚跑通的产物连起来（例：「`flow.dispatch` 就是 §3.3 说的划分，只是决策者是编译器」）。
+3. **卡住时不要往前学，往回查**——用[第 10 章对照表](#第-10-章-概念--深入材料对照)定位到本轮或更早轮次的那一节。
+
+**始终可以跳过的（○）**：量化数值技巧（§5.3 只看结论）、IO 感知（§9.4，跟 FA 一起可选）、分页状态（§9.5，收束时可选），以及 [§11.2](#112-必学-vs-可推迟) 列出的其余可推迟项。
 
 ---
 
@@ -536,57 +598,75 @@ PagedAttention 教的是：
 
 ## 第 10 章 概念 → 深入材料对照
 
-| 概念 | 先读本文 | 再深入 |
-|------|----------|--------|
-| 计算图 / opset / shape | §3.1 | [`onnx-learning-guide.md`](./onnx-learning-guide.md) |
-| 融合四类 | §3.2 | [`tvm-learning-guide.md`](./tvm-learning-guide.md) §2.2 · [`paper-notes/05-tvm.md`](./paper-notes/05-tvm.md) |
-| 委托 / 分区边界 | §3.3 | [`executorch-learning-guide.md`](./executorch-learning-guide.md) · onnx EP 章 · 动手 [`../onnx-delegate-lab/`](../onnx-delegate-lab/) |
-| 四条工业栈怎么选 | §3.4 | [`onnx`](./onnx-learning-guide.md) · [`executorch`](./executorch-learning-guide.md) · [`iree`](./iree-learning-guide.md) · [`tvm`](./tvm-learning-guide.md) |
-| 算法/调度、tiling | §4 | [`paper-notes/04-halide.md`](./paper-notes/04-halide.md) · tvm §3 |
-| Roofline / IO 感知 | §4.3 · §9.4 | [`paper-notes/08-flash-attention.md`](./paper-notes/08-flash-attention.md)（自选补充） |
-| tensor/buffer/layout | §5 | [`mlir-learning-guide.md`](./mlir-learning-guide.md) §8 · tvm layout 节 |
-| SSA / Pass / CodeGen | §6 · §7 | [`llvm-learning-guide.md`](./llvm-learning-guide.md) · [`llvm-hello-compile`](../llvm-hello-compile/) |
-| 渐进 lowering / Conversion | §6.2 | [`mlir-learning-guide.md`](./mlir-learning-guide.md) · [`mlir-toy-dialect`](../mlir-toy-dialect/) |
-| HAL / fence / variant | §7.3 · §8 | [`iree-learning-guide.md`](./iree-learning-guide.md) |
-| fatbin / compute vs sm | §7.2–7.3 | [`cuda-fatbin-learning-guide.md`](./cuda-fatbin-learning-guide.md) |
-| 并行 / 分片 / 通信 | §9 | [`paper-notes/01-…`](./paper-notes/01-efficient-training-distributed-infra.md) |
-| KV 分页 / 迁移直觉 | §9.5 | [`paper-notes/09-paged-attention-vllm.md`](./paper-notes/09-paged-attention-vllm.md)（自选补充） |
-| 少量原语多后端 | （对照） | [`paper-notes/06-glow.md`](./paper-notes/06-glow.md) vs TVM |
+> 「优先级」含义见 [§2.0](#20-优先级标注怎么读)：★★ 骨架 / ★ 硬前提 / ◆ 强杠杆 / ○ 可推迟。「轮次」含义见 [§2.4](#24-与工具路线同步的概念学习路线)。**表已按轮次排序**，所以从上往下也就是学习顺序。
+
+| 轮次 | 概念 | 优先级 | 先读本文 | 再深入 |
+|------|------|--------|----------|--------|
+| **W0** | SSA / Pass / CodeGen | ★ | §6.1 · §6.3 · §7 | [`llvm-learning-guide.md`](./llvm-learning-guide.md) · [`llvm-hello-compile`](../llvm-hello-compile/) |
+| **W0**→W5 | 计算图 / opset / shape | ★ | §3.1 | [`onnx-learning-guide.md`](./onnx-learning-guide.md) |
+| **W1** | 分片标注进 IR | **★★** | §9.2 | [`paper-notes/01-…`](./paper-notes/01-efficient-training-distributed-infra.md) |
+| **W1** | 并行四要素 / 集合通信 | ◆ | §9.1 · §9.3 | 同上 · IREE `channel` §4.8 |
+| **W1** | 内存层次 / 地址空间 | ◆ | §5.4 | 同上（显存账本与带宽域） |
+| **W2** | 渐进 lowering / Conversion | **★★** | §6.2 | [`mlir-learning-guide.md`](./mlir-learning-guide.md) · [`mlir-toy-dialect`](../mlir-toy-dialect/) |
+| **W2** | tensor/buffer | ★ | §5.1 | [`mlir-learning-guide.md`](./mlir-learning-guide.md) §8 |
+| **W3** | HAL / fence（设备抽象机 + 同步） | **★★** | §8.1–8.2 | [`iree-learning-guide.md`](./iree-learning-guide.md) 第 4 章 |
+| **W3**→W5 | 委托 / 分区边界 | **★★** | §3.3 | [`executorch-learning-guide.md`](./executorch-learning-guide.md) · onnx EP 章 · 动手 [`../onnx-delegate-lab/`](../onnx-delegate-lab/) |
+| **W3**→W6 | kernel / variant | ◆ | §7.1 · §7.3 | [`iree-learning-guide.md`](./iree-learning-guide.md) §4.7 |
+| **W4** | Roofline | ◆ | §4.3 | 实证见 [`08-flash-attention.md`](./paper-notes/08-flash-attention.md)（自选补充） |
+| **W4** | 融合四类 | ★ | §3.2 | [`tvm-learning-guide.md`](./tvm-learning-guide.md) §2.2 · [`paper-notes/05-tvm.md`](./paper-notes/05-tvm.md) |
+| **W4** | 算法/调度、tiling | ★ | §4.1–4.2 | [`paper-notes/04-halide.md`](./paper-notes/04-halide.md) · tvm §3 |
+| **W4** | layout | ◆ | §5.2 | tvm layout 节 · EP 边界代价 |
+| **W5** | AOT vs JIT（决策时刻） | ◆ | §8.3 | [`iree-learning-guide.md`](./iree-learning-guide.md) · ORT session / ET 导出期 |
+| **W5** | 量化 | ○ | §5.3（只看结论） | [`paper-notes/06-glow.md`](./paper-notes/06-glow.md) profile-guided 量化 |
+| **W6** | fatbin / compute vs sm | ◆ | §7.2–7.3 | [`cuda-fatbin-learning-guide.md`](./cuda-fatbin-learning-guide.md) |
+| **W6** | 少量原语多后端 | ○（对照） | — | [`paper-notes/06-glow.md`](./paper-notes/06-glow.md) vs TVM |
+| **W7–W8** | 四条工业栈怎么选 | ◆（学完再看） | §3.4 | [`onnx`](./onnx-learning-guide.md) · [`executorch`](./executorch-learning-guide.md) · [`iree`](./iree-learning-guide.md) · [`tvm`](./tvm-learning-guide.md) |
+| **W7–W8** | KV 分页 / 迁移直觉 | ○ | §9.5 | [`paper-notes/09-paged-attention-vllm.md`](./paper-notes/09-paged-attention-vllm.md)（自选补充） |
 
 ---
 
 ## 第 11 章 学习路径：什么时候读本文
 
-### 11.1 推荐节奏
+### 11.1 开局读什么 · 卡住时回查什么
 
-| 时机 | 读哪些章 | 目的 |
-|------|----------|------|
-| **开局（第 0 周）** | §1 总图 + §2 索引 + 附录速查 | 知道整个栈有几层 |
-| **学分布式综述同时** | §9 全部 | 把并行策略映射到「将来要进 IR 的属性」 |
-| **进 MLIR / toy 之前** | §5.1 · §6 | tensor/buffer、渐进 lowering、Pass |
-| **进 IREE 之前** | §3.3 · §7.1 · §8 | 划分、kernel、设备抽象机与同步 |
-| **进 TVM / Halide 之前** | §4 | 算法/调度、tiling、Roofline |
-| **进 ONNX / ExecuTorch 之前** | §3 全部 | 图、融合、委托边界代价 |
-| **四条栈都学完之后** | §3.4 | 回看选型：谁把决策权交给了谁 |
-| **碰 CUDA / 多后端打包时** | §7.2–7.3 | 虚拟/真实 ISA、变体 |
-| **思考六个研究问题时** | §3.3 · §5.2–5.3 · §8.3 · §9 | 用同一套词汇写问题分析 |
+**按周次的完整安排见 [§2.4 同步路线表](#24-与工具路线同步的概念学习路线)**（W0→W8 每轮补哪几节、为什么这时候补）。本节只补两件 §2.4 没说的事：**开局那半天读什么**，以及**中途卡住时按什么触发去回查**。
+
+**开局半天（W0 之前）**：§1 总图 → §2.0 优先级读法 → §2.4 路线表 → [附录速查](#附录一页速查)。**读完就停**，不要顺着往第 3 章读下去。
+
+**回查触发表**（不是阅读顺序，是「出现这个症状就翻这一节」）：
+
+| 症状 | 翻哪节 |
+|------|--------|
+| 看到 `%3 = phi` 或不理解「为什么变量只赋值一次」 | §6.1 |
+| 一份 IR 里同时出现 `tensor<...>` 和 `memref<...>`，分不清界 | §5.1 |
+| 不理解为什么要经过这么多层 dialect / 为什么不能一步降到底 | §6.2 |
+| 看到 `flow.dispatch` / `EPContext` / `lowered_backend_module`，分不清谁做了决定 | §3.3 |
+| 看到 `hal.device` / `semaphore` / `command_buffer` 不知各管什么 | §8.1–8.2 |
+| 看到 `split` / `reorder` / `cache_write` 不知在优化什么 | §4.1–4.2 |
+| 看到 `compute_75` 与 `sm_75` 并列出现 | §7.2 |
+| 看到 `shard` / `mesh` / `DeviceMesh` 属性 | §9.2 |
+| 要写「为什么这个决定该留到运行时」 | §8.3 |
+| 要写六个研究问题的观点，缺词汇 | §3.3 · §5.2 · §8.3 · §9 |
 
 ### 11.2 必学 vs 可推迟
 
-**现在就要建立直觉的**（否则专题文档读不进去）：
+> 完整的优先级标注（每条概念 + 它服务于老师指定的哪个工具）见 [§2.0–2.3](#20-优先级标注怎么读)，**分几轮学见 [§2.4](#24-与工具路线同步的概念学习路线)**；本节只给两头的结论。
 
-1. 五层栈总图（§1）  
-2. 融合 vs 委托分区的同构（§3.2–3.3）  
-3. 算法/调度分离 + Roofline（§4）  
-4. tensor vs buffer + layout（§5.1–5.2）  
-5. 渐进 lowering（§6.2）  
-6. 设备抽象机 + 异步同步（§8）  
-7. 分片标注如何成为 IR 属性（§9.2）  
+**这一路必须真正建立直觉的七块**（缺一块就有一整份专题文档读不进去）。注意括号里的轮次——**它们不在开局一起学**，四根 ★★ 柱子分别落在 W1／W2／W3：
 
-**可推迟**：
+1. 五层栈总图（§1）— W0，唯一需要开局就有的  
+2. SSA + Pass（§6.1、§6.3）— W0，`llvm-hello-compile` 直接在写  
+3. **分片标注如何成为 IR 属性（§9.2）** ← 柱子④ — W1  
+4. **渐进 lowering（§6.2）** ← 柱子① — W2；tensor vs buffer（§5.1）同轮  
+5. **设备抽象机 + 异步同步（§8.1–8.2）** ← 柱子③ — W3  
+6. 算法/调度分离 + tiling（§4.1–4.2）— W4  
+7. **融合 vs 委托分区的同构 + 四类边界代价（§3.2–3.3）** ← 柱子② — W3 引入、W5 坐实  
 
+**可推迟到实际项目里补**（属宏观 AI-Infra 体系，与老师指定内容只是间接相关）：
+
+- 量化数值技巧（Hadamard、随机舍入等）——§5.3 只需知道「量化制造跨后端摩擦」  
+- IO 感知算法（§9.4）与分页状态（§9.5）——来自自选补充的两篇论文，读结论即可  
 - 具体集合通信算法（Ring/Tree）实现细节  
-- 量化数值技巧（Hadamard、随机舍入等）  
 - 某张 GPU 的 SASS 指令  
 - 自动微分的正/反向模式实现  
 - polyhedral 依赖分析公式  
@@ -646,6 +726,7 @@ PagedAttention 教的是：
 
 ## 维护约定
 
-- 新增专题学习文档时：在[第 10 章对照表](#第-10-章-概念--深入材料对照)加一行「概念 → 该文档」。  
-- 根 README 若调整学习目标表述：同步改[第 1 章表格](#第-1-章-一张总图从模型到异构设备)。  
+- 新增专题学习文档时：在[第 10 章对照表](#第-10-章-概念--深入材料对照)加一行「概念 → 该文档」，并标上优先级与轮次（口径见 [§2.0](#20-优先级标注怎么读) / [§2.4](#24-与工具路线同步的概念学习路线)）。  
+- 新增横切概念时：在[第 2 章](#第-2-章-概念索引按学习目标分组)对应分组加一行，**必须填「优先级」「轮次」「直接服务于哪个老师指定内容」**——填不出后两者，就说明它当前属 ○，不要拉进必学清单；同时把它挂进 [§2.4](#24-与工具路线同步的概念学习路线) 某一轮，**不允许有「无主」概念**。  
+- 根 README §7.2 周次表若调整：同步改 [§2.4](#24-与工具路线同步的概念学习路线) 的轮次列与双轨图；调整学习目标表述则同步改[第 1 章表格](#第-1-章-一张总图从模型到异构设备)。  
 - 本文保持「横切概念」角色，**不复制**各专题文档的 API 细节。

@@ -32,7 +32,7 @@
 | 目录 | 角色 | 入口 |
 |------|------|------|
 | **[`docs/README.md`](docs/README.md)** | **自学体系枢纽**：每阶段读什么 / 做什么 / 过关标准 | **日常导航从这里进** |
-| [`docs/ai-compiler-foundations.md`](docs/ai-compiler-foundations.md) | **横切前置概念**：把各项目串成一张总图的公共词汇表 | **开局先读**；卡住时回查 |
+| [`docs/ai-compiler-foundations.md`](docs/ai-compiler-foundations.md) | **横切前置概念**：把各项目串成一张总图的公共词汇表；26 条概念已标优先级并按周次分批 | **开局只读总图 + [§2.4 同步路线表](docs/ai-compiler-foundations.md#24-与工具路线同步的概念学习路线)**；之后每轮开头按该表补几节，卡住时回查 |
 | [`docs/paper-notes/`](docs/paper-notes/) | 论文精读笔记（框架 · 核心特性 · 最小必要集） | [笔记索引](docs/paper-notes/README.md) |
 | [`docs/mlir-learning-guide.md`](docs/mlir-learning-guide.md) | MLIR：Conversion / Interface / Linalg | **P0**，配 [`mlir-toy-dialect/`](mlir-toy-dialect/) |
 | [`docs/iree-learning-guide.md`](docs/iree-learning-guide.md) | IREE 核心概念 + **HAL 详解** | **P0** 主教材之一 |
@@ -604,7 +604,7 @@ Runtime：HAL driver + VM
 
 | 周次 | 主题 | 入门产出（做到即可停） |
 |------|------|------------------------|
-| **W0（约 1～2 天）** | [`ai-compiler-foundations`](docs/ai-compiler-foundations.md) §1–2 + 附录；跑通 `llvm-hello-compile` | 默画五层栈；`out/ANALYSIS.md` 能讲 mem2reg / Pass |
+| **W0（约 1～2 天）** | [`ai-compiler-foundations`](docs/ai-compiler-foundations.md) §1 总图 + §2.4 路线表 + 附录（**§3–9 不通读**）；跑通 `llvm-hello-compile` | 默画五层栈；`out/ANALYSIS.md` 能讲 mem2reg / Pass |
 | **W1** | 分布式综述：框架 + §12 最小必要集 + 并行/显存/通信要点；SPMD 三种标注**对照着扫**（不必三篇精读） | 能讲「70B→128 卡」切法；16Φ；Mesh/GSPMD/SBP 各用什么词；动手验收 1～2 条 |
 | **W2** | MLIR：学习文档重点章 + [`mlir-toy-dialect`](mlir-toy-dialect/) `all.sh` | Conversion / Interface 能对照产物讲；**不要求** Toy→llvm 打通 |
 | **W3** | IREE + HAL：[`iree-learning-guide`](docs/iree-learning-guide.md) 核心章 + `--compile-to` dump + 单后端跑通 | 画出 `linalg→flow→stream→hal`；口述 HAL 对象与 semaphore |
@@ -613,6 +613,10 @@ Runtime：HAL driver + VM
 | **W6** | P2 回填：Halide / Glow / CUDA fatbin（各约半天内） | fatbin≈ExecutableVariant 能说清；算法/调度分离能复述 |
 | **W7～W8（缓冲 / 收束）** | 回看 §6 六个研究问题；用 foundations 同一套词写**观点笔记**<br>（此时读 PA 笔记，直接当问题③④的弹药） | 每个问题：为何有价值、已有工作边界、**我的判断**（不要求实现方案） |
 
+> **横切概念跟着上表分批补，不提前学**。每轮开头半天，照 [foundations §2.4 同步路线表](docs/ai-compiler-foundations.md#24-与工具路线同步的概念学习路线) 取本轮那几节：<br>
+> W0 → §3.1·§6.1·§6.3 ｜ W1 → §9.1–9.3·§5.4 ｜ W2 → §6.2·§5.1·§6.4 ｜ W3 → §8.1–8.2·§3.3·§7.1·§7.3 ｜ W4 → §3.2·§4.1–4.3·§5.2 ｜ W5 → §3.3 深化·§8.3·§5.3 ｜ W6 → §7.2–7.3 ｜ W7–W8 → §3.4·§9.5 + 回看。<br>
+> 四根 ★★ 骨架概念**分散在 W1～W3**（分片标注 / 渐进 lowering / 设备抽象机+同步 / 划分与边界代价），开局不必也不应一次补完。
+>
 > **自选补充（§4.3）不单独占周**：FA 约 0.5 天（并入 W4 开头），PA 约 0.5～1 天（并入收束）。跳过原文、只用 foundations §4.3/§9.4/§9.5 的结论也能走完主线。  
 > 若每周只能投入约 10 小时，把上表按 **8 周**拉长即可；若状态好，W6 与收束可压进第 6～7 周。
 
@@ -625,6 +629,8 @@ Runtime：HAL driver + VM
 2. **约 1 周**：MLIR 重点章 + `mlir-toy-dialect` 的 `all.sh`（到此为止）。
 3. **约 1 周**：IREE 核心章 + 一次 `--compile-to`；再跑 [`onnx-delegate-lab`](onnx-delegate-lab/)。
 4. **收束数天**：带着六个研究问题回看，写出观点笔记；有余力再补 TVM lab。
+
+> 应急路径的概念只留 **★★ 四根 + §6.1/§6.3**：W0 §6.1·§6.3 → 步骤 1 前 §9.2 → 步骤 2 前 §6.2 → 步骤 3 前 §8.1–8.2·§3.3。所有 ◆ 与 ○ 全部跳过，写观点时再按 [§2.4](docs/ai-compiler-foundations.md#24-与工具路线同步的概念学习路线) 现查。
 
 ---
 
@@ -680,7 +686,7 @@ Runtime：HAL driver + VM
 | 文档 | 来源 | 优先级 | 一句话定位 |
 |------|------|--------|-----------|
 | **[自学体系枢纽](docs/README.md)** | 本仓库编排 | — | **日常导航**：每阶段读什么 / 做什么 / 验什么；卡住时的索引表 |
-| **[AI 编译器前置核心概念](docs/ai-compiler-foundations.md)** | 横切编排（粘合各专题） | **开局必读** | 五层栈总图；融合/委托/调度/layout/渐进 lowering/HAL 抽象机/分片进 IR 等公共词汇；**四条工业栈选型对照（§3.4）**；概念→专题文档对照表 |
+| **[AI 编译器前置核心概念](docs/ai-compiler-foundations.md)** | 横切编排（粘合各专题） | **开局读 §1+§2.4；其余按 W0～W8 分轮补** | 五层栈总图；**§2.4 与周次表同步的概念路线（26 条概念按轮分批）**；融合/委托/调度/layout/渐进 lowering/HAL 抽象机/分片进 IR 等公共词汇；**四条工业栈选型对照（§3.4）** |
 | [IREE 学习文档：核心概念 + HAL 详解](docs/iree-learning-guide.md) | IREE 官方文档 + 主干源码 | **P0** | 执行模型、dialect 流水线、HAL 全对象模型、timeline semaphore、executable variant、集合通信 |
 | [MLIR 学习文档：Conversion / Interface / Linalg](docs/mlir-learning-guide.md) | MLIR 官方文档主干 | **P0** | IR 结构、Traits/Interfaces、**Dialect Conversion**、内置 dialect 地图、**Linalg + One-Shot Bufferize** |
 | [TVM 学习文档：图编译 + 调度搜索](docs/tvm-learning-guide.md) | Apache TVM 官方文档 | P1 | 四类融合、layout、TE+schedule 原语、tensorize、AutoTVM/MetaSchedule、PackedFunc |
