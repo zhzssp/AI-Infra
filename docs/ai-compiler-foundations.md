@@ -41,7 +41,8 @@
 ```
 ┌─ 应用 / 框架 ─────────────────────────────────────────────────┐
 │  PyTorch / JAX / TensorFlow 模型；训练并行策略（DP/TP/PP…）     │
-│  代表材料：01 分布式综述 · FlashAttention · PagedAttention      │
+│  代表材料：01 分布式综述                                        │
+│  （FA / PA 也落在这一层——是负载侧论据，不在五层栈内；见 §4.3/§9.4/§9.5）│
 └────────────────────────────┬──────────────────────────────────┘
                              │ export / trace / 前端导入
                              ▼
@@ -263,7 +264,7 @@
 
 **为什么 AI 编译必提**：现代 GPU 上 Transformer 注意力等内核经常是**访存墙**，不是算力墙。FlashAttention 的方法论本质就是：用 tiling + 融合 + 重计算，把 HBM 访问次数打下来。不建立 Roofline 直觉，会误把「多算一点 FLOPs」当成优化。
 
-详见 [`paper-notes/08-flash-attention.md`](./paper-notes/08-flash-attention.md)。
+想要实证再翻 [`paper-notes/08-flash-attention.md`](./paper-notes/08-flash-attention.md)（**自选补充**：本节结论已够用，原文只是把它坐实）。
 
 ---
 
@@ -513,11 +514,13 @@ Driver ──▶ Device ──▶ Allocator ──▶ Buffer (+ BufferView: shap
 
 ### 9.4 IO 感知算法（负载侧方法论）
 
+> **§9.4–9.5 的定位**：这两节把 FlashAttention / PagedAttention 两篇**自选补充**论文的结论蒸馏在此。它们是**论据**，不是五层栈里的一层——读完本节，主线就不缺环；原文只在你要实证或深挖研究问题时才需要。
+
 FlashAttention 教的不是又一个 kernel 细节，而是：
 
 > 当 Roofline 显示带宽瓶颈时，**正确的复杂度度量是 HBM 访问次数**；允许重计算换存储；用 tiling 把工作集塞进 SRAM。
 
-这套方法论直接指导编译器该把哪些融合/tiling 决策视为一等公民。
+这套方法论直接指导编译器该把哪些融合/tiling 决策视为一等公民——**这就是进 TVM / Halide 之前值得先扫一眼它的原因**。
 
 ### 9.5 分页状态与低成本迁移
 
@@ -526,6 +529,8 @@ PagedAttention 教的是：
 > 巨大的运行时状态（KV Cache）应按**块**分配与索引；块化之后，抢占、前缀共享、跨设备搬迁的粒度都变小。
 
 映射到研究问题④「运行状态变化后低成本切换后端」：没有块化/并行无关的状态表示，迁移只能整包拷贝——太贵。Universal Checkpointing 等方向是训练侧的同类问题。
+
+它同时是研究问题③的样本：KV 长度由运行时采样结果决定，编译期根本看不到，**所以「内存怎么分配」这类决策必须留在运行时**，编译器只负责生成认识 block table 的通用 kernel。这条「编译期 vs 运行时职责边界」的划法，比记住分页机制本身更值钱。
 
 ---
 
@@ -538,14 +543,14 @@ PagedAttention 教的是：
 | 委托 / 分区边界 | §3.3 | [`executorch-learning-guide.md`](./executorch-learning-guide.md) · onnx EP 章 · 动手 [`../onnx-delegate-lab/`](../onnx-delegate-lab/) |
 | 四条工业栈怎么选 | §3.4 | [`onnx`](./onnx-learning-guide.md) · [`executorch`](./executorch-learning-guide.md) · [`iree`](./iree-learning-guide.md) · [`tvm`](./tvm-learning-guide.md) |
 | 算法/调度、tiling | §4 | [`paper-notes/04-halide.md`](./paper-notes/04-halide.md) · tvm §3 |
-| Roofline / IO 感知 | §4.3 · §9.4 | [`paper-notes/08-flash-attention.md`](./paper-notes/08-flash-attention.md) |
+| Roofline / IO 感知 | §4.3 · §9.4 | [`paper-notes/08-flash-attention.md`](./paper-notes/08-flash-attention.md)（自选补充） |
 | tensor/buffer/layout | §5 | [`mlir-learning-guide.md`](./mlir-learning-guide.md) §8 · tvm layout 节 |
 | SSA / Pass / CodeGen | §6 · §7 | [`llvm-learning-guide.md`](./llvm-learning-guide.md) · [`llvm-hello-compile`](../llvm-hello-compile/) |
 | 渐进 lowering / Conversion | §6.2 | [`mlir-learning-guide.md`](./mlir-learning-guide.md) · [`mlir-toy-dialect`](../mlir-toy-dialect/) |
 | HAL / fence / variant | §7.3 · §8 | [`iree-learning-guide.md`](./iree-learning-guide.md) |
 | fatbin / compute vs sm | §7.2–7.3 | [`cuda-fatbin-learning-guide.md`](./cuda-fatbin-learning-guide.md) |
 | 并行 / 分片 / 通信 | §9 | [`paper-notes/01-…`](./paper-notes/01-efficient-training-distributed-infra.md) |
-| KV 分页 / 迁移直觉 | §9.5 | [`paper-notes/09-paged-attention-vllm.md`](./paper-notes/09-paged-attention-vllm.md) |
+| KV 分页 / 迁移直觉 | §9.5 | [`paper-notes/09-paged-attention-vllm.md`](./paper-notes/09-paged-attention-vllm.md)（自选补充） |
 | 少量原语多后端 | （对照） | [`paper-notes/06-glow.md`](./paper-notes/06-glow.md) vs TVM |
 
 ---

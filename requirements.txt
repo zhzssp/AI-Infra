@@ -1,0 +1,41 @@
+# =============================================================================
+# AI-Infra —— 全仓库 Python (pip) 依赖
+# =============================================================================
+# 覆盖动手项目：
+#   tvm-fatbin-lab/   （TVM 轨）
+#   onnx-delegate-lab/（ONNX / ORT EP 轨）
+# llvm-hello-compile / mlir-toy-dialect 走系统 LLVM/MLIR（apt 或 conda），无 pip 硬依赖。
+#
+# ---------- 一键安装（建议用 venv）----------
+#   python3 -m venv .venv
+#   source .venv/bin/activate          # Windows: .venv\Scripts\activate
+#   pip install -U pip
+#   pip install -r requirements.txt
+#
+# 分项目安装仍可用：
+#   pip install -r tvm-fatbin-lab/requirements.txt
+#   pip install -r onnx-delegate-lab/requirements.txt
+# =============================================================================
+
+# --- 共用 ---
+numpy
+
+# --- tvm-fatbin-lab（Apache TVM CPU 路径即可跑通核心步骤）---
+# 若 apache-tvm wheel 不可用，见 https://tvm.apache.org/docs/install/
+apache-tvm
+decorator
+attrs
+psutil
+scipy
+tornado
+cloudpickle
+xgboost
+
+# --- onnx-delegate-lab（构图 / 改图 / ORT CPU EP）---
+onnx>=1.14
+onnxruntime>=1.16
+
+# --- 可选：ExecuTorch 轨（未装时 onnx-delegate-lab 走概念模拟）---
+# 安装方式随官方文档变化，请按 https://pytorch.org/executorch/ 操作，勿盲装下行。
+# torch
+# executorch

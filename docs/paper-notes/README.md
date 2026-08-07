@@ -22,6 +22,7 @@
 |------|------|-------------------|
 | [01 分布式综述](01-efficient-training-distributed-infra.md) | 综述体例：§3–§9 对应论文各章 | **§12**（框架在 §2） |
 | [06 Glow](06-glow.md) · [08 FlashAttention](08-flash-attention.md) | 多一节横向对比 / 后续演进 | **§8** |
+| [08](08-flash-attention.md) · [09](09-paged-attention-vllm.md) | **自选补充**，不按骨架逐节读 | 见下方「P1 自选补充」表的「读到哪停」 |
 | [07 TinyIREE](07-tinyiree.md) | 刻意写成简记，无「使用示例」「最小必要集」 | 用 [`../iree-learning-guide.md`](../iree-learning-guide.md) §7 代替 |
 
 ---
@@ -44,8 +45,15 @@
 | 笔记 | 论文 | 核心收获 |
 |------|------|----------|
 | [05 TVM](05-tvm.md) | *TVM: An Automated End-to-End Optimizing Compiler for Deep Learning*（OSDI 2018） | 四类融合、layout、TE+schedule、tensorize、AutoTVM。**工程机制见 [`../tvm-learning-guide.md`](../tvm-learning-guide.md)** |
-| [08 FlashAttention](08-flash-attention.md) | *FlashAttention* | IO 感知的复杂度分析方法论、online softmax 重标定、反向重计算的取舍 |
-| [09 PagedAttention / vLLM](09-paged-attention-vllm.md) | *Efficient Memory Management for LLM Serving with PagedAttention*（SOSP 2023） | KV Cache 的三类浪费、block table 分页、copy-on-write 共享、swap vs recompute 抢占 |
+
+#### P1 自选补充 —— 两篇负载侧论据（不在主链上）
+
+> 08 / 09 是额外补充的论文，**没有配套动手项目**，也不构成一条技术栈。核心结论已蒸馏进 [`../ai-compiler-foundations.md`](../ai-compiler-foundations.md) §4.3 / §9.4 / §9.5——**只读 foundations 也不断链**。要读就按下表的身份穿插，不要按「精读七节骨架」逐节啃。
+
+| 笔记 | 论文 | 以什么身份融入 | 读到哪停 |
+|------|------|----------------|----------|
+| [08 FlashAttention](08-flash-attention.md) | *FlashAttention* | **优化杠杆的实证**：进 TVM/schedule 之前建立「为什么要 tiling」的动机 | 瓶颈是 HBM 访存不是 FLOPs；融合+tiling+重计算怎么配合。公式看懂即可，**不要求手推** |
+| [09 PagedAttention / vLLM](09-paged-attention-vllm.md) | *Efficient Memory Management for LLM Serving with PagedAttention*（SOSP 2023） | **研究问题的样本**：根 README §6 问题③（编译期 vs 运行时边界）与④（低成本迁移） | 三类浪费、block table 分页；**重点是「与编译器视角的关系」一段** |
 
 ### P2 —— 回填，按需
 
@@ -75,8 +83,9 @@
    │             └─ 多后端统一运行时的工业样板（本路线的核心参考）
    └─ 所有现代 ML 编译栈的公共基础设施
 
-08 FlashAttention  +  09 PagedAttention
-   └─ 随时可读，用来校正「大模型实际长什么样」的直觉
+（自选补充，旁挂，不占主链）
+08 FlashAttention ─┐ 进 05 TVM 之前扫结论：为什么值得做融合/tiling
+09 PagedAttention ─┘ 收束时读：研究问题③④的样本（编译期 vs 运行时 / 块化迁移）
 
 02 LLVM  +  06 Glow
    └─ 遇到具体问题时回查即可

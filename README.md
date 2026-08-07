@@ -45,6 +45,8 @@
 | [`tvm-fatbin-lab/`](tvm-fatbin-lab/) | 动手：TVM 调度/融合/AutoTVM + CUDA fatbin 多变体 | `bash scripts/run.sh` |
 | [`onnx-delegate-lab/`](onnx-delegate-lab/) | 动手：ONNX 构图/改图 + ORT EP 分区 + ExecuTorch Partitioner | `bash scripts/run.sh` |
 | [`paper/`](paper/) | 原始论文 PDF | 笔记说不清时再打开 |
+| [`linux-apt-packages.txt`](linux-apt-packages.txt) | Linux（Ubuntu/Debian）系统依赖清单 | `sudo apt-get install -y $(grep -vE '^\s*(#|$)' linux-apt-packages.txt)` |
+| [`requirements.txt`](requirements.txt) | 全仓库 pip 依赖（TVM / ONNX labs） | `pip install -r requirements.txt` |
 
 **动手项目在主线上的位置**：
 
@@ -72,12 +74,12 @@ LLVM/MLIR 练 IR 基建；两 lab 正交——TVM 练「算得快 + 多变体」
 
 | 优先级 | 项目 | 为什么是这个优先级 | 建议投入 |
 |--------|------|---------------------|----------|
-| **P0** | **分布式训练综述** | 项目的正题。不懂并行策略与通信/显存约束，后面所有编译优化都无的放矢 | 20% |
+| **P0** | **分布式训练综述** | 项目的正题。不懂并行策略与通信/显存约束，后面所有编译优化都无的放矢 | 21% |
 | **P0** | **MLIR（入门）** | 这类基础设施几乎一定是 MLIR 形态。重点在 Conversion / Interface / linalg 三块的**概念与最小动手** | 18% |
-| **P0** | **IREE + HAL** | **多后端统一运行时的现成样板**：device/buffer/command buffer/多目标变体，直接对应「异构算力池的统一设备抽象」 | 15% |
+| **P0** | **IREE + HAL** | **多后端统一运行时的现成样板**：device/buffer/command buffer/多目标变体，直接对应「异构算力池的统一设备抽象」 | 16% |
 | **P1** | **TVM** | 图级编译器的完整范式：融合、layout、调度、代价模型与搜索。对应「子图划分」与「配置组合爆炸」 | 12% |
-| **P1** | **ONNX + ExecuTorch/ORT 多后端委托** | 工程上绕不开的交换格式，且 §6 六个研究问题就是从委托机制里长出来的 | 12% |
-| **P1** | **FlashAttention + PagedAttention** | 大模型负载的**真实形态**；用来校正「基础设施到底在优化什么」 | 8% |
+| **P1** | **ONNX + ExecuTorch/ORT 多后端委托** | 工程上绕不开的交换格式，且 §6 六个研究问题就是从委托机制里长出来的 | 13% |
+| **P1（自选补充）** | **FlashAttention + PagedAttention** | **不是一条工具栈，是两篇论据**：FA 为「融合/tiling/重计算」提供实证，PA 为研究问题③④提供样本。结论已蒸馏进 foundations §4.3/§9.4/§9.5，**主线不读原文也不断链** | 5% |
 | **P2** | **LLVM（复习）** | 地基性质：跑通 `llvm-hello-compile` 建立手感后按需回查 | 5% |
 | **P2** | **Halide** | 只为理解「算法与调度分离」这一个思想，约 0.5～1 天 | 4% |
 | **P2** | **Glow** | 与 TVM 对比阅读，理解「少量原语 + lowering」的低成本多后端策略 | 3% |
@@ -169,8 +171,9 @@ LLVM/MLIR 练 IR 基建；两 lab 正交——TVM 练「算得快 + 多变体」
 ┌─ P1 ───────────────────────────────────────────────────────────┐
 │  TVM：tvm-learning-guide + tvm-fatbin-lab（TVM 轨；默认先做）   │
 │  委托：onnx/executorch 文档 + onnx-delegate-lab（冲研究问题可先做）│
-│  FlashAttention · PagedAttention（负载真实形态）                 │
 └─────────────────────────────────────────────────────────────────┘
+   ┊ 旁挂（自选补充，不占主链）：FlashAttention → 给 TVM/tiling 提供动机
+   ┊                            PagedAttention → 给研究问题③④ 提供样本
                           ↓
 ┌─ P2（回填）Halide · Glow · cuda-fatbin + tvm-fatbin-lab CUDA 轨 · LLVM ──┐
 └──────────────────────────────────────────────────────────────────────────┘
@@ -411,27 +414,30 @@ Runtime：HAL driver + VM
 
 ---
 
-### 4.3 LLM 负载的真实形态：FlashAttention + PagedAttention
+### 4.3 自选补充：FlashAttention + PagedAttention（负载侧论据，非独立技术栈）
 
 📄 **笔记**：[`08-flash-attention.md`](docs/paper-notes/08-flash-attention.md) · [`09-paged-attention-vllm.md`](docs/paper-notes/09-paged-attention-vllm.md)
 
-**为什么必学**：做「大模型基础设施」却不了解大模型实际怎么算、显存实际被什么占满，设计一定会跑偏。这两篇分别代表**训练侧的访存优化**和**推理侧的内存管理**。
+> **定位说明**：这两篇是**额外补充的论文**，不属于「交换格式 → 中端 → 执行规划 → 后端 → 运行时」这条主链，也没有配套动手项目。  
+> 它们**能且只能**以两个身份融入本路线；**除此以外的内容（kernel 实现细节、vLLM 工程演进）不在本阶段范围内**。  
+> 两篇的核心结论已被蒸馏进 [`ai-compiler-foundations.md`](docs/ai-compiler-foundations.md) §4.3 / §9.4 / §9.5——**只读 foundations 也不断链**，原文属加深。
 
-**FlashAttention 必学**：
-1. **瓶颈在 HBM 访存而非 FLOPs**——GPU 内存层次（HBM / SRAM / register）的带宽与容量数量级。
-2. **online softmax 的重标定公式**（running max \(m_i\) 与 running sum \(\ell_i\) 如何更新）。能手推一遍。
-3. **IO 复杂度结论**：标准实现 vs FlashAttention 的 HBM 访问次数（用 \(N, d, M\) 表示）。
-4. **反向重计算的取舍**：为什么存 \(O(N)\) 统计量 + 重算，比存 \(O(N^2)\) 矩阵更快。
-5. **方法论**：这是「融合 + tiling + 重计算」三件套最有说服力的实例——**它证明了编译器优化的核心杠杆在哪里**。
+| 身份 | 哪一篇 | 挂在路线的哪里 | 读它是为了回答 |
+|------|--------|----------------|----------------|
+| **① 优化杠杆的实证** | FlashAttention | foundations §4.3 Roofline / §9.4 → 支撑 §4.1 TVM 的融合与 schedule | 「为什么值得花力气做融合 / tiling / 重计算？」——FLOPs 更多但访存更少反而更快，是这条原则最硬的证据 |
+| **② 研究问题的样本** | PagedAttention | §6 问题③（动态 shape、编译期 vs 运行时边界）与问题④（低成本迁移） | 「哪些决定必须留到运行时？大状态怎样才搬得动？」——块化 KV Cache 是现成答案 |
 
-**PagedAttention / vLLM 必学**：
-1. **三类内存浪费**：内部碎片（按最大长度预留）、外部碎片、无法共享。
-2. **分页机制**：block table、逻辑块→物理块映射、按需分配、block size 的取舍。
-3. **内存共享**：copy-on-write + 引用计数、prefix caching。
-4. **调度与抢占**：iteration-level 连续批处理；显存不足时 **swap vs recompute** 两种恢复策略的取舍。
-5. **对我们的启示**：**block 化的 KV Cache 是「运行状态低成本迁移」的天然载体**——块粒度迁移比整体迁移便宜得多，这直接连到研究问题④。
+**读到什么程度就够**（对齐 §0「入门 + 形成观点」）：
 
-**先跳过**：block-sparse 的理论证明、附录全部推导、vLLM 各版本的工程细节。
+- **FlashAttention**：能说清「瓶颈是 HBM 访存不是 FLOPs」，以及**融合 + tiling + 重计算**三者如何共同压低访存。online softmax 与 IO 复杂度公式**能看懂即可，不要求手推**。
+- **PagedAttention**：能说清三类内存浪费、block table 的分页思路，以及**为什么这类决策编译器静态做不了**（笔记「与编译器视角的关系」一段是重点）。
+
+**建议时机**（不必单独占一周）：
+
+- FA 的**结论**在进 §4.1 TVM 之前花 20 分钟扫一遍——先知道为什么要 tiling，再学 schedule 原语，顺序才对。
+- PA 放到收束阶段与 §6 一起读，直接当研究问题③④的弹药。
+
+**先跳过**：online softmax 与 IO 复杂度的完整推导、block-sparse 理论证明、附录、vLLM 各版本工程细节、kernel 实现。
 
 ---
 
@@ -602,12 +608,13 @@ Runtime：HAL driver + VM
 | **W1** | 分布式综述：框架 + §12 最小必要集 + 并行/显存/通信要点；SPMD 三种标注**对照着扫**（不必三篇精读） | 能讲「70B→128 卡」切法；16Φ；Mesh/GSPMD/SBP 各用什么词；动手验收 1～2 条 |
 | **W2** | MLIR：学习文档重点章 + [`mlir-toy-dialect`](mlir-toy-dialect/) `all.sh` | Conversion / Interface 能对照产物讲；**不要求** Toy→llvm 打通 |
 | **W3** | IREE + HAL：[`iree-learning-guide`](docs/iree-learning-guide.md) 核心章 + `--compile-to` dump + 单后端跑通 | 画出 `linalg→flow→stream→hal`；口述 HAL 对象与 semaphore |
-| **W4** | TVM：[`tvm-fatbin-lab`](tvm-fatbin-lab/) TVM 轨 + 学习文档对应章 | `out/ANALYSIS.md`：两份 matmul lower + 融合直觉 |
+| **W4** | TVM：[`tvm-fatbin-lab`](tvm-fatbin-lab/) TVM 轨 + 学习文档对应章<br>（开头 20 分钟先扫 FA 的**结论**，建立「为什么要 tiling」的动机） | `out/ANALYSIS.md`：两份 matmul lower + 融合直觉 |
 | **W5** | ONNX / ORT EP / ExecuTorch：[`onnx-delegate-lab`](onnx-delegate-lab/) + 两份学习文档 | `out/ANALYSIS.md`：EP 边界 + Partitioner tag；对照 IREE「何时划分」 |
-| **W6** | FlashAttention + PagedAttention（笔记最小必要集）；P2 回填 Halide/Glow/fatbin（各约半天内） | 能用 FA/PA 校正负载直觉；fatbin≈ExecutableVariant 能说清 |
-| **W7～W8（缓冲 / 收束）** | 回看 §6 六个研究问题；用 foundations 同一套词写**观点笔记** | 每个问题：为何有价值、已有工作边界、**我的判断**（不要求实现方案） |
+| **W6** | P2 回填：Halide / Glow / CUDA fatbin（各约半天内） | fatbin≈ExecutableVariant 能说清；算法/调度分离能复述 |
+| **W7～W8（缓冲 / 收束）** | 回看 §6 六个研究问题；用 foundations 同一套词写**观点笔记**<br>（此时读 PA 笔记，直接当问题③④的弹药） | 每个问题：为何有价值、已有工作边界、**我的判断**（不要求实现方案） |
 
-> 若每周只能投入约 10 小时，把上表按 **8 周**拉长即可（W4～W6 各多留几天）；若状态好，W6 与收束可压进第 6～7 周。
+> **自选补充（§4.3）不单独占周**：FA 约 0.5 天（并入 W4 开头），PA 约 0.5～1 天（并入收束）。跳过原文、只用 foundations §4.3/§9.4/§9.5 的结论也能走完主线。  
+> 若每周只能投入约 10 小时，把上表按 **8 周**拉长即可；若状态好，W6 与收束可压进第 6～7 周。
 
 ### 7.3 应急最短路径（约 3～4 周）
 
@@ -640,7 +647,7 @@ Runtime：HAL driver + VM
 - [ ] 解释「为什么 MLIR 要分这么多层 dialect，一步降到 LLVM IR 不行吗」（最好能结合 `mlir-toy-dialect` 里 `x*4` 在 toy/low 两层的不同命运）。
 - [ ] 画出 IREE 的 `linalg → flow → stream → hal` 四层，说清每层固化了什么决定。
 - [ ] 说清「一个算子在 ORT 里从模型文件到某个 EP 上执行，中间经过了哪些决策点」。
-- [ ] 用 FlashAttention 为例，说明「融合 + tiling + 重计算」为何是关键杠杆（能复述论证即可）。
+- [ ] 说明「融合 + tiling + 重计算」为何是关键杠杆（用 foundations §4.3 的 Roofline 说即可；读过 FA 的话用它当实证）。
 - [ ] 对六个研究问题**逐个**能说出：问题在问什么、为何值得想、已有工作大致边界、**自己的观点**（用 foundations 同一套词；不要求实现方案）。
 - [ ] **动手硬门槛（入门）**：`llvm-hello-compile` / `mlir-toy-dialect` / `tvm-fatbin-lab`（TVM 轨）/ `onnx-delegate-lab`（ONNX 轨）各自产物能讲；缺 CUDA/ExecuTorch/多卡时允许对应项降级。
 

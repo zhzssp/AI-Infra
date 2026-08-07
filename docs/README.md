@@ -125,19 +125,21 @@ AI-Infra/
 | **做（建议顺序）** | ① `tvm-fatbin-lab` TVM 轨；② `onnx-delegate-lab`。时间紧 / 冲研究问题：对调。CUDA fatbin 轨留到阶段 6 |
 | **验** | 四类融合直觉；对着 lower 讲主要 schedule 原语；指出 EP/Partitioner 边界；对照 ET / ORT / IREE 三种划分答案 |
 
-### 阶段 5｜LLM 真实负载（P1，约 0.5 周，可穿插；对应周次表 W6 前半）
+### 阶段 5（自选补充）｜负载侧论据，不占独立周次
+
+> 这两篇是**额外补充**的论文，不在主链上，也没有配套动手项目；结论已蒸馏进 [foundations](./ai-compiler-foundations.md) §4.3 / §9.4 / §9.5，**跳过原文不断链**。  
+> 要读就按下面两个身份穿插进已有阶段，不要当成第五条技术栈。
+
+| 篇目 | 穿插到哪 | 只需回答 | 用时 |
+|------|----------|----------|------|
+| [08 FlashAttention](./paper-notes/08-flash-attention.md) | **阶段 4 开头**（学 schedule 之前） | 为什么值得做融合 / tiling / 重计算：瓶颈是 HBM 访存而非 FLOPs | 约 0.5 天（公式看懂即可，不手推） |
+| [09 PagedAttention](./paper-notes/09-paged-attention-vllm.md) | **阶段 6 收束**（与研究问题一起） | 哪些决策编译器静态做不了；块化状态为何才搬得动（问题③④） | 约 0.5～1 天 |
+
+### 阶段 6｜回填与收束（P2 + 研究问题观点；约 1～2 周；对应周次表 W6～W8）
 
 | | 内容 |
 |--|------|
-| **读** | [`paper-notes/08-flash-attention.md`](./paper-notes/08-flash-attention.md) + [`09-paged-attention-vllm.md`](./paper-notes/09-paged-attention-vllm.md)（最小必要集） |
-| **做** | 手推或跟推 online softmax；对照 vLLM 关键参数与论文机制 |
-| **验** | 能复述 FA「融合+tiling+重计算」论证；用 PA 说明块化状态与研究问题④的关联 |
-
-### 阶段 6｜回填与收束（P2 + 研究问题观点；约 1～2 周；对应周次表 W6 后半～W8）
-
-| | 内容 |
-|--|------|
-| **读** | Halide / Glow 短读；[`cuda-fatbin-learning-guide.md`](./cuda-fatbin-learning-guide.md)；需要时回 llvm 学习文档 CodeGen |
+| **读** | Halide / Glow 短读；[`cuda-fatbin-learning-guide.md`](./cuda-fatbin-learning-guide.md)；需要时回 llvm 学习文档 CodeGen；写观点前读 [09 PagedAttention](./paper-notes/09-paged-attention-vllm.md)（自选，问题③④的样本） |
 | **做** | `tvm-fatbin-lab` CUDA 轨（有环境时）；对照 IREE [`ExecutableVariant`](./iree-learning-guide.md#47-设备代码executable--variant--export) |
 | **验** | 对根 README §6 **六个**研究问题写出观点笔记：价值 / 已有边界 / **自己的判断**（不要求实现方案） |
 
@@ -168,7 +170,8 @@ AI-Infra/
 |--------|------|------|
 | P0 | [01 分布式训练综述](./paper-notes/01-efficient-training-distributed-infra.md) | 实测 DDP/FSDP |
 | P0 | [03 MLIR](./paper-notes/03-mlir.md) | [`mlir-learning-guide.md`](./mlir-learning-guide.md) + [`mlir-toy-dialect/`](../mlir-toy-dialect/) |
-| P1 | [05 TVM](./paper-notes/05-tvm.md) · [08 FlashAttention](./paper-notes/08-flash-attention.md) · [09 PagedAttention](./paper-notes/09-paged-attention-vllm.md) | TVM→[`tvm-learning-guide.md`](./tvm-learning-guide.md)；委托→ONNX/ExecuTorch 学习文档 |
+| P1 | [05 TVM](./paper-notes/05-tvm.md) | TVM→[`tvm-learning-guide.md`](./tvm-learning-guide.md)；委托→ONNX/ExecuTorch 学习文档 |
+| P1（自选补充） | [08 FlashAttention](./paper-notes/08-flash-attention.md) · [09 PagedAttention](./paper-notes/09-paged-attention-vllm.md) | 论据而非技术栈：FA→阶段 4 动机；PA→研究问题③④。结论见 foundations §4.3/§9.4/§9.5 |
 | P2 | [02 LLVM](./paper-notes/02-llvm.md) · [04 Halide](./paper-notes/04-halide.md) · [06 Glow](./paper-notes/06-glow.md) · [07 TinyIREE 简记](./paper-notes/07-tinyiree.md) | LLVM→学习文档；TinyIREE→IREE 学习文档 |
 
 ### 3.3 动手项目速查
@@ -240,7 +243,7 @@ tvm-fatbin-lab（融合/schedule）     ≈     onnx-delegate-lab（EP/Partition
 | 并行怎么切 / 显存为什么爆 | foundations §9 → 01 综述 §4/§6/§7 | DDP/FSDP 实测 |
 | 子图划分 / 委托 | foundations §3 → [onnx](./onnx-learning-guide.md) + [executorch](./executorch-learning-guide.md)；TVM 融合见 [tvm §2.2](./tvm-learning-guide.md) | [`onnx-delegate-lab`](../onnx-delegate-lab/) |
 | schedule / AutoTVM | foundations §4 → [tvm-learning-guide](./tvm-learning-guide.md) §3–5；动机见 [05-tvm](./paper-notes/05-tvm.md) | matmul 两 schedule + 一次调优 |
-| 大模型实际长什么样 | 08 + 09（对照 foundations 里 tiling/融合） | 手推 softmax；看 vLLM block |
+| 为什么要融合/tiling；大状态为何搬不动 | foundations §4.3 / §9.4 / §9.5；要实证再翻 08 / 09（自选） | 对着 Roofline 说瓶颈；用块化解释问题③④ |
 
 ---
 
@@ -253,7 +256,7 @@ tvm-fatbin-lab（融合/schedule）     ≈     onnx-delegate-lab（EP/Partition
 - [ ] 为什么不能一步降到 LLVM IR（结合 toy dialect 多层分工的例子）  
 - [ ] IREE `linalg → flow → stream → hal` 每层固化什么  
 - [ ] 一个算子从 ONNX 到某个 EP：中间有哪些决策点  
-- [ ] FlashAttention 为何证明「融合 + tiling + 重计算」是核心杠杆  
+- [ ] 「融合 + tiling + 重计算」为何是核心杠杆（Roofline 口径即可；FA 是可选实证）  
 - [ ] 六个研究问题均能说出价值、已有边界与自己的观点（不要求实现方案）  
 
 四条动手硬门槛（入门线；没做等于没学）：

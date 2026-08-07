@@ -1,7 +1,9 @@
 # FlashAttention：用 IO 感知的 tiling + 重计算，把 attention 从"算得快但搬得慢"变成真正的 wall-clock 加速
 
-> **导航**：[笔记索引](README.md) · [自学枢纽](../README.md)（阶段 5） · [横切概念](../ai-compiler-foundations.md) §4.3（Roofline）、§9.4（IO 感知方法论）  
-> **配套阅读**：本篇是「融合 + tiling + 重计算」最有说服力的实例，用来校准编译器优化的杠杆在哪；推理侧的对应物见 [`09-paged-attention-vllm.md`](09-paged-attention-vllm.md)。  
+> **导航**：[笔记索引](README.md) · [自学枢纽](../README.md)（阶段 5，自选补充；建议穿插进阶段 4 开头） · [横切概念](../ai-compiler-foundations.md) §4.3（Roofline）、§9.4（IO 感知方法论）  
+> **在学习路线中的定位（自选补充）**：本篇**不在主链上**，也没有配套动手项目。它以一个身份融入——**「融合 + tiling + 重计算」的实证**，用来在学 TVM/schedule 之前建立「为什么值得做这些变换」的动机。  
+> 结论已蒸馏进 [`../ai-compiler-foundations.md`](../ai-compiler-foundations.md) §4.3 / §9.4，**跳过本篇不断链**。要读就抓「HBM 访存是瓶颈」这条主线，**online softmax 与 IO 复杂度公式看懂即可，不必手推**。  
+> **配套阅读**：推理侧的对应物见 [`09-paged-attention-vllm.md`](09-paged-attention-vllm.md)。  
 > **本篇章号提示**：多一节「后续演进」，因此**最小必要集在 §8**。
 
 > 论文元信息：
