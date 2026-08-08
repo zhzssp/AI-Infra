@@ -561,6 +561,8 @@ LLVM 的 AA 是**链式（chaining）**的：多个实现串起来，一个说�
 
 用 `opt -passes='default<O2>' -debug-pass-manager` 可以打出完整的真实顺序。
 
+> **速记**：[notes/llvm-pass-scheduling.md](./notes/llvm-pass-scheduling.md) —— LLVM 的调度是预先构造的 pipeline；analysis 按需计算并缓存，transform 通过 `PreservedAnalyses` 声明失效，二者在同一条流水线里交错执行。
+
 ### 4.5 向量化：两个正交的向量化器
 
 | | Loop Vectorizer | SLP Vectorizer |
@@ -584,6 +586,8 @@ TTI 是中端唯一被允许知道的"目标信息"接口，回答这类问题�
 - 展开这个循环划算吗？内联这个函数划算吗？
 
 **为什么这对 AI 编译器重要**：如果你接一个新硬件后端，**TTI 是"让 LLVM 中端替你做正确决策"的唯一入口**。TTI 填得潦草，向量化器就会做出糟糕的选择——不是它不聪明，是你没告诉它代价。这个道理和 MLIR 里给 op 加 cost interface（比如你在 `mlir-toy-dialect` 里写的 `ToyCostOpInterface`）是完全同构的。
+
+> **速记**：[notes/llvm-tti.md](./notes/llvm-tti.md) —— TTI 是中端询问目标机器能力与代价的接口集合；它本质上不是优化，而是给向量化、展开、内联等 pass 提供决策依据。
 
 ---
 
@@ -870,6 +874,8 @@ def Toy_MulOp : Toy_Op<"mul", [Pure, ToyCostOpInterface]> { ... }
 和上面 X86 的 `def ADD32rr` 是**同一套语言、同一个解析器**，只是交给了不同的 backend（`mlir-tblgen -gen-op-defs` vs `llvm-tblgen -gen-instr-info`）。
 
 理解这一点的价值在于：**TableGen 在 LLVM 里解决的问题（目标描述的组合爆炸）和它在 MLIR 里解决的问题（op 定义的样板代码爆炸）是同一个问题。** 学会读 X86 的 `.td` 会直接提升你读/写 MLIR ODS 的能力，反之亦然。
+
+> **速记**：[notes/tablegen-llvm-mlir.md](./notes/tablegen-llvm-mlir.md) —— TableGen 是声明式描述 + 代码生成基础设施；LLVM 用它描述目标机器，MLIR 用同一套语言的 ODS backend 描述 dialect / op。
 
 ---
 
