@@ -170,6 +170,8 @@ merge:
 
 > **和 MLIR 的对比**：MLIR 用**基本块参数（block argument）**代替 `phi`——`^bb2(%r: i32):`，语义等价但避免了"phi 必须在块首""前驱顺序必须匹配"这些结构约束。这是 MLIR 相对 LLVM 的一个有意改进。
 
+> **速记**：[notes/mlir-block-arg-ssa.md](./notes/mlir-block-arg-ssa.md) —— 二者表达到达定值的汇合；不是分支、≠ 活跃变量；SSA 值如何对应源变量。
+
 ### 2.4 指令的九大类
 
 LangRef 的 Instruction Reference 就是按这九类组织的，记住分类比记住每条指令更有用：
@@ -226,7 +228,7 @@ LangRef 的 Instruction Reference 就是按这九类组织的，记住分类比�
 
 其中 **`contract`** 对 AI 编译器很重要：它是允许把 `a*b+c` 融合成 FMA 的开关。
 
-> **速记**：[notes/llvm-fma-contract.md](./notes/llvm-fma-contract.md) —— FMA 一次舍入；`contract` 是软件许可；真融合靠硬件；与图级算子融合同思路、不同层级。
+> **速记**：[notes/llvm-fma-contract.md](./notes/llvm-fma-contract.md) —— FMA 一次舍入；`contract` 是软件许可；高效真 FMA 通常靠硬件（也可软实现）；与图级算子融合同思路、不同层级。
 
 **参数/返回值属性**：`noalias`（等价于 C 的 `restrict`）、`nocapture`、`readonly` / `writeonly`、`nonnull`、`dereferenceable(N)`、`align N`、`noundef`、`byval` / `sret`（ABI 相关）。
 
@@ -240,7 +242,7 @@ LangRef 的 Instruction Reference 就是按这九类组织的，记住分类比�
 
 **poison** 是"错误操作的结果"。设计动机是**便于投机执行**：很多指令拿到非法操作数时不立即触发 UB，而是返回 poison，让优化器可以放心地把它提到分支外面。
 
-> **速记**：[notes/llvm-poison-ub.md](./notes/llvm-poison-ub.md) —— poison≠空/≠异常；UB 是误用后引爆；`select` 只认选中臂；「坏路径不用」是优化器对承诺的假设。
+> **速记**：[notes/llvm-poison-ub.md](./notes/llvm-poison-ub.md) —— poison≠空/≠异常；违反标志先 poison、用到禁位才 UB；`select` 只认选中臂；「坏路径不用」是优化器对承诺的假设。
 
 三条规则：
 

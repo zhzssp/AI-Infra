@@ -42,3 +42,7 @@ merge:
 ## 什么时候会看到
 
 跑 `mem2reg` 或 `-O2` 后，栈上的 `alloca` / `load` / `store` 常被提升成寄存器形式的 SSA，**汇合点就会出现 `phi`**（「`alloca` 消失、`phi` 出现」）。
+
+## 延伸
+
+phi 与 MLIR block argument、到达定值、SSA 值和源变量的对应：见 [mlir-block-arg-ssa.md](./mlir-block-arg-ssa.md)。

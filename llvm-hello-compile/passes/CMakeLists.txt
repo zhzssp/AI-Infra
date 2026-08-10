@@ -28,8 +28,11 @@ endif()
 # MODULE 库 = 运行时用 dlopen 加载的插件（.so）。
 # 插件里用到的 LLVM 符号在 opt 加载时解析，故无需在此链接 LLVM 静态库。
 add_library(MyPasses MODULE
-  CountIR.cpp
-  InjectLogging.cpp
+  CountIR.cpp          # Module 级 · 分析型
+  CfgInfo.cpp          # Function 级 · 分析型（消费 DominatorTree / LoopInfo）
+  TTIInfo.cpp          # Function 级 · 分析型（消费 TargetTransformInfo）
+  StrengthReduce.cpp   # Function 级 · 变换型（preserveSet<CFGAnalyses>）
+  InjectLogging.cpp    # Module 级 · 变换型
   PluginRegistration.cpp
 )
 

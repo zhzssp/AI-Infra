@@ -126,6 +126,8 @@ Operation（唯一的语义单元）
 4. **Value 只有两种定义点**：Op 的 Result，或 Block 的 Argument。
 5. **Type / Attribute 本身也可扩展**——自定义类型（如 `!toy.num`）是可扩展性的第二根支柱。
 
+> **速记**：[notes/mlir-op-region-block.md](./notes/mlir-op-region-block.md) —— 语句→Op、作用域→Region、直线段→Block；顶层多为 `module`；Block≈Region 内基本块；自定义 dialect 只补领域层。
+
 ### 2.2 Value / Type / Attribute
 
 | 概念 | 是什么 | 关键约束 |
@@ -135,6 +137,8 @@ Operation（唯一的语义单元）
 | **Attribute** | 编译期常量（整数、字符串、AffineMap、数组…） | 不可变、可 uniqued；也可作为属性别名复用（`#map = ...`） |
 
 Attribute 与 Type 的分工：Type 描述"运行时值长什么样"，Attribute 描述"编译期已知的静态信息"。例如 `arith.constant {value = 42 : i32}` 里，结果类型是 `i32`，常量本身是 Attribute。
+
+> **速记**：[notes/mlir-type-attr-interface.md](./notes/mlir-type-attr-interface.md) —— Type≠必须内存布局；Attribute 值种类内置、key 由 Op 约定；Interface≠fold，是跨 dialect 能力契约。
 
 ### 2.3 Block arguments 为何替代 phi
 
@@ -161,6 +165,8 @@ cf.br ^bb3(%b : i32)     // 来自 bb2
 - Verifier 更容易检查：每个前驱传给后继的参数个数/类型必须匹配。
 
 读 [`llvm-learning-guide.md`](./llvm-learning-guide.md) §2.3 时，记住这句话：**MLIR 用 block argument 改进了 LLVM 的 phi 表示，语义等价、结构更干净**。
+
+> **速记**：[notes/mlir-block-arg-ssa.md](./notes/mlir-block-arg-ssa.md) —— phi/block-arg 是数据流汇合（到达定值），不是分支；≠ 活跃变量；SSA 值在构造时对应源变量/`alloca`。
 
 ### 2.4 两种 Region 语义：SSA CFG vs Graph
 
@@ -208,6 +214,8 @@ builtin.module                    ← 最外层 Operation + SymbolTable
 - **MLIR 几乎没有"特权内建 op"**——`module`、`func.func` 也是普通 op。
 - 一个 Op 只属于一个 dialect，但**不同 dialect 的 op 可在同一 IR 中混合**。
 - 扩展三支柱：**自定义 Op、自定义 Type、自定义 Attribute**（Interface 是第四根"复用支柱"，见第 4 章）。
+
+> **速记**：[notes/mlir-op-region-block.md](./notes/mlir-op-region-block.md) —— 用排除法看 dialect 范围：标准 dialect 管通用脚手架，自定义只补领域 op/type。
 
 ### 3.2 ODS 定义 Op 的最小字段
 
@@ -271,6 +279,8 @@ Traits 在 `.td` 的方括号里列出，编译期附着到 Op 类上。常见�
 
 Traits 是"是/否"或轻量行为标记；需要**方法契约**时用 Interface（下一章）。
 
+> **速记**：[notes/mlir-trait-vs-interface.md](./notes/mlir-trait-vs-interface.md) —— Trait 可自定义但是标签；Interface 才是打分/重写；候选是遍历窗口而非全体一次处理；正确性靠逐步保义而非看完全局。
+
 ---
 
 ## 第 4 章 Traits vs Interfaces（重点）
@@ -283,6 +293,9 @@ Traits 是"是/否"或轻量行为标记；需要**方法契约**时用 Interfac
 Trait     = 编译期附着的"标签 / 轻量行为"（有没有某性质）
 Interface = 运行时可查询的"能力契约"（能不能做某事、怎么做）
 ```
+
+> **速记**：[notes/mlir-type-attr-interface.md](./notes/mlir-type-attr-interface.md) —— Interface 让 Pass 只认契约不认 op 名；与 `fold`/canonicalize 不是一回事。  
+> **速记**：[notes/mlir-trait-vs-interface.md](./notes/mlir-trait-vs-interface.md) —— 融合例子看 Trait/Interface 能力边界；候选窗口与「逐步保义」如何保证正确。
 
 | | Trait | Interface |
 |--|-------|-----------|
@@ -322,6 +335,8 @@ Pass **不 `#include` 任何具体 dialect 头文件**也能工作——只要 o
 
 常见 **DialectInterface**：`DialectInlinerInterface`（方言级决定"能不能内联进/出"）、dialect 级的常量物化钩子。  
 常见 **OpInterface**：下面 4.4 列出的四个，几乎是 AI 编译每天都会碰到的。
+
+> **速记**：[notes/mlir-inlining.md](./notes/mlir-inlining.md) —— 内联=调用点展开函数体（≠`#include`）；`DialectInlinerInterface` 决定本方言如何参与通用 Inliner。
 
 ### 4.4 四个必知 OpInterface
 

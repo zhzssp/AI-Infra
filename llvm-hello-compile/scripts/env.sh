@@ -48,8 +48,14 @@ LLI="$(find_tool lli || true)"
 LLVM_AS="$(find_tool llvm-as || true)"
 LLVM_DIS="$(find_tool llvm-dis || true)"
 LLVM_MCA="$(find_tool llvm-mca || true)"
+# tour.sh 额外用到的：TableGen（第 6 章）、MC 层（§5.7）、lit 测试
+LLVM_TBLGEN="$(find_tool llvm-tblgen || true)"
+LLVM_MC="$(find_tool llvm-mc || true)"
+LLVM_OBJDUMP="$(find_tool llvm-objdump || true)"
+FILECHECK="$(find_tool FileCheck || true)"
 
 export CLANG OPT LLC LLI LLVM_AS LLVM_DIS LLVM_MCA
+export LLVM_TBLGEN LLVM_MC LLVM_OBJDUMP FILECHECK
 
 echo "[env] 项目根目录 : ${PROJECT_DIR}"
 echo "[env] clang      : ${CLANG}"

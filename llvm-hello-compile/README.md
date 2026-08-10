@@ -1,10 +1,17 @@
 # llvm-hello-compile —— 一个极简的 LLVM 编译全流程学习项目
 
-用一段 30 行的 C 代码 `src/sum.c`，配合一个脚本 `scripts/run.sh`，**一条命令**走完
-LLVM 从「源码」到「可执行文件」的完整编译链路，每一步都落盘中间产物、肉眼可见。
+**两个入口，各跑一条命令即可：**
 
-除了跑内置 Pass（`mem2reg`/`-O2`），本项目还**手写了两个自定义 Pass**（`passes/`），
-用 New PassManager 插件方式挂进同一套管线，让你亲眼看到「优化 = 一串可插拔的 Pass 在 IR 上变换」。
+| 脚本 | 回答什么问题 | 场景源码 |
+|------|-------------|---------|
+| `bash scripts/run.sh` | **链路**：一份源码怎么一步步变成可执行文件 | `src/sum.c` |
+| `bash scripts/tour.sh` | **要点**：[学习指南](../docs/llvm-learning-guide.md) §9.1 那 11 条必学点分别长什么样 | `src/kernel.c` + `src/poison_demo.ll` + `src/mini.td` |
+
+`run.sh` 先跑（建立整体感），`tour.sh` 后跑（把每个概念都亲眼看一遍）。
+两者都会边跑边讲解，并把所有中间产物落盘。
+
+本项目还**手写了 5 个自定义 Pass**（`passes/`），用 New PassManager 插件方式挂进同一套管线，
+覆盖「Module / Function 两个层级」与「四种 `PreservedAnalyses` 写法」。
 
 ## 在自学体系中的位置
 
@@ -52,6 +59,36 @@ IR 是整个体系的枢纽，这也正是 MLIR「多层 IR」思想的源头。
 
 ---
 
+## 一之二、核心要点覆盖表（`tour.sh` 的 17 个站点）
+
+学习指南 [§9.1「必须掌握」](../docs/llvm-learning-guide.md#91-必须掌握) 的 11 条，
+在 `bash scripts/tour.sh` 里都有一个能亲眼看到的站点：
+
+| 站 | 学习指南 | 要点 | 在项目里怎么看 |
+|----|---------|------|--------------|
+| 0 | §2.1 | IR 三态：`.ll` ↔ `.bc` 无损互转 | `llvm-as` / `llvm-dis` 往返 + 体积对比 |
+| 1 | §2.2 | 类型系统：`iN` / `float` / **opaque `ptr`** / `<N x T>` / 结构体 | `kernel.c` 里的 `Tensor` 与向量类型 |
+| 2 | §2.3 | **SSA + 显式 CFG + terminator + `phi`** | `mem2reg` 前后：`alloca` 归零、`phi` 出现 |
+| 3 | §2.5 | **`getelementptr` 与 `inbounds` 承诺** | `relu_sum` 里 `t->data[i]` 展开的多条 GEP |
+| 4 | §2.6 | **属性与标志**：`noalias` / `align` / `dereferenceable`、`contract`→FMA | `restrict` 参数；`-ffp-contract=off` vs `fast` |
+| 5 | §2.7 | **poison / undef / freeze**、`select` 毒性屏障 | 手写 `src/poison_demo.ll` 过一遍 `-O2` |
+| 6 | §2.8 | Metadata：`!tbaa` / `!llvm.loop` | `-O2` IR 里直接 grep |
+| 7 | §2.9 | Intrinsics：`llvm.fmuladd` / `llvm.vector.reduce.*` | `-O2` IR 里直接 grep |
+| 8 | §3 | **New PM 四层嵌套 + 四种 `PreservedAnalyses`** | `-debug-pass-manager` + 5 个自定义 pass |
+| 9 | §4.1–4.2 | 六个 Analysis + **别名分析四种回答** | `aa-eval`；`axpy` vs `axpy_may_alias` |
+| 10 | §4.3–4.4 | 默认 pipeline 骨架 | `opt -print-changed` 只看真正改了 IR 的 pass |
+| 11 | §4.5 | 两个向量化器 + **为什么没向量化** | `-Rpass-missed=loop-vectorize` |
+| 12 | §4.6 | **TTI 是中端唯一的目标信息入口** | 自写 `tti-info` pass：默认 vs AVX2 的宽度/代价 |
+| 13 | §5 | **后端七阶段 + MIR + 寄存器分配链条** | `-stop-after=finalize-isel` vs `virtregrewriter` 两份 `.mir` |
+| 14 | §5.7 | MC 层：指令编码 | `llvm-mc -show-encoding` + `llvm-objdump -d` |
+| 15 | §6 | **TableGen 在 LLVM 与 MLIR 是同一套语言** | `llvm-tblgen --print-records src/mini.td` |
+| 16 | §7 | 与 MLIR 的接缝、三个杠杆 | 命令链说明 + 下一站指路 |
+
+> 场景为什么是 `src/kernel.c`？因为一个「axpy + ReLU 求和」的迷你算子，天然同时含有
+> **循环 / 结构体 / 数组下标 / 浮点乘加 / 三元表达式 / 指针别名**——上表大半要点都能从它一份 IR 里看到。
+
+---
+
 ## 二、目录结构
 
 ```
@@ -59,20 +96,33 @@ llvm-hello-compile/
 ├── README.md            # 本文件
 ├── .gitignore           # 忽略 out/ 和 build/
 ├── src/
-│   └── sum.c            # 唯一的源码：平方和（含小函数+循环+printf）
+│   ├── sum.c            # 【run.sh 的场景】平方和：小函数 + 循环 + printf
+│   ├── kernel.c         # 【tour.sh 的场景】迷你 AI 算子：axpy + ReLU 求和
+│   ├── poison_demo.ll   # 手写 IR：poison / freeze / select 屏障 / 何时变成 UB
+│   └── mini.td          # 30 行 TableGen：class / def / multiclass / let
 ├── passes/              # 【自定义 Pass 源码】编译成插件 MyPasses.so
-│   ├── Passes.h              # 两个 Pass 的类声明
-│   ├── CountIR.cpp           # 分析型 Pass：只统计不改 IR（count-ir）
-│   ├── InjectLogging.cpp     # 变换型 Pass：入口注入 printf（inject-log）
-│   ├── PluginRegistration.cpp# 把管线名注册给 opt（New PassManager 插件入口）
+│   ├── Passes.h              # 5 个 Pass 的类声明（附层级与返回值对照表）
+│   ├── CountIR.cpp           # Module 级 · 分析型（count-ir）
+│   ├── CfgInfo.cpp           # Function 级 · 分析型：消费 DominatorTree / LoopInfo
+│   ├── TTIInfo.cpp           # Function 级 · 分析型：消费 TargetTransformInfo
+│   ├── StrengthReduce.cpp    # Function 级 · 变换型：mul→shl，preserveSet<CFGAnalyses>
+│   ├── InjectLogging.cpp     # Module 级 · 变换型：入口注入 printf（inject-log）
+│   ├── PluginRegistration.cpp# 把管线名注册给 opt（Module + Function 两个回调）
 │   └── CMakeLists.txt        # 编译为可被 opt 加载的 MyPasses.so
+├── tests/               # lit / FileCheck 风格测试（和 LLVM、MLIR 官方写法一致）
+│   ├── strength-reduce.ll
+│   └── cfg-info.ll
 ├── scripts/
-│   ├── env.sh           # 定位 clang/opt/llc/lli...（优先用 conda 的 LLVM 17）
-│   ├── run.sh           # 【主入口】分步走完全流程，边讲解边把输出落盘
-│   ├── build_passes.sh  # 单独构建自定义 Pass 插件（幂等；run.sh 会自动调用）
+│   ├── env.sh           # 定位 clang/opt/llc/lli/llvm-tblgen/llvm-mc/FileCheck ...
+│   ├── run.sh           # 【入口一】编译链路：源码 → AST → IR → 汇编 → 可执行
+│   ├── tour.sh          # 【入口二】核心要点巡礼：17 个站点覆盖学习指南必学点
+│   ├── build_passes.sh  # 构建自定义 Pass 插件（幂等；两个入口都会自动调用）
+│   ├── run_tests.sh     # 跑 tests/ 下的 FileCheck 测试
 │   └── clean.sh         # 清理 out/
 ├── build/               # 运行后自动生成（cmake 构建目录，含 passes/MyPasses.so）
-└── out/                 # 运行后自动生成（中间产物 + steps/分步日志 + ANALYSIS.md 报告）
+└── out/                 # 运行后自动生成
+    ├── (run.sh 产物)     # 01_ast.txt / 02_*.ll / ... / ANALYSIS.md
+    └── tour/            # (tour.sh 产物) IR / MIR / 汇编 / TOUR.md
 ```
 
 ---
@@ -81,8 +131,13 @@ llvm-hello-compile/
 
 ```bash
 cd ~/AI-Infra/llvm-hello-compile
-bash scripts/run.sh          # 走完 ①~⑦ 全流程，边跑边讲解，产物存到 out/
+bash scripts/run.sh          # 入口一：走完 ①~⑦ 全流程，产物存到 out/
+bash scripts/tour.sh         # 入口二：走完 17 个要点站点，产物存到 out/tour/
+bash scripts/run_tests.sh    # （可选）跑自定义 pass 的 FileCheck 测试
 ```
+
+> 建议顺序：`run.sh` → 读 `out/ANALYSIS.md` → `tour.sh` → 读 `out/tour/TOUR.md`。
+> 前者建立「一条链路」的整体感，后者把链路上每个概念单独拎出来看一遍。
 
 > 工具链：脚本会优先激活 conda 环境 `mlir-env`（内含 LLVM 17.0.6 的 `opt/llc/lli/...`），
 > `clang` 用系统同版本 17.0.6，两者匹配可无缝衔接。
@@ -153,13 +208,27 @@ store i32 %add, ptr %acc
 前面 `mem2reg`/`-O2` 都是 LLVM **内置** Pass。这一步演示如何把「**自己写的 Pass**」挂进
 同一套管线：用 New PassManager 的**插件**方式——`opt` 加载 `.so` 后，按名字调用其中的 Pass。
 
-源码在 `passes/`，编译产物是 `build/passes/MyPasses.so`（`run.sh` 会自动调 `build_passes.sh` 构建）。
-两个 Pass 一读一写，正好对比出「分析型」与「变换型」的本质区别：
+源码在 `passes/`，编译产物是 `build/passes/MyPasses.so`（两个入口脚本都会自动调 `build_passes.sh` 构建）。
+5 个 Pass 刻意分布在**两个层级**上，并把 `PreservedAnalyses` 的**四种写法**用全：
 
-| Pass | 管线名 | 类型 | 做什么 | 返回值（对 PassManager 的承诺） |
-|------|--------|------|--------|-------------------------------|
-| `CountIR` | `count-ir` | **分析型** | 遍历每个函数，统计基本块/指令/`call` 数并打印 | `PreservedAnalyses::all()`（我没动 IR，已有分析全部有效） |
-| `InjectLogging` | `inject-log` | **变换型** | 在每个函数入口插一句 `printf("[trace] enter <fn>")` | `PreservedAnalyses::none()`（IR 变了，分析全部作废重算） |
+| Pass | 管线名 | 层级 | 类型 | 做什么 | 返回值（对 PassManager 的承诺） |
+|------|--------|------|------|--------|-------------------------------|
+| `CountIR` | `count-ir` | Module | 分析型 | 统计每个函数的基本块/指令/`call` 数 | `all()`（没动 IR，已有分析全部有效） |
+| `CfgInfo` | `cfg-info` | Function | 分析型 | **向 `FunctionAnalysisManager` 索取** DominatorTree / LoopInfo，打印 terminator 与循环深度 | `all()` |
+| `TTIInfo` | `tti-info` | Function | 分析型 | 向 **TTI** 询问向量寄存器位宽、`fmul` 各宽度的代价 | `all()` |
+| `StrengthReduce` | `strength-reduce` | Function | 变换型 | 把 `mul x, 2^k` 改写成 `shl x, k` | **`preserveSet<CFGAnalyses>()`**（只改指令没动控制流） |
+| `InjectLogging` | `inject-log` | Module | 变换型 | 在每个函数入口插一句 `printf("[trace] enter <fn>")` | `none()`（保守：分析全部作废重算） |
+
+> 第四种写法 `PA.preserve<DominatorTreeAnalysis>()`（只保留某一个分析）在
+> `StrengthReduce.cpp` 的注释里给了对照——它和 `preserveSet` 的区别是「点名保留」vs「按集合保留」。
+
+三个值得注意的教学点，都写在对应源码的文件头：
+
+1. `CfgInfo.cpp`：分析**不是自己算的**，是向 `AnalysisManager` 要的；命中缓存就不重算。
+2. `StrengthReduce.cpp`：改写时**故意不复制原来的 `nsw`/`nuw`**——保守是安全的，
+   随手复制标志正是最常见的 poison/UB 来源（对应 [`notes/llvm-poison-ub.md`](../docs/notes/llvm-poison-ub.md)）。
+3. `TTIInfo.cpp`：同一段 IR，带不带 `target-features=+avx2`，TTI 的回答完全不同——
+   这就是「接新硬件时 TTI 决定优化质量」的最小演示。
 
 手动运行两个 Pass：
 
@@ -200,6 +269,22 @@ sum_of_squares(5) = 55
 
 ---
 
+## 四之二、`tour.sh` 跑完后最该看的 5 组对比
+
+跑完 `bash scripts/tour.sh` 后，产物都在 `out/tour/`。按这个顺序对读，收益最高：
+
+| # | 对比 | 你应该看到什么 |
+|---|------|--------------|
+| 1 | `00_O0.ll` → `03_mem2reg.ll` | `alloca` 归零、`phi` 出现——**进入 SSA 的那一刻** |
+| 2 | `04_contract_off.ll` → `05_contract_fast.ll` | `fmul`+`fadd` 两条 → 一条 `llvm.fmuladd`：**一次舍入的 FMA 是被「许可」出来的** |
+| 3 | `06_poison_O2.ll` | `and poison, 0` 仍折叠成 `poison`；`select` 未选中的臂不传染 |
+| 4 | `01_O2.ll` 里 `@axpy` vs `@axpy_may_alias` | 有无 `restrict`（→`noalias`）导致向量化结果完全不同 |
+| 5 | `21_after_isel.mir` → `22_after_regalloc.mir` | 虚拟寄存器 `%0/%1` 与 `PHI` 如何变成 `$xmm0` 和 copy |
+
+第 5 组是「寄存器分配 + SSA 解构」从抽象变具体的关键一步，值得多花几分钟。
+
+---
+
 ## 五、几个值得动手玩的小实验
 
 1. **改优化级别看差异**：把 `run.sh` 里步骤 ③b 的 `-O2` 换成 `-O1`/`-O3`，对比 IR。
@@ -212,6 +297,12 @@ sum_of_squares(5) = 55
 6. **加一个函数**：在 `sum.c` 里加个 `int cube(int x){return x*x*x;}` 并调用，重跑，观察内联行为。
 7. **改自己的 Pass**：编辑 `passes/InjectLogging.cpp`，把注入的 `printf` 内容改成带参数（如打印函数入参），
    `bash scripts/build_passes.sh` 重建插件后重跑，看 trace 变化。
+7b. **把 `restrict` 删掉重跑 tour**：改 `src/kernel.c` 里 `axpy` 的参数，重跑 `tour.sh`，
+   看第 9/11 站的别名结论与向量化 remark 怎么变——这是"别名信息传不下来就跑不快"的实感。
+7c. **给 `strength-reduce` 加一条规则**：比如把 `sdiv x, 2^k` 变成 `ashr`（注意负数语义！），
+   再在 `tests/strength-reduce.ll` 里补一条 `CHECK`，用 `bash scripts/run_tests.sh` 验证。
+7d. **故意加错标志**：在 `src/poison_demo.ll` 里给某条 `add` 加上 `nsw` 但让它溢出，
+   跑 `opt -passes='default<O2>'`，观察 poison 怎么传播、什么时候才变成 UB。
 8. **写第三个 Pass**：模仿 `CountIR.cpp` 新增一个强度削减 Pass（把 `mul x, 2` 换成 `shl x, 1`），
    在 `PluginRegistration.cpp` 里注册一个新管线名，体会窥孔优化如何落地。
 
