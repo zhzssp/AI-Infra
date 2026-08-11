@@ -14,6 +14,7 @@ AI-Infra/
 ├── docs/                     ← ② 知识库（本目录）
 │   ├── README.md             ←    你正在读：自学体系枢纽
 │   ├── ai-compiler-foundations.md ← 横切前置概念（开局读总图+§2.4，其余随阶段分轮补）
+│   ├── checkpoints/          ←    知识落地检验体系：每个工具一册动手过关标准
 │   ├── paper-notes/          ←    论文精读笔记（为什么、框架、最小必要集）
 │   ├── mlir-learning-guide.md←    MLIR（Conversion / Interface / Linalg）
 │   ├── iree-learning-guide.md←    IREE（核心 + HAL）
@@ -34,6 +35,7 @@ AI-Infra/
 | **总规划** | 决定学什么、不学什么、学到什么程度 | 每周回看优先级表与验收清单 |
 | **知识库** | 把论文/官方文档蒸馏成可读笔记 | 开局先扫 [foundations](./ai-compiler-foundations.md)；再按阶段读专题文档 |
 | **动手项目** | 把概念变成可执行产物 | 先跑通脚本，再对照产物读笔记 |
+| **检验体系** | 判定「真会」还是「看过」 | 按 [`checkpoints/`](./checkpoints/README.md) 逐条改代码、跑命令、比产物 |
 | **原文** | 权威出处 | 笔记说不清时再打开 PDF |
 
 **铁律**：规划里写「先跳过」的，知识库里也标了跳过——不要被长文档带偏。
@@ -47,11 +49,13 @@ AI-Infra/
 ```
    ┌────────────┐     ┌────────────┐     ┌────────────┐
    │  读材料    │ ──▶ │  动手项目   │ ──▶ │  对照验收   │
-   │ 笔记/专题  │     │ 脚本/实验  │     │ README 清单 │
+   │ 笔记/专题  │     │ 脚本/实验  │     │ checkpoints │
    └────────────┘     └────────────┘     └─────┬──────┘
          ▲                                     │
          └──────── 讲不清楚就回查文档 ──────────┘
 ```
+
+> 阶段地图里的「验」是**口述题**（能不能讲清）。口述过了不等于会做——动手判定在 [`checkpoints/`](./checkpoints/README.md)：每个工具一册，把知识点绑到「加一个组件 + 跑出预期差异」上。
 
 四个动手项目在主线上的位置：
 
@@ -183,6 +187,23 @@ AI-Infra/
 | [tvm-fatbin-lab](../tvm-fatbin-lab/) | `bash scripts/run.sh` | `out/ANALYSIS.md` + `out/tvm/*` + `out/cuda/*` | [tvm-learning-guide](./tvm-learning-guide.md) · [cuda-fatbin](./cuda-fatbin-learning-guide.md) |
 | [onnx-delegate-lab](../onnx-delegate-lab/) | `bash scripts/run.sh` | `out/ANALYSIS.md` + `out/onnx/*` + `out/executorch/*` | [onnx](./onnx-learning-guide.md) · [executorch](./executorch-learning-guide.md) |
 
+### 3.4 检验体系（动手过关标准）
+
+总纲与分级定义见 [`checkpoints/README.md`](./checkpoints/README.md)：L0 复现 → L1 改一处 → **L2 加组件（主判据）** → L3 打通。每条都有可执行的验收命令与机器可判定的通过标准，并标注了资源需求（本地 / 需 GPU / 需集群）。
+
+| 分册 | 主判据（L2 举例） | 最低资源 |
+|------|------------------|---------|
+| [01 LLVM](./checkpoints/01-llvm.md) | 写一个新 Pass 并注册到正确 PM 层级，补 FileCheck 测试 | 本地+工具链 |
+| [02 MLIR](./checkpoints/02-mlir.md) | 新增 `toy.sub`：ODS → fold → 两版 lowering → lit 测试 | 本地+工具链 |
+| [03 IREE](./checkpoints/03-iree.md) | 逐相位 dump + 改模型观察 dispatch 划分变化 | 本地+工具链 |
+| [04 TVM](./checkpoints/04-tvm.md) | 新增算子并写多套 schedule，给出量化对比 | 本地+工具链 |
+| [05 ONNX + ORT](./checkpoints/05-onnx-ort.md) | 手写图优化 pass + 观察 EP 分区边界变化 | 本地+工具链 |
+| [06 ExecuTorch](./checkpoints/06-executorch.md) | 写自定义 Partitioner 并对比边界账 | 本地+工具链 |
+| [07 CUDA fatbin](./checkpoints/07-cuda-fatbin.md) | 构造指定架构组合的 fatbin 并用 dump 验证 | 本地+工具链 |
+| [08 分布式训练](./checkpoints/08-distributed.md) | DDP vs FSDP 显存实测，印证 16Φ 账 | **多卡GPU（需申请）** |
+
+**绝大多数条目在个人开发机上就能做完**；需要申请机器的部分集中在 08 分布式与各册的 L3 性能项，申请话术见 [checkpoints §6.2](./checkpoints/README.md#62-申请机器时可以直接发的话术)。
+
 ---
 
 ## 4. 概念穿线（为什么这些材料要放在一起）
@@ -266,6 +287,8 @@ tvm-fatbin-lab（融合/schedule）     ≈     onnx-delegate-lab（EP/Partition
 - [ ] `tvm-fatbin-lab` 跑通（至少 TVM 轨），能讲解两份 matmul lower；有 CUDA 时再讲 fatbin dump  
 - [ ] `onnx-delegate-lab` 跑通（至少 ONNX 轨），能讲解 EP 分区边界与 Partitioner tag 策略对比  
 
+**以上四条只是 L0（跑通 + 能讲）**。要判定「真的会做」，继续走 [`checkpoints/`](./checkpoints/README.md)：每册至少完成两条 L2（自己加一个组件并跑出预期差异）。
+
 ---
 
 ## 7. 维护约定
@@ -274,5 +297,6 @@ tvm-fatbin-lab（融合/schedule）     ≈     onnx-delegate-lab（EP/Partition
   判据很简单：**如果读完还得靠额外笔记才懂，这一节就没写完**。工具输出若非逐字复制，必须标注「形态示意（以本地版本为准）」。
 - **新论文笔记** → 放进 `paper-notes/`，按现有七节骨架写，并更新 [`paper-notes/README.md`](./paper-notes/README.md) 与根 README §9。  
 - **新专题文档**（官方文档蒸馏）→ 放在 `docs/` 根下，在本页 §3.1 与根 README「专题学习文档」表各加一行；若引入新的横切概念，同步补 [`ai-compiler-foundations.md`](./ai-compiler-foundations.md) 对应章节与对照表。  
+- **新增检验条目** → 放进 [`checkpoints/`](./checkpoints/README.md) 对应分册，必须凑齐六栏：检验什么 / 前置 / 资源 / 任务 / **先预测再动手** / 可执行的验收命令 + 机器可判定的通过标准 + 常见失败映射。缺「通过标准」的条目不收——那样又退回成口述题。  
 - **动手项目升级**（例如 toy 打通到 linalg）→ 改项目自己的 README，并回写根 README 对应阶段的「动手验收」与本页阶段地图。  
 - **优先级变化** → 只改根 README §0 总表，本页阶段顺序跟着总表走。

@@ -657,6 +657,8 @@ Runtime：HAL driver + VM
 - [ ] 对六个研究问题**逐个**能说出：问题在问什么、为何值得想、已有工作大致边界、**自己的观点**（用 foundations 同一套词；不要求实现方案）。
 - [ ] **动手硬门槛（入门）**：`llvm-hello-compile` / `mlir-toy-dialect` / `tvm-fatbin-lab`（TVM 轨）/ `onnx-delegate-lab`（ONNX 轨）各自产物能讲；缺 CUDA/ExecuTorch/多卡时允许对应项降级。
 
+> 上面全是**口述题**。要判定「会做」而不只是「会讲」，走 [`docs/checkpoints/`](docs/checkpoints/README.md)：每个工具一册，把知识点绑到「在项目里加一个组件 + 跑出预期差异」上，每册的入门线是至少完成两条 L2。需要申请超算/GPU 的条目已在各册标注并汇总。
+
 ### 8.3 保持跟踪
 
 该领域发展极快（尤其 LLM 训练与推理系统）。建议持续关注 **MLSys / OSDI / SOSP / ASPLOS / NSDI / ISCA** 的相关论文，以及 MLIR、IREE、vLLM 三个项目的 upstream 动态。
@@ -686,6 +688,7 @@ Runtime：HAL driver + VM
 | 文档 | 来源 | 优先级 | 一句话定位 |
 |------|------|--------|-----------|
 | **[自学体系枢纽](docs/README.md)** | 本仓库编排 | — | **日常导航**：每阶段读什么 / 做什么 / 验什么；卡住时的索引表 |
+| **[知识落地检验体系](docs/checkpoints/README.md)** | 本仓库编排 | — | **动手判定**：每个工具一册，L0 复现 → L1 改一处 → **L2 加组件** → L3 打通；含验收命令、通过标准与资源（含超算）需求标注 |
 | **[AI 编译器前置核心概念](docs/ai-compiler-foundations.md)** | 横切编排（粘合各专题） | **开局读 §1+§2.4；其余按 W0～W8 分轮补** | 五层栈总图；**§2.4 与周次表同步的概念路线（26 条概念按轮分批）**；融合/委托/调度/layout/渐进 lowering/HAL 抽象机/分片进 IR 等公共词汇；**四条工业栈选型对照（§3.4）** |
 | [IREE 学习文档：核心概念 + HAL 详解](docs/iree-learning-guide.md) | IREE 官方文档 + 主干源码 | **P0** | 执行模型、dialect 流水线、HAL 全对象模型、timeline semaphore、executable variant、集合通信 |
 | [MLIR 学习文档：Conversion / Interface / Linalg](docs/mlir-learning-guide.md) | MLIR 官方文档主干 | **P0** | IR 结构、Traits/Interfaces、**Dialect Conversion**、内置 dialect 地图、**Linalg + One-Shot Bufferize** |
