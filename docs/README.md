@@ -191,18 +191,18 @@ AI-Infra/
 
 总纲与分级定义见 [`checkpoints/README.md`](./checkpoints/README.md)：L0 复现 → L1 改一处 → **L2 加组件（主判据）** → L3 打通。每条都有可执行的验收命令与机器可判定的通过标准，并标注了资源需求（本地 / 需 GPU / 需集群）。
 
-| 分册 | 主判据（L2 举例） | 最低资源 |
-|------|------------------|---------|
-| [01 LLVM](./checkpoints/01-llvm.md) | 写一个新 Pass 并注册到正确 PM 层级，补 FileCheck 测试 | 本地+工具链 |
-| [02 MLIR](./checkpoints/02-mlir.md) | 新增 `toy.sub`：ODS → fold → 两版 lowering → lit 测试 | 本地+工具链 |
-| [03 IREE](./checkpoints/03-iree.md) | 逐相位 dump + 改模型观察 dispatch 划分变化 | 本地+工具链 |
-| [04 TVM](./checkpoints/04-tvm.md) | 新增算子并写多套 schedule，给出量化对比 | 本地+工具链 |
-| [05 ONNX + ORT](./checkpoints/05-onnx-ort.md) | 手写图优化 pass + 观察 EP 分区边界变化 | 本地+工具链 |
-| [06 ExecuTorch](./checkpoints/06-executorch.md) | 写自定义 Partitioner 并对比边界账 | 本地+工具链 |
-| [07 CUDA fatbin](./checkpoints/07-cuda-fatbin.md) | 构造指定架构组合的 fatbin 并用 dump 验证 | 本地+工具链 |
-| [08 分布式训练](./checkpoints/08-distributed.md) | DDP vs FSDP 显存实测，印证 16Φ 账 | **多卡GPU（需申请）** |
+| 分册 | 条目数 | 主判据（L2 举例） | 资源 |
+|------|-------|------------------|------|
+| [01 LLVM](./checkpoints/01-llvm.md) | 12 | 写一个新的 Function 分析 Pass 并注册到正确 PM 层级，补 FileCheck 测试 | 全部本地 |
+| [02 MLIR](./checkpoints/02-mlir.md) | 12 | 新增 `toy.sub`：ODS → fold → 两种 pattern 各写一版 lowering → lit 测试 | 全部本地 |
+| [03 IREE](./checkpoints/03-iree.md) | 11 | 双后端编译，验证一个 vmfb 里多个 executable variant | 1 条需 GPU |
+| [04 TVM](./checkpoints/04-tvm.md) | 11 | 新增 TE 算子 + 两套 schedule + AutoTVM template | 1 条可选 GPU |
+| [05 ONNX + ORT](./checkpoints/05-onnx-ort.md) | 10 | 手写一个纯 Python 图优化 pass（模式匹配 + 重写） | 1 条可选 GPU |
+| [06 ExecuTorch](./checkpoints/06-executorch.md) | 9 | 写一个新 Partitioner（按段长阈值划分）并对比边界账 | **全部本地** |
+| [07 CUDA fatbin](./checkpoints/07-cuda-fatbin.md) | 8 | 加第二个 kernel，验证 fatbin 的多镜像结构 | 2 条需 GPU |
+| [08 分布式训练](./checkpoints/08-distributed.md) | 13 | DDP vs FSDP 显存实测，印证 16Φ 账 | **7 条需多卡（需申请）** |
 
-**绝大多数条目在个人开发机上就能做完**；需要申请机器的部分集中在 08 分布式与各册的 L3 性能项，申请话术见 [checkpoints §6.2](./checkpoints/README.md#62-申请机器时可以直接发的话术)。
+**共 86 条，其中 73 条在个人开发机上就能做完。** 需要卡的 13 条集中在 08 分布式与各册的 L3 性能项，且多数配了降级方案。申请机器的明细表见 [`08-distributed.md` §5](./checkpoints/08-distributed.md)，话术模板见 [checkpoints §6.2](./checkpoints/README.md#62-申请机器时可以直接发的话术)。
 
 ---
 

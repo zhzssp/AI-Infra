@@ -50,14 +50,18 @@ L3 可按兴趣与资源条件选做。
 
 ### 需要向老师申请的部分（汇总）
 
-| 需求 | 出现在哪些检验 | 建议申请规格 | 用途一句话 |
-|------|---------------|-------------|-----------|
-| 单卡 GPU | [IREE](./03-iree.md) L3、[TVM](./04-tvm.md) L3、[CUDA fatbin](./07-cuda-fatbin.md) L2/L3、[ONNX](./05-onnx-ort.md) L3 | 1×NVIDIA GPU（任意 Ampere 及以上更好），CUDA 12.x | 验证「编译产物真能在目标硬件上跑对、跑快」 |
-| 多卡 GPU | [分布式](./08-distributed.md) L2 | 同机 2～4 卡 + NVLink/PCIe 均可 | DDP vs FSDP 显存与吞吐实测 |
-| 多机多卡 | [分布式](./08-distributed.md) L3 | 2 节点 × 2 卡起，带 IB/RoCE 更好 | 跨机通信开销、并行策略组合 |
-| 大内存 CPU 节点 | [TVM](./04-tvm.md) L3 调优 | ≥16 核，用于 AutoTVM/MetaSchedule 搜索 | 搜索时间从「一晚上」压到「一杯咖啡」 |
+**全部 86 条检验里，只有 13 条涉及 GPU，其余 73 条在个人开发机上就能做完。** 编译期的东西（Pass、dialect、图划分、fatbin 打包）全部不需要卡；需要卡的集中在「性能与真实硬件行为」这一类，而且多数还配了降级方案。
 
-> 申请话术模板见本文末尾 §6。
+| 需求 | 具体是哪几条 | 建议申请规格 | 用途一句话 |
+|------|-------------|-------------|-----------|
+| 单卡 GPU | [L3-IREE-10](./03-iree.md)、[L3-TVM-11](./04-tvm.md)（可选）、[L3-ONNX-10](./05-onnx-ort.md)（可选）、[L2-FATBIN-06 的运行验收 + L3-FATBIN-08](./07-cuda-fatbin.md)、[L1-DIST-05](./08-distributed.md) | 1×NVIDIA GPU（Ampere 及以上更好），CUDA 12.x，合计约 4～6 小时机时 | 验证「编译产物真能在目标硬件上跑对、跑快」 |
+| 多卡 GPU | [L2-DIST-06 ～ L2-DIST-10、L3-DIST-11](./08-distributed.md) | 同机 2～4 卡（单卡显存 ≥16 GB 即可），NVLink/PCIe 均可 | DDP vs FSDP 显存与吞吐实测，印证 16Φ 账 |
+| 多机多卡 | [L3-DIST-12](./08-distributed.md) | 2 节点 × 2 卡起，IB/RoCE 优先 | 跨机通信开销对并行策略选择的影响 |
+
+**建议合并成两次申请**：第一批同机 2 卡半天（覆盖上面前两行的绝大部分），第二批 2 节点 × 2 卡半天（只为跨机那条）。  
+[`08-distributed.md` §5](./08-distributed.md) 有一张**可直接贴进邮件的申请明细表**（卡数 / 互联 / 环境 / 机时 / 对应条目 / 不做的后果），配合本文 §6.2 的话术使用。
+
+> **注意**：CUDA fatbin 那一册**主体不需要 GPU**——`nvcc` + `cuobjdump` 属于 `本地+工具链`，只编译不执行。TVM 全册与 ExecuTorch 全册也都不需要卡（ExecuTorch 的 L3 要的是 C++ runtime 构建环境，不是显卡）。
 
 ---
 
@@ -90,16 +94,18 @@ L3 可按兴趣与资源条件选做。
 
 ## 5. 检验文档索引
 
-| 文档 | 对应动手项目 | 主判据（L2 举例） | 最低资源 |
-|------|-------------|------------------|---------|
-| [01 LLVM](./01-llvm.md) | [`llvm-hello-compile/`](../../llvm-hello-compile/) | 写一个新 Pass 并注册到正确的 PM 层级，补 FileCheck 测试 | 本地+工具链 |
-| [02 MLIR](./02-mlir.md) | [`mlir-toy-dialect/`](../../mlir-toy-dialect/) | 新增一个 op（.td→fold→lowering→lit 测试）全链路 | 本地+工具链 |
-| [03 IREE](./03-iree.md) | `iree-compile` / `iree-run-module` | 加一个编译相位观察点并解释 IR 差异；跑通端到端 | 本地+工具链（L3 需 GPU） |
-| [04 TVM](./04-tvm.md) | [`tvm-fatbin-lab/`](../../tvm-fatbin-lab/) TVM 轨 | 新增一个 schedule 变体 / 融合场景并给出量化对比 | 本地+工具链 |
-| [05 ONNX + ORT](./05-onnx-ort.md) | [`onnx-delegate-lab/`](../../onnx-delegate-lab/) ONNX 轨 | 手写改图 + 观察 EP 分区边界变化 | 本地+工具链 |
-| [06 ExecuTorch](./06-executorch.md) | [`onnx-delegate-lab/`](../../onnx-delegate-lab/) ET 轨 | 写一个自定义 Partitioner 并对比边界账 | 本地+工具链 |
-| [07 CUDA fatbin](./07-cuda-fatbin.md) | [`tvm-fatbin-lab/`](../../tvm-fatbin-lab/) CUDA 轨 | 构造指定架构组合的 fatbin 并用 dump 验证 | 本地+工具链 |
-| [08 分布式训练](./08-distributed.md) | 无既有 lab（本文档给最小脚本设计） | DDP vs FSDP 显存实测并解释 16Φ 账 | 多卡GPU |
+| 文档 | 条目数 | 对应动手项目 | 主判据（L2 举例） | 资源 |
+|------|-------|-------------|------------------|------|
+| [01 LLVM](./01-llvm.md) | 12 | [`llvm-hello-compile/`](../../llvm-hello-compile/) | 写一个新的 Function 分析 Pass 并注册到正确 PM 层级，补 FileCheck 测试 | 全部本地，约 17h |
+| [02 MLIR](./02-mlir.md) | 12 | [`mlir-toy-dialect/`](../../mlir-toy-dialect/) | 新增 `toy.sub`：ODS → fold → 两种 pattern 各写一版 lowering → lit 测试 | 全部本地，约 22h |
+| [03 IREE](./03-iree.md) | 11 | `iree-compile` / `iree-run-module` | 双后端编译，验证一个 vmfb 里多个 executable variant | 本地；1 条需 GPU |
+| [04 TVM](./04-tvm.md) | 11 | [`tvm-fatbin-lab/`](../../tvm-fatbin-lab/) TVM 轨 | 新增 TE 算子 + 两套 schedule + AutoTVM template，给出量化对比 | 本地，约 17.5h；1 条可选 GPU |
+| [05 ONNX + ORT](./05-onnx-ort.md) | 10 | [`onnx-delegate-lab/`](../../onnx-delegate-lab/) ONNX 轨 | 手写一个纯 Python 图优化 pass（模式匹配 + 重写） | 本地，约 12h；1 条可选 GPU |
+| [06 ExecuTorch](./06-executorch.md) | 9 | [`onnx-delegate-lab/`](../../onnx-delegate-lab/) ET 轨 | 写一个新 Partitioner（按段长阈值划分）并对比边界账 | **全部本地，无需 GPU** |
+| [07 CUDA fatbin](./07-cuda-fatbin.md) | 8 | [`tvm-fatbin-lab/`](../../tvm-fatbin-lab/) CUDA 轨 | 加第二个 kernel，验证 fatbin 的多镜像结构 | 本地约 7.5h；2 条需 GPU |
+| [08 分布式训练](./08-distributed.md) | 13 | 无既有 lab（该册含 `dist-train-lab/` 脚手架设计） | DDP vs FSDP 显存实测并印证 16Φ 账 | 6 条本地可做；**7 条需多卡** |
+
+**建议顺序**：01 → 02 是编译器地基（同一件事的单层与多层版本，对照做最省力）；03 / 04 / 05 / 06 / 07 相互独立，按你当前学到哪一段挑；08 单独排期，因为它卡在机器申请上——**建议尽早把申请发出去，等待期间先做前七册**。
 
 ---
 
