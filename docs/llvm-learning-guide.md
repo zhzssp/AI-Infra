@@ -76,6 +76,95 @@
 
 > **为什么要分这么多层**：每一层丢掉一部分目标无关性、换来一部分目标信息。LLVM IR 完全不知道有多少个寄存器；SelectionDAG 知道哪些类型/操作合法；MachineIR 知道具体指令但还用虚拟寄存器；MC 层连"这是个全局变量"都不知道了，只剩符号和字节。**这就是渐进式 lowering 在 LLVM 内部的体现**——和 MLIR 的多 dialect 是同一个思想，只是 LLVM 的层数固定、不可扩展（这正是 MLIR 要解决的问题）。
 
+#### 示例精讲：一个函数走完四层 IR
+
+拿动手项目里现成的函数（[`../llvm-hello-compile/src/kernel.c`](../llvm-hello-compile/src/kernel.c) 里的 `scale8`）走一遍，每层看一眼：
+
+```c
+int scale8(int x) { return x * 8; }
+```
+
+**① LLVM IR**
+
+```bash
+clang -O2 -S -emit-llvm -fno-discard-value-names kernel.c -o k.ll
+```
+
+```llvm
+define i32 @scale8(i32 %x) {
+entry:
+  %mul = shl i32 %x, 3        ; instcombine 已把 mul 8 规范成 shl 3
+  ret i32 %mul
+}
+```
+
+这一层的内存对象树，就是第 3 章里 Pass 拿到手的东西：
+
+```text
+Module "kernel.c"
+├─ target datalayout / triple
+└─ Function "scale8"  : i32 (i32)
+   ├─ Argument  %x
+   └─ BasicBlock "entry"
+      ├─ BinaryOperator  shl (%x, 3)     ← 这条指令本身就是值 %mul
+      └─ ReturnInst      ret (%mul)
+```
+
+**这里有个容易滑过去的点**：`%mul` 不是"变量名"，而是**那条指令对象的名字**。SSA 里"值"和"定义它的指令"是同一个对象，`ret` 的操作数指针直接指向那条 `shl`——所以遍历 use-def 不需要查符号表。
+
+**② SelectionDAG → ③ 指令选择刚结束的 MIR**
+
+```bash
+llc -mtriple=x86_64-- -O2 -stop-after=finalize-isel k.ll -o k.isel.mir
+```
+
+```text
+bb.0.entry:
+  %0:gr32 = COPY $edi                        ; 参数按调用约定从物理寄存器进来
+  %1:gr32 = SHL32ri %0:gr32(tied-def 0), 3, implicit-def dead $eflags
+  $eax    = COPY %1:gr32
+  RET64 implicit $eax
+```
+
+> 形态示意：实际 dump 以本地 llc 版本为准。
+
+已经是**目标指令**了（`SHL32ri` 是 X86 的 opcode，不再是 IR 的 `shl`），但寄存器还是 `%0` / `%1` 这样的**虚拟寄存器**，只有 ABI 强制的 `$edi` / `$eax` 是物理的——这正是"第 1 阶段产出 SSA 虚拟寄存器 + 少量物理寄存器"的字面意思。
+
+**③ 寄存器分配之后的 MIR**
+
+```bash
+llc -mtriple=x86_64-- -O2 -stop-after=virtregrewriter k.ll -o k.ra.mir
+```
+
+```text
+bb.0.entry:
+  renamable $eax = COPY $edi
+  renamable $eax = SHL32ri renamable $eax(tied-def 0), 3, implicit-def dead $eflags
+  RET64 implicit $eax
+```
+
+> 形态示意：`SHL32ri` 的目标与源必须同寄存器（two-address），所以要先 copy；x86 后端也常改用一条 `LEA` 来省掉这次 copy。以本地 llc 输出为准。
+
+**④ 汇编 / MC**
+
+```bash
+llc -mtriple=x86_64-- -O2 k.ll -o k.s
+llc -mtriple=x86_64-- -O2 -show-mc-encoding k.ll -o -
+```
+
+到这一层，"函数""参数""类型"全都没了，只剩标签、指令和字节。`-show-mc-encoding` 会在每条指令后面追加 `# encoding: [...]`，那串字节就是 `MCInst` 经编码器出来的最终产物；`llvm-objdump -d` 是同一层的反方向。
+
+**四层并排**：
+
+| 层 | 寄存器 | 类型信息 | 控制流的载体 | 还知道什么 |
+|----|--------|---------|-------------|-----------|
+| ① LLVM IR | 无限虚拟 SSA 值 | IR 类型（`i32`） | BasicBlock + terminator | 函数、全局变量、属性、metadata |
+| ② SelectionDAG | 边即值，无寄存器概念 | MVT（机器类型） | **每块一张图**，块间不相连 | 哪些类型/操作对目标合法 |
+| ③ MIR | 虚拟寄存器 → 物理寄存器 | 寄存器类（`gr32`） | MachineBasicBlock | 目标指令、栈帧、调用约定 |
+| ④ MC | 只有物理寄存器编号 | 无 | 只有标签 | 符号、节区、字节编码 |
+
+> **自测**：`-stop-after=finalize-isel` 的输出里 `$edi` 是物理寄存器，为什么它的存在不违反"这一阶段用虚拟寄存器"？
+
 ---
 
 ## 第 2 章 LLVM IR：语言参考的蒸馏
@@ -172,6 +261,90 @@ merge:
 
 > **速记**：[notes/mlir-block-arg-ssa.md](./notes/mlir-block-arg-ssa.md) —— 二者表达到达定值的汇合；不是分支、≠ 活跃变量；SSA 值如何对应源变量。
 
+#### 示例精讲：`clamp0` 的三个基本块与一个 phi
+
+```c
+int clamp0(int a, int b) {
+  int y = a + b;
+  int r;
+  if (y > 0) r = y;
+  else       r = 0;
+  return r;
+}
+```
+
+源码里 `r` 被赋值两次；SSA 不允许，所以汇合点必须有 `phi`。规范化之后是三个基本块：
+
+```llvm
+define i32 @clamp0(i32 %a, i32 %b) {
+entry:
+  %y   = add nsw i32 %a, %b
+  %cmp = icmp sgt i32 %y, 0
+  br i1 %cmp, label %then, label %merge   ; else 分支没有计算，直接跳汇合点
+
+then:
+  br label %merge
+
+merge:
+  %r = phi i32 [ %y, %then ], [ 0, %entry ]
+  ret i32 %r
+}
+```
+
+读法：**从 `%then` 进来 `%r` 就是 `%y`，从 `%entry` 直接进来 `%r` 就是 `0`**。`phi` 不做任何计算、不产生任何机器指令，它只是把"这条边上该带哪个值"写下来。
+
+对应的内存对象（Function Pass 拿到的就是这棵树）：
+
+```text
+Function "clamp0"
+├─ Argument %a, %b
+├─ BasicBlock "entry"      preds: —          succs: then, merge
+│    ├─ BinaryOperator  add nsw
+│    ├─ ICmpInst        sgt
+│    └─ BranchInst      br i1
+├─ BasicBlock "then"       preds: entry      succs: merge
+│    └─ BranchInst      br
+└─ BasicBlock "merge"      preds: entry,then succs: —
+     ├─ PHINode         [%y, then], [0, entry]   ← 必须是块里第一条
+     └─ ReturnInst      ret %r
+```
+
+**注意 `phi` 的入口顺序要和 `merge` 的前驱列表对得上**：前驱有两个，入口就必须恰好有两个。如果某个前驱块被 pass 删掉或复制了，所有以它为前驱的 `phi` 都要同步改——这正是"改 CFG 的 pass 不能声明 `preserveSet<CFGAnalyses>()`"的原因之一。
+
+同一段语义在 MLIR 里用 **block argument**：
+
+```mlir
+func.func @clamp0(%a: i32, %b: i32) -> i32 {
+  %c0  = arith.constant 0 : i32
+  %y   = arith.addi %a, %b : i32
+  %cmp = arith.cmpi sgt, %y, %c0 : i32
+  cf.cond_br %cmp, ^then, ^merge(%c0 : i32)   // 值挂在「边」上
+^then:
+  cf.br ^merge(%y : i32)
+^merge(%r: i32):                              // 块声明自己要收什么
+  return %r : i32
+}
+```
+
+| | LLVM `phi` | MLIR block argument |
+|--|-----------|---------------------|
+| 值写在哪 | **汇合块内**，列出 `[值, 前驱]` | **分支指令上**，作为后继的实参 |
+| 谁负责对齐 | phi 的入口列表要匹配前驱列表 | 分支自带实参，天然一一对应 |
+| 位置约束 | 必须在块首、在所有非 phi 指令之前 | 无（就是块签名的一部分） |
+| 同一前驱出现两次 | 必须重复写两个相同入口 | 两条边各自带参数，不存在这个问题 |
+| 改 CFG 时 | 要手动修所有相关 phi | 改分支指令即可 |
+
+> 展开阅读：[notes/llvm-phi.md](./notes/llvm-phi.md)（汇合选值的两条规则）与 [notes/llvm-mlir-pass-ir-unit.md](./notes/llvm-mlir-pass-ir-unit.md)（同一个 `clamp0` 在两边 Pass 里的对象树）。
+
+亲手看一次：
+
+```bash
+clang -O0 -S -emit-llvm -Xclang -disable-O0-optnone -fno-discard-value-names c.c -o c.O0.ll
+opt -S -passes=mem2reg c.O0.ll -o c.mem2reg.ll     # alloca 消失、phi 出现
+```
+
+> **自测**：如果把 `else` 分支也写成一个独立基本块，`merge` 的 `phi` 会变成几个入口？`entry` 还会不会出现在入口列表里？
+
 ### 2.4 指令的九大类
 
 LangRef 的 Instruction Reference 就是按这九类组织的，记住分类比记住每条指令更有用：
@@ -213,6 +386,68 @@ LangRef 的 Instruction Reference 就是按这九类组织的，记住分类比�
 
 `inbounds` 是一个**语义承诺**：结果指针必须落在同一个分配对象内部，否则结果是 poison。优化器严重依赖这个承诺去做别名分析——去掉 `inbounds` 会让很多优化失效。
 
+#### 示例精讲：`Point` 结构体的两种下标
+
+```c
+struct Point { int x, y; };                 // datalayout 下：x 在 +0，y 在 +4，整体 8 字节
+
+int get_y   (struct Point *p)          { return p->y;    }
+int get_y_at(struct Point *a, int i)   { return a[i].y;  }
+```
+
+```llvm
+%struct.Point = type { i32, i32 }
+
+define i32 @get_y(ptr %p) {
+  ; 索引 (0, 1)：先跳 0 个完整的 Point，再取第 1 个字段  →  字节偏移 +4
+  %y.ptr = getelementptr inbounds %struct.Point, ptr %p, i64 0, i32 1
+  %y     = load i32, ptr %y.ptr, align 4
+  ret i32 %y
+}
+
+define i32 @get_y_at(ptr %a, i32 %i) {
+  %idx   = sext i32 %i to i64
+  ; 索引 (i, 1)：先跳 i 个完整的 Point，再取第 1 个字段  →  字节偏移 8*i + 4
+  %y.ptr = getelementptr inbounds %struct.Point, ptr %a, i64 %idx, i32 1
+  %y     = load i32, ptr %y.ptr, align 4
+  ret i32 %y
+}
+```
+
+**"第一个索引恒为 0"到底在说什么**：现代 LLVM 的指针是 opaque 的（只有 `ptr`），GEP 自己带着**源元素类型** `%struct.Point`。它把这个指针看成"一个 `Point` 数组的首地址"——
+
+- **第一个索引**：在这个假想数组上走几步，步长 = `sizeof(Point)` = 8。
+- **后续索引**：钻进类型内部选字段/元素，步长由字段布局决定。
+
+所以 `p->y` 这种"就地取字段"必须写 `0` 起手；而 `a[i].y` 的第一个索引就是 `i`。两者只差第一个索引，语义差了 8 倍。
+
+**一个高频误写**：
+
+```llvm
+; 想写 p->y，却漏了那个 0
+%bad = getelementptr inbounds %struct.Point, ptr %p, i32 1
+```
+
+它的含义是 `&p[1]`——**指向下一个 `Point` 的 `x`，偏移 +8**，类型上完全合法，编译器不会报错。后果分两种：
+
+| 情况 | 后果 |
+|------|------|
+| `%p` 确实指向一个 `Point` 数组的第 0 个元素 | 静默读到相邻元素，结果错但不崩 |
+| `%p` 只指向单个 `Point` | 越出了分配对象，**违反 `inbounds` 承诺 → 结果是 poison**；随后 `load %bad` 就是 UB |
+
+**这就是 `inbounds` 和 poison 的接头处**：`inbounds` 不做检查、不产生代码，它只是你对优化器的一句承诺——"这次地址计算不会走出所在的那个分配对象"。承诺成立时，优化器可以据此断定"不同对象的 GEP 结果永不别名""地址计算不会回绕"，从而放心做 GVN / LICM / 向量化；承诺不成立时，结果指针立刻变成 poison，把它交给 `load`/`store` 就踩进 UB（见 [2.7 节](#27-undef--poison--freeze现代-llvm-最容易踩的坑)）。
+
+反过来说：**拿不准就别写 `inbounds`**。少写只是少一点优化，写错是引入 UB。
+
+看一眼真实输出（动手项目里 `relu_sum` 的 `t->data[i]` 会展开成多条 GEP）：
+
+```bash
+clang -O0 -S -emit-llvm -Xclang -disable-O0-optnone kernel.c -o k.O0.ll
+grep getelementptr k.O0.ll
+```
+
+> **自测**：`getelementptr inbounds %struct.Point, ptr %p, i64 0, i32 1` 和 `getelementptr inbounds i32, ptr %p, i64 1` 算出的地址一样吗？两者对别名分析提供的信息一样吗？
+
 ### 2.6 属性与标志：告诉优化器"你可以假设什么"
 
 这一层是 LLVM 优化能力的真正来源，写前端/写 lowering 时必须理解。
@@ -235,6 +470,74 @@ LangRef 的 Instruction Reference 就是按这九类组织的，记住分类比�
 **函数属性**：`memory(none)` / `memory(read)` / `memory(argmem: readwrite)`（取代了老的 `readnone`/`readonly`）、`nounwind`、`willreturn`、`speculatable`、`alwaysinline` / `noinline`、`optnone`、`"target-cpu"` / `"target-features"`。
 
 > **`noalias` + `dereferenceable` + `align` 这三个属性组合，是把张量 buffer 传给 LLVM 时能不能向量化的关键。** MLIR 的 `memref` lowering、IREE 的 `hal.interface.binding.subspan` 最终都要落到带这些属性的指针参数上。
+
+#### 示例精讲：同一个 axpy，属性齐全与否的两份 IR
+
+用动手项目里的 `axpy`（[`../llvm-hello-compile/src/kernel.c`](../llvm-hello-compile/src/kernel.c)）：
+
+```c
+void axpy(int n, float a, const float *restrict x, float *restrict y) {
+    for (int i = 0; i < n; ++i)
+        y[i] = a * x[i] + y[i];
+}
+```
+
+**A. 什么都没说**（手写 lowering 常见的样子）：
+
+```llvm
+define void @axpy(i32 %n, float %a, ptr %x, ptr %y) {
+  ; ... 循环体：load x[i] / load y[i] / fmul / fadd / store y[i]
+}
+```
+
+**B. 前端/lowering 把知道的事都说出来**（`restrict` + `-O2` 推导后的形态）：
+
+```llvm
+define void @axpy(i32 noundef %n, float noundef %a,
+                  ptr noalias nocapture readonly align 16 dereferenceable(64) %x,
+                  ptr noalias nocapture           align 16 dereferenceable(64) %y) #0 {
+  ; ... 同样的循环体，但优化器能做的事完全不同
+}
+
+attributes #0 = { nofree norecurse nosync nounwind memory(argmem: readwrite) }
+```
+
+> 较新的 LLVM 打印 `nocapture` 时会写成 `captures(none)`，含义相同。
+
+每个属性到底买到了什么：
+
+| 属性 | 告诉优化器 | 换来的能力 |
+|------|-----------|-----------|
+| `noalias`（= C 的 `restrict`） | 这个指针可达的内存，不会被其他参数指针访问 | AA 直接回答 **NoAlias** → `store y[i]` 不会打断 `load x[i]` 的重排 → **不用插运行时指针检查，不用生成双版本循环** |
+| `align 16` | 基址按 16 字节对齐 | 用对齐的向量访存，且**不必生成 peeling 前导循环**去把地址凑齐 |
+| `dereferenceable(N)` | 从这里起至少 N 字节可安全读 | 允许**投机加载**：整块 load 出来再谓词化，而不是逐元素判断 |
+| `readonly` | 只读不写 | `x` 上的 load 可以外提、可以合并 |
+| `nocapture` | 指针不会被存到别处 | 调用之后这块内存的别名集合不会变大 |
+| `memory(argmem: readwrite)` | 函数只碰参数指向的内存 | 调用点上的全局变量/其他 buffer 不会被这次调用作废 |
+
+**为什么这直接决定能不能向量化**：向量化器要把 `y[i] = a*x[i] + y[i]` 一次做 4 个元素，前提是**这 4 次迭代之间没有内存依赖**。少了 `noalias`，`x` 和 `y` 可能重叠（比如 `y = x + 1`），第 1 次迭代写的 `y[0]` 可能就是第 2 次要读的 `x[1]`——顺序不能换。编译器这时有三条路，代价依次递增：
+
+```text
+有 noalias        →  一份向量循环，干净
+无 noalias、边界可算 →  vector.memcheck 块 + found.conflict 判断
+                      + 向量版 & 标量版两份循环（代码膨胀，短循环反而更慢）
+无 noalias、边界不可算 →  彻底放弃，退回标量
+```
+
+自己验证一遍（`kernel.c` 里 `axpy` 与 `axpy_may_alias` 就是这一对）：
+
+```bash
+clang -O2 -S -emit-llvm kernel.c -o k.O2.ll
+grep 'define.*@axpy' k.O2.ll                 # 看两个函数的参数属性差在哪
+
+clang -O2 -Rpass=loop-vectorize \
+         -Rpass-missed=loop-vectorize \
+         -Rpass-analysis=loop-vectorize -c kernel.c -o /dev/null
+```
+
+`-Rpass-analysis` 会直接把"因为可能别名，所以加了运行时检查"这类原因打出来，是调 kernel 性能时的第一手工具。
+
+> **自测**：`align 16` 让向量化器省掉了哪一段代码？如果实际传进来的指针只对齐到 4 字节，会发生什么？
 
 ### 2.7 undef / poison / freeze（现代 LLVM 最容易踩的坑）
 
@@ -526,6 +829,77 @@ LLVM 的 AA 是**链式（chaining）**的：多个实现串起来，一个说�
 
 > **对 AI 编译器的直接含义**：从 MLIR 降下来的 IR，如果 buffer 指针没有 `noalias`、循环访问没有 `!alias.scope`，`basic-aa` 只能给出 MayAlias，向量化和 LICM 全部失效。**"生成的 LLVM IR 跑不快"最常见的原因就是别名信息没传下来**，而不是 LLVM 不行。
 
+#### 示例精讲：两个指针参数的循环，AA 的回答决定一切
+
+```c
+// 版本 1：告诉编译器 a 和 b 不重叠
+void vadd_restrict(float *restrict a, const float *restrict b, int n) {
+  for (int i = 0; i < n; ++i) a[i] += b[i];
+}
+
+// 版本 2：一模一样的循环，但没有 restrict
+void vadd(float *a, const float *b, int n) {
+  for (int i = 0; i < n; ++i) a[i] += b[i];
+}
+```
+
+**版本 1**：参数带 `noalias`，`basic-aa` 对 `(a[i], b[i])` 直接回答 **NoAlias**，向量化器不需要任何保护，产出一份干净的向量循环：
+
+```llvm
+vector.body:
+  %vb = load <4 x float>, ptr %bi, align 4
+  %va = load <4 x float>, ptr %ai, align 4
+  %vs = fadd <4 x float> %va, %vb
+  store <4 x float> %vs, ptr %ai, align 4
+  ; ... 归纳变量递增 + 回边
+```
+
+**版本 2**：`a` 和 `b` 可能是同一块内存（调用方完全可以传 `vadd(p, p+1, n)`），AA 只能回答 **MayAlias**。但两个指针的**访问范围在运行时是可算的**（基址 + `4*n` 字节），所以向量化器不放弃，而是插入运行时检查 + 双版本循环：
+
+```llvm
+entry:
+  br label %vector.memcheck
+
+vector.memcheck:                                  ; 编译期证不了，就运行时证
+  %a.end = getelementptr float, ptr %a, i64 %n
+  %b.end = getelementptr float, ptr %b, i64 %n
+  %c1    = icmp ult ptr %a, %b.end
+  %c2    = icmp ult ptr %b, %a.end
+  %found.conflict = and i1 %c1, %c2               ; 两区间真的重叠？
+  br i1 %found.conflict, label %scalar.ph, label %vector.ph
+
+vector.ph:                                        ; 不重叠 → 走 <4 x float> 版本
+  ...
+scalar.ph:                                        ; 重叠 → 退回一次一个元素
+  ...
+```
+
+> 形态示意：块名与比较方式以本地 LLVM 版本为准，关键是认出 `vector.memcheck` / `found.conflict` 这两个名字。
+
+**同一个循环，AA 给的答案不同，结局差三档**：
+
+| AA 对 `(a[i], b[i])` 的回答 | 向量化器的动作 | 代价 |
+|---------------------------|--------------|------|
+| **NoAlias** | 直接向量化 | 最优，一份循环 |
+| **MayAlias**，但访问区间运行时可算 | `vector.memcheck` + 双版本循环 | 代码膨胀约 2 倍；短循环里检查开销可能吃掉全部收益 |
+| **MayAlias**，且区间算不出来（步长不定 / 指针来自 call / 间接下标） | 放弃向量化 | 全标量 |
+| 存在**循环携带依赖**（如 `a[i] += a[i-1]`） | 放弃（或只能做部分展开） | 全标量 |
+
+**谁给出了这些答案**：`basic-aa` 认得"两个不同的分配对象不别名"这类硬事实，但 `a` 和 `b` 是**外部传进来的参数**，它无从判断——除非参数上写着 `noalias`。循环里 `a[i]` 随 `i` 变化的部分则要靠 `scev-aa`（它把 GEP 和归纳变量翻译成 SCEV 表达式再比较）。这就是为什么**属性必须由前端/lowering 提供**：中端没有能力凭空推出跨函数的不重叠。
+
+亲手看两版的差别：
+
+```bash
+clang -O2 -S -emit-llvm kernel.c -o k.O2.ll
+grep -nE 'memcheck|found\.conflict' k.O2.ll        # 只会出现在没有 restrict 的那个函数里
+
+opt -aa-pipeline=basic-aa -passes=aa-eval -disable-output k.O2.ll
+```
+
+`aa-eval` 会统计整份 IR 里 NoAlias / MayAlias / MustAlias 各占多少——**MayAlias 比例高，通常就是性能问题的根**。
+
+> **自测**：给 `vadd` 的两个指针都加上 `noalias`，但调用方偏偏传了重叠的指针，会发生什么？这是编译器的 bug 还是调用方的 bug？
+
 ### 4.3 变换 pass 分组
 
 | 组 | 代表 pass | 作用 |
@@ -695,6 +1069,84 @@ CodeGenerator 文档明确把代码生成分成七步：
 
 对应 DAG：`(fadd:f32 (fmul:f32 (fadd:f32 W, X), Y), Z)`。如果目标支持 FMA，其中一个 add 可以和 mul 合并——这就是模式匹配要干的事。**匹配规则大部分从 `.td` 文件生成**（见第 6 章）。
 
+#### 示例精讲：`a*b+c` 从 DAG 到 FMA
+
+```c
+float mad(float a, float b, float c) { return a * b + c; }
+```
+
+`-ffp-contract=fast`（或源码里用 `fma`/`#pragma STDC FP_CONTRACT ON`）编出来的 IR：
+
+```llvm
+define float @mad(float %a, float %b, float %c) {
+entry:
+  %mul = fmul contract float %a, %b
+  %add = fadd contract float %mul, %c     ; contract = 「许可」融合，不是「要求」
+  ret float %add
+}
+```
+
+**建完 DAG 之后**（`llc` 内部，一个基本块一张图）：
+
+```text
+  t0: ch = EntryToken                        ← chain 的起点
+  t2: f32 = CopyFromReg t0, Register:f32 %0  ; a
+  t4: f32 = CopyFromReg t0, Register:f32 %1  ; b
+  t6: f32 = CopyFromReg t0, Register:f32 %2  ; c
+  t7: f32 = fmul contract t2, t4
+  t8: f32 = fadd contract t7, t6
+  t9: ch  = CopyToReg t0, Register:f32 $xmm0, t8
+  t10:ch  = RET_GLUE t9, Register:f32 $xmm0
+```
+
+> 形态示意：实际 dump 以本地 llc 版本为准。
+
+画成树，把两类边分开看：
+
+```text
+  数据边（实线）                      chain 边（虚线，只管副作用的先后）
+        fadd contract                 EntryToken
+        /          \                       ┆
+  fmul contract     c                  CopyToReg $xmm0
+    /       \                              ┆
+   a         b                            RET
+```
+
+**chain 边的意义**：这个函数没有访存，chain 上几乎是空的。但只要出现 `load`/`store`/`call`，它们就会被串在同一条 chain 上——**chain 输入永远是操作数 #0，chain 结果永远是最后一个产出值**。DAG 本身不保证求值顺序，副作用的顺序全靠这条链。Root 就是链上最后一个节点（这里是 `RET`）。
+
+**legalize 前后**：
+
+| 阶段 | x86-64 + SSE 上发生什么 |
+|------|------------------------|
+| Legalize Types | `f32` 在 SSE 上有寄存器类（`fr32`），**什么都不做**。若把类型换成 `<8 x float>` 而目标只有 128 位向量，这里就会 **split** 成两个 `<4 x float>`；换成 `half` 则会 **promote** 到 `f32` |
+| Legalize Ops | `fmul` / `fadd` 的 f32 版本是 Legal，**什么都不做**。若目标没有硬件 FMA 而 IR 里写了 `@llvm.fma.f32`，这里会 **expand** 成对 `fmaf` 的 libcall |
+| Select | 真正的分岔点，见下表 |
+
+**Select 阶段选不选 FMA**——三个条件缺一不可：
+
+| IR 上有 `contract`？ | 目标有 FMA 硬件（`-mattr=+fma`）？ | 选出的指令 | 舍入次数 |
+|---|---|---|---|
+| 否 | 有 | `vmulss` + `vaddss` | 2 次（不许合并，合并会改变结果） |
+| 是 | 有 | `vfmadd213ss` | 1 次 |
+| 是 | 无 | `mulss` + `addss` | 2 次（许可了，但硬件没有） |
+
+**这张表就是"`contract` 是软件许可、FMA 是硬件能力"的全部含义**：前端负责发许可证，后端负责看有没有那条指令，两者都齐才会融合。这也解释了为什么同一份 C 代码换个 `-march` 结果会有 ULP 级差异。
+
+观察命令：
+
+```bash
+clang -S -emit-llvm -O1 -ffp-contract=off  mad.c -o off.ll     # 看不到 contract
+clang -S -emit-llvm -O1 -ffp-contract=fast mad.c -o fast.ll    # fmul/fadd 带 contract
+
+llc -mtriple=x86_64-- -mattr=+fma -debug-only=isel fast.ll -o /dev/null
+llc -mtriple=x86_64-- -mattr=+fma -debug-only=isel-dump -filter-print-funcs=mad fast.ll -o /dev/null
+llc -mtriple=x86_64-- -mattr=+fma -view-isel-dags fast.ll -o /dev/null   # 需要 graphviz
+```
+
+`-debug-only=` 需要 assertion 构建的 LLVM；没有的话用 `-view-isel-dags` 看图，或者直接对比 `off.ll` / `fast.ll` 生成的汇编。
+
+> **自测**：`-ffp-contract=off` 编出来的 IR 喂给一个有 FMA 的目标，后端能不能自作主张选 `vfmadd`？为什么？
+
 ### 5.4 GlobalISel：另一条路
 
 GlobalISel 是 SelectionDAG 和 FastISel 的**替代方案**（尚未完全取代）。官方给了三个动机：
@@ -768,6 +1220,88 @@ InstructionSelect gMIR  →  目标 MachineInstr
 ```
 %EAX = LOAD %mem_address
 ```
+
+#### 示例精讲：一段循环的 MIR before / after
+
+```c
+int accum(const int *p, int n) {
+  int s = 0;
+  for (int i = 0; i < n; ++i) s += p[i];
+  return s;
+}
+```
+
+**指令选择刚结束**（`llc -mtriple=x86_64-- -O2 -stop-after=finalize-isel a.ll -o a.isel.mir`）：
+
+```text
+bb.0.entry:
+  successors: %bb.1
+  %0:gr64 = COPY $rdi                    ; p
+  %1:gr32 = COPY $esi                    ; n
+  %2:gr32 = MOV32r0 implicit-def dead $eflags   ; i = 0
+  %3:gr32 = MOV32r0 implicit-def dead $eflags   ; s = 0
+
+bb.1.loop:
+  successors: %bb.1, %bb.2
+  %4:gr32 = PHI %2, %bb.0, %7, %bb.1     ; i   ← 还是 SSA：PHI 伪指令 + 虚拟寄存器
+  %5:gr32 = PHI %3, %bb.0, %6, %bb.1     ; s
+  %8:gr32 = MOV32rm %0, 4, %4, 0, $noreg ; load p[i]
+  %6:gr32 = ADD32rr %5(tied-def 0), %8, implicit-def dead $eflags
+  %7:gr32 = ADD32ri %4(tied-def 0), 1, implicit-def dead $eflags
+  ...
+```
+
+> 形态示意：实际 dump 以本地 llc 版本为准。
+
+**寄存器分配之后**（`llc ... -stop-after=virtregrewriter -o a.ra.mir`）：
+
+```text
+bb.1.loop:
+  renamable $ecx = MOV32rm renamable $rdi, 4, renamable $rax, 0, $noreg
+  renamable $edx = ADD32rr renamable $edx(tied-def 0), killed renamable $ecx, ...
+  renamable $rax = ADD64ri8 renamable $rax(tied-def 0), 1, ...
+  ...
+```
+
+三件事同时发生了：
+
+| 变化 | 谁干的 | 现象 |
+|------|-------|------|
+| `%0 %4 %5 ...` → `$rdi $rax $edx ...` | Greedy 分配器 | 虚拟寄存器全部消失 |
+| `PHI` 不见了 | **PHIElimination**（SSA 解构） | 变成前驱块末尾的 `COPY`，很多 copy 随后被合并掉 |
+| `tied-def 0` 依然在 | two-address 转换 | x86 的 `add` 目标即源，必要时插 copy 保证这一点 |
+
+**为什么这个例子不需要 spill**：活跃区间少，寄存器够用。把它想象成时间轴上的线段：
+
+```text
+指令编号     0      16      32      48      64      80
+$rdi (p)     ├───────────────────────────────────────┤   横跨整个循环，占死一个寄存器
+$rax (i)             ├───────────────────────────────┤
+$edx (s)             ├───────────────────────────────┤
+$ecx (tmp)                   ├───┤                       只活 2 条指令，随便复用
+                             ↑
+                    区间重叠 = 冲突，不能共用同一个物理寄存器
+```
+
+`p` / `i` / `s` 三条长区间两两重叠，必须各占一个寄存器；`tmp` 的区间极短，可以在每次迭代里反复复用同一个 `$ecx`。**当同时重叠的长区间数量超过可用物理寄存器时，才需要 spill**：
+
+```text
+  MOV32mr %stack.0, 1, $noreg, 0, $noreg, killed renamable $edx   ; spill：写回栈槽
+  ...                                                             ; 中间这段把 $edx 让给别人
+  renamable $edx = MOV32rm %stack.0, 1, $noreg, 0, $noreg         ; reload：用之前读回来
+```
+
+> 形态示意：spill 槽名与寻址模式以本地 llc 输出为准。
+
+**Greedy 的核心价值就在 spill 的插入点上**：Basic 分配器发现装不下就把整条区间 spill 掉（循环里每次迭代都要 reload）；Greedy 会先做**活跃区间分裂**——把长区间从"用不到"的那一段剪断，只 spill 冷的部分，尽量不在循环体内插访存。看差别最直接的办法是换分配器对比：
+
+```bash
+llc -mtriple=x86_64-- -O2 -regalloc=greedy a.ll -o greedy.s
+llc -mtriple=x86_64-- -O2 -regalloc=basic  a.ll -o basic.s
+llc -mtriple=x86_64-- -O2 -print-after=greedy a.ll -o /dev/null   # 分配那一刻的 MIR
+```
+
+> **自测**：`PHI` 消失后变成了 copy，为什么这些 copy 大多不会真的出现在最终汇编里？
 
 ### 5.7 MC 层
 
@@ -904,6 +1438,91 @@ mlir-translate --mlir-to-llvmir input.mlir -o output.ll
 | block argument | `phi` |
 | `llvm.func` / `llvm.call` | `define` / `call` |
 | `nvvm.*` / `rocdl.*` op | 对应的 target intrinsic |
+
+#### 示例精讲：一个 memref 函数翻过接缝
+
+最小的 MLIR：一个 `func.func`，参数是动态 shape 的 `memref`，体内只有一次读-乘-写。
+
+```mlir
+func.func @scale_first(%buf: memref<?xf32>, %a: f32) {
+  %c0 = arith.constant 0 : index
+  %v  = memref.load %buf[%c0] : memref<?xf32>
+  %r  = arith.mulf %v, %a : f32
+  memref.store %r, %buf[%c0] : memref<?xf32>
+  return
+}
+```
+
+先在 MLIR 内部降到 `llvm` dialect，再翻译：
+
+```bash
+mlir-opt --convert-arith-to-llvm \
+         --finalize-memref-to-llvm \
+         --convert-func-to-llvm \
+         --reconcile-unrealized-casts x.mlir -o x.llvm.mlir
+mlir-translate --mlir-to-llvmir x.llvm.mlir -o x.ll
+```
+
+（老一些的 MLIR 里这个 pass 叫 `--convert-memref-to-llvm`。）
+
+降完之后，函数签名变了样——**一个 `memref` 参数被摊平成了 5 个标量参数**：
+
+```mlir
+llvm.func @scale_first(%arg0: !llvm.ptr,   // allocated ptr
+                       %arg1: !llvm.ptr,   // aligned ptr
+                       %arg2: i64,         // offset
+                       %arg3: i64,         // size[0]
+                       %arg4: i64,         // stride[0]
+                       %arg5: f32)
+```
+
+翻成 LLVM IR 就是：
+
+```llvm
+define void @scale_first(ptr %0, ptr %1, i64 %2, i64 %3, i64 %4, float %5) {
+  %7 = getelementptr float, ptr %1, i64 %2      ; aligned + offset（索引是 0，被折掉了）
+  %8 = load float, ptr %7, align 4
+  %9 = fmul float %8, %5
+  store float %9, ptr %7, align 4
+  ret void
+}
+```
+
+> 形态示意：SSA 编号与临时值个数以本地 mlir-translate 版本为准；关键是参数个数与地址计算的形状。
+
+**MemRef descriptor 的字段对照**（`memref<?xf32>` 是 rank 1，所以 sizes/strides 各一项）：
+
+| descriptor 字段 | LLVM 类型 | 含义 | 摊平后的参数 |
+|----------------|----------|------|------------|
+| allocated ptr | `ptr` | `malloc` 返回的原始指针，**只用于 free** | `%0` |
+| aligned ptr | `ptr` | 对齐后的数据基址，**所有访存都从它算起** | `%1` |
+| offset | `i64` | 起始偏移，**以元素为单位**（不是字节） | `%2` |
+| sizes[0..rank-1] | `i64 × rank` | 各维大小 | `%3` |
+| strides[0..rank-1] | `i64 × rank` | 各维步长，同样以元素为单位 | `%4` |
+
+不摊平时它就是一个真结构体：`{ ptr, ptr, i64, [1 x i64], [1 x i64] }`。摊平（unpacked）是默认的 ABI，因为标量参数比传结构体更容易让 LLVM 做优化。
+
+**地址公式**——这是理解所有 `memref` lowering 结果的钥匙：
+
+```text
+element_addr = aligned_ptr + (offset + Σ_d  index_d * stride_d) * sizeof(elem)
+```
+
+`memref.load %buf[%i, %j]` 降下来就是这条公式展开成的一串 `mul`/`add`/`getelementptr`。
+
+**接缝上最值得注意的一点**：上面那份 `.ll` 里，`%0` 和 `%1` 这两个指针参数**什么属性都没有**——没有 `noalias`、没有 `align`、没有 `dereferenceable`。如果这个函数里是个循环，LLVM 只能给 MayAlias，向量化立刻退化成 [4.2 节](#42-别名分析四种回答与链式结构)里说的"运行时检查 + 双版本"甚至彻底放弃。**这些属性必须由 lowering 主动加上**（MLIR 侧可以通过 `llvm.noalias` 等参数属性传递），这正是 [7.3 节](#73-让-llvm-替你干活的三个杠杆)三个杠杆里的第一个。
+
+一路推到汇编，把整条缝看完整：
+
+```bash
+mlir-opt --convert-arith-to-llvm --finalize-memref-to-llvm \
+         --convert-func-to-llvm --reconcile-unrealized-casts x.mlir \
+  | mlir-translate --mlir-to-llvmir \
+  | opt -passes='default<O2>' -S \
+  | llc -mtriple=x86_64-- -o -
+```
+
+> **自测**：既然 `aligned ptr` 才是访存用的基址，为什么 descriptor 还要单独保留 `allocated ptr`？把 `memref<?x?xf32>` 摊平会得到几个参数？
 
 ### 7.2 为什么 AI 编译器只用 LLVM 的最后一段
 

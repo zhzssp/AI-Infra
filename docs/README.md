@@ -270,6 +270,8 @@ tvm-fatbin-lab（融合/schedule）     ≈     onnx-delegate-lab（EP/Partition
 
 ## 7. 维护约定
 
+- **讲机制必须带「示例精讲」**：任何一节只要在讲机制（Pass、Conversion、融合、划分、打包……），就要有一个 `#### 示例精讲：<主题>` 小节，形态固定为**最小输入 → 文本 IR/命令/产物 → 对象结构或调用链 → 逐步注释 → 并排对照表 → 一句自测**。参考基准：[`notes/llvm-mlir-pass-ir-unit.md`](./notes/llvm-mlir-pass-ir-unit.md)。  
+  判据很简单：**如果读完还得靠额外笔记才懂，这一节就没写完**。工具输出若非逐字复制，必须标注「形态示意（以本地版本为准）」。
 - **新论文笔记** → 放进 `paper-notes/`，按现有七节骨架写，并更新 [`paper-notes/README.md`](./paper-notes/README.md) 与根 README §9。  
 - **新专题文档**（官方文档蒸馏）→ 放在 `docs/` 根下，在本页 §3.1 与根 README「专题学习文档」表各加一行；若引入新的横切概念，同步补 [`ai-compiler-foundations.md`](./ai-compiler-foundations.md) 对应章节与对照表。  
 - **动手项目升级**（例如 toy 打通到 linalg）→ 改项目自己的 README，并回写根 README 对应阶段的「动手验收」与本页阶段地图。  

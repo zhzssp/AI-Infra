@@ -243,6 +243,53 @@ W7–W8 研究问题收束      ◄─ §3.4 选型 · §9.5 ·（回看 §3.3 �
 
 详见 [`tvm-learning-guide.md`](./tvm-learning-guide.md) §2.2。
 
+#### 示例精讲：conv → bias_add → relu 融合前后的访存账
+
+**最小具体输入**：`y = relu(bias_add(conv2d(x, w), b))`。输入 `x`：`1×64×56×56` f32；卷积核 `w`：`64×64×3×3`，pad 1、stride 1，故输出仍是 `1×64×56×56`；`b`：长度 64。
+
+先把一份激活张量的大小算出来，后面全部以它为单位：
+
+```text
+S = 64 × 56 × 56 × 4 B = 200704 × 4 B = 802,816 B ≈ 0.77 MiB
+W（权重）= 64 × 64 × 3 × 3 × 4 B = 147,456 B ≈ 0.14 MiB
+FLOPs = 2 × 200704 × (64×3×3) = 2 × 200704 × 576 ≈ 2.31 × 10⁸
+```
+
+**融合前：三个节点、两个中间张量落地**
+
+```text
+%t1 = conv2d(%x, %w)        // complex-out-fusable
+%t2 = bias_add(%t1, %b)     // injective
+%y  = relu(%t2)             // injective
+```
+
+**融合后：一个 kernel，中间结果不出寄存器**
+
+```text
+%y = fused_conv2d_bias_relu(%x, %w, %b)
+
+// 内部循环体（伪代码）：
+for each (n, f, oh, ow):
+    acc = 0f
+    for kh, kw, ci:  acc += x[n, ci, oh+kh-1, ow+kw-1] * w[f, ci, kh, kw]
+    acc = acc + b[f]            // ← bias_add 被吸收到输出侧
+    y[n, f, oh, ow] = max(acc, 0f)   // ← relu 也被吸收；acc 从未离开寄存器
+```
+
+能这么做的**依据就是四类分类**：conv 是 complex-out-fusable（可吸收输出侧 elementwise），bias_add 与 relu 都是 injective（可被吸收）。若中间夹一个 opaque 算子，这条链就断在那里。
+
+**访存计数**（悲观口径：假设中间张量每次都往返 HBM，不计缓存命中）
+
+| | kernel 数 | 中间张量分配 | 中间张量访存 | 含输入/权重的总 bytes | 算术强度 |
+|--|-----------|--------------|--------------|----------------------|----------|
+| 融合前 | 3 | 2（`%t1`、`%t2`） | 写 S + 读写 2S + 读写 2S = **5S ≈ 3.83 MiB** | S + W + 5S = 6S + W ≈ 4.96 MB | 2.31×10⁸ / 4.96×10⁶ ≈ **47 FLOP/B** |
+| 融合后 | 1 | 0 | 只写最终输出 = **1S ≈ 0.77 MiB** | S + W + S = 2S + W ≈ 1.75 MB | 2.31×10⁸ / 1.75×10⁶ ≈ **132 FLOP/B** |
+| 差 | −2 | −2 | **省 4S ≈ 3.06 MiB** | 约 1/2.8 | **约 2.8 倍** |
+
+**呼应 Roofline**（[§4.3](#43-roofline先问瓶颈在哪)）：分子 FLOPs **一次都没少**，减少的全是分母 bytes——所以融合是把这个算子在 Roofline 上**向右推**，从更靠近带宽屋檐的位置推向算力屋顶。如果这台机器的机器平衡点（peak FLOP/s ÷ peak B/s）落在 47 与 132 之间，那么这一次融合正好把它从「带宽受限」搬到「算力受限」——收益最大的一格。顺带省掉的还有 2 次 kernel launch 与 2 块临时显存。
+
+> **自测**：如果 `%t1` 还被另一个分支消费（残差连接），上表「省 4S」里哪一部分省不掉？
+
 ### 3.3 子图划分与委托（Partition / Delegate）
 
 **是什么**：在一张完整计算图上，标出「由后端 A 执行」的连通子图，其余留给默认运行时（CPU EP、PyTorch 解释路径等）。边界处插入**数据交接**（可能伴随 layout/dtype/设备转换）。
@@ -265,6 +312,56 @@ W7–W8 研究问题收束      ◄─ §3.4 选型 · §9.5 ·（回看 §3.3 �
 边界越多，这四项叠加越狠——所以「能划多大就划多大」和「划给最快的后端」经常冲突，需要代价模型。
 
 详见 [`onnx-learning-guide.md`](./onnx-learning-guide.md) §7、[`executorch-learning-guide.md`](./executorch-learning-guide.md) §4–5、[`iree-learning-guide.md`](./iree-learning-guide.md) 第 2 章。
+
+#### 示例精讲：5 节点链切一刀，四类代价各落在哪条边
+
+**最小具体输入**：一条 5 节点链。后端 X（某加速器）声明只支持 `conv2d` 与 `relu`；`topk` / `add` / `softmax` 留给默认 CPU 运行时。
+
+```text
+// 划分前的伪 IR（括号里是能力归属）
+%t1 = conv2d(%x, %w)      // A —— 后端 X 支持
+%t2 = relu(%t1)           // B —— 后端 X 支持
+%t3 = topk(%t2)           // C —— X 不支持   ← 切口只能落在 B|C 之间
+%t4 = add(%t3, %bias)     // D —— CPU
+%y  = softmax(%t4)        // E —— CPU
+```
+
+给每条边编号，方便下面指认：
+
+```text
+ %x ──e0──▶ A(conv2d) ──e1──▶ B(relu) ──e2──▶ C(topk) ──e3──▶ D(add) ──e4──▶ E(softmax) ──▶ %y
+            └────────── 后端 X 的子图 ─────────┘  ▲  └──────── 默认 CPU 运行时 ────────┘
+                                                  │
+                                          e2 = 唯一的边界边
+```
+
+**划分后的伪 IR**
+
+```text
+%t2 = call @subgraph_X(%x, %w)   // 一次委托调用；内部是 conv2d → relu（还可再融合）
+// ══════════════ 切口：所有边界代价都压在 e2 这一条边上 ══════════════
+%t3 = topk(%t2)                  // 以下留在默认运行时
+%t4 = add(%t3, %bias)
+%y  = softmax(%t4)
+```
+
+注意 `e1` 被**吞进子图内部**了：它不再是边界，反而成了可融合的候选（对照 [§3.2](#32-算子语义分类与融合fusion)）。这就是「边界越少越好」的机械含义——**每条被吞进去的边省掉一整套下面四项代价**。
+
+**四类代价 ↔ 图上的位置**
+
+| 代价 | 落在哪 | 在这个例子里具体是什么 | 各系统里的名字 |
+|------|--------|------------------------|----------------|
+| ① 数据拷贝 | **e2 这条边上** | `%t2`（子图输出）从 X 的显存拷回 CPU 可读内存；不共享地址空间时无法避免 | ORT 的 EP 边界 copy、ET 的 delegate 输入/输出搬运 |
+| ② Layout / dtype 转换 | **e2 上，表现为新增算子** | X 内部按 NHWC+fp16 算，CPU 的 `topk` 期待 NCHW+fp32 → e2 实际展开成 `relu → cast → layout_transform → topk` | `layout_transform`、`QuantizeLinear`/`Dequantize` 对 |
+| ③ 内存空间切换 | **e2 两端 buffer 的归属** | 左端由 X 的分配器管（device global），右端要在 host 分配器里另拿一块；跨界的是「谁管这块内存」，不是数据内容 | 地址空间（[§5.4](#54-地址空间与内存层次)）、HAL allocator |
+| ④ 同步点 | **e2 上的一条时间边** | `topk` 读 `%t2` 之前必须等整个 `@subgraph_X` 完成并 signal——这条依赖不产生数据，只产生等待 | fence / event / timeline semaphore（[§8.2](#82-异步与同步)） |
+
+**要记住的两点**
+
+1. 前三项是**空间**代价（多一次搬、多一个算子、多一次分配），第四项是**时间**代价（流水线被截断，无法与相邻工作重叠）。前三项能靠 layout 协商压小，第四项只能靠**减少边界数量**或让边界两侧异步化。
+2. 代价是按**边界数**收费，不是按节点数。所以「把 X 能吃的节点尽量连成一片」通常比「把每个 X 能吃的节点都交给 X」更划算——后者会切出一堆碎片，每片都要付一遍 ①②③④。
+
+> **自测**：如果后端 X 其实也支持 `add` 与 `softmax`（只有 `topk` 不支持），边界会变成几条？四类代价各要付几遍？
 
 ### 3.4 四条工业栈怎么选（学完各专题后回看这张表）
 
@@ -298,6 +395,68 @@ W7–W8 研究问题收束      ◄─ §3.4 选型 · §9.5 ·（回看 §3.3 �
 
 详见 [`paper-notes/04-halide.md`](./paper-notes/04-halide.md)、[`tvm-learning-guide.md`](./tvm-learning-guide.md) §3。
 
+#### 示例精讲：一个 matmul 算法 + 两个 schedule
+
+**最小具体输入**：方阵 matmul，`C[i,j] = Σ_k A[i,k] * B[k,j]`。下面**算法一个字都不改**，只换 schedule。（对应动手脚本 [`../tvm-fatbin-lab/tvm_lab/01_te_matmul_schedules.py`](../tvm-fatbin-lab/tvm_lab/01_te_matmul_schedules.py)，那里 `N=64`、`tile=16`。）
+
+**算法（只说「算什么」）**
+
+```python
+A = te.placeholder((N, N), name="A", dtype="float32")
+B = te.placeholder((N, N), name="B", dtype="float32")
+k = te.reduce_axis((0, N), name="k")
+C = te.compute((N, N), lambda i, j: te.sum(A[i, k] * B[k, j], axis=k), name="C")
+# 这四行里没有任何「循环顺序 / 分块 / 并行 / 缓存」的信息
+```
+
+**Schedule 0（默认）**
+
+```python
+s = te.create_schedule(C.op)     # 什么也不加
+```
+
+**Schedule 1（tile + reorder）**
+
+```python
+s = te.create_schedule(C.op)
+io, ii = s[C].split(C.op.axis[0], factor=16)   # i → (i.outer, i.inner)
+jo, ji = s[C].split(C.op.axis[1], factor=16)   # j → (j.outer, j.inner)
+s[C].reorder(io, jo, ii, ji)                   # 等价于 s[C].tile(i, j, 16, 16)
+```
+
+**两份循环 nest 并排**
+
+> 输出形态示意（以本地工具版本为准）：`tvm.lower(s, [A, B, C], simple_mode=True)` 的结构，索引算式已简写。
+
+```text
+Schedule 0（默认）                        Schedule 1（tile 16×16 + reorder）
+─────────────────────────────────         ─────────────────────────────────────
+for (i, 0, N)                             for (i.outer, 0, N/16)
+  for (j, 0, N)                             for (j.outer, 0, N/16)
+    C[i, j] = 0f                              for (i.inner, 0, 16)
+    for (k, 0, N)                               for (j.inner, 0, 16)
+      C[i, j] += A[i, k] * B[k, j]                 C[..] = 0f
+                                                   for (k, 0, N)
+                                                     C[..] += A[..] * B[..]
+```
+
+**局部性发生了什么**
+
+1. Schedule 0：最内两层是 `j` 和 `k`。固定一个 `i`，`j` 循环要把**整个 B**扫一遍；`i` 前进一格，B 又得从头扫一遍。若 B 放不进快速存储，B 就被重读 `N` 次。
+2. Schedule 1：最内两层变成 `i.inner`/`j.inner`（各 16）。一个 `(i.outer, j.outer)` 块内只碰 A 的 16 行、B 的 16 列，**工作集从「整个 B」缩到「两条 16×N 的带」**，而这两条带在块内被复用 16 次。
+3. 代价：块循环数变多，`k` 仍然是最内的完整归约，所以**冗余计算为零、并行粒度变粗**——这正是 §4.2 权衡三角里「局部性 ↑ / 并行度形态改变」的那一格。
+
+| | 算法（compute） | 调度（schedule） |
+|--|-----------------|------------------|
+| 回答的问题 | 输出每个元素等于什么 | 按什么顺序算、暂存在哪、谁并行 |
+| 上面哪几行 | `te.placeholder` / `te.reduce_axis` / `te.compute` | `split` / `reorder`（以及 §4.2 的 `cache_read` 等） |
+| 换硬件时 | 基本不动 | 几乎全部要重写或重搜 |
+| 改错的后果 | **数值结果错** | 只是慢（合法变换保语义） |
+
+> 这就是「可搜索」的来源：算法固定 ⇒ 所有 schedule 都在实现同一个数学定义 ⇒ 搜索器基本只按性能排序。（注意例外：一旦某个 schedule 改动了浮点**归约顺序**（split `k`、`rfactor`、带重结合的向量化），结果不再逐位相同——语义仍对，但数值会有末位差异。）
+
+> **自测**：Schedule 1 里把 `reorder` 改成 `(io, ii, jo, ji)`，最内层的工作集会变大还是变小？
+
 ### 4.2 Tiling 与循环变换族
 
 **Tiling（分块）**：把迭代空间切成小块，使一块数据在被踢出快速存储器之前被充分复用。
@@ -315,6 +474,68 @@ W7–W8 研究问题收束      ◄─ §3.4 选型 · §9.5 ·（回看 §3.3 �
 | `compute_at` | 把生产者计算嵌进消费者循环的某层（计算粒度） |
 
 **权衡三角**（Halide 反复强调）：**局部性 ↔ 并行度 ↔ 冗余计算（+ 内存占用）**。拉高一个往往压低另一个——没有免费午餐，只有搜索或启发式。
+
+#### 示例精讲：`split` 与 `cache_read` 各改了什么
+
+沿用 [§4.1](#41-算法与调度分离algorithm--schedule) 的 matmul，但把规模放大到 `N = 1024`（f32），这样访存账才算得有意义。
+
+**第一步：`split` —— 一个循环变两层**
+
+```mlir
+// 前：一层循环，迭代空间 1024
+scf.for %i = %c0 to %c1024 step %c1 {
+  use(%i)
+}
+
+// 后：split(factor=16) —— 64 个块 × 块内 16
+scf.for %io = %c0 to %c64 step %c1 {
+  scf.for %ii = %c0 to %c16 step %c1 {
+    %t = arith.muli %io, %c16 : index
+    %i = arith.addi %t, %ii : index        // 还原出原来的 %i
+    use(%i)
+  }
+}
+```
+
+`split` 本身**不改变任何一次计算**，只是把迭代空间重新参数化——它的价值全在于「切出来的两层可以分别被 `reorder` / `bind` / `vectorize` 处置」。注意前提：16 整除 1024；否则要留边界块或加谓词。
+
+**第二步：`cache_read` —— 给 B 建一层显式暂存**
+
+```python
+BB = s.cache_read(B, "shared", [C])   # 把 B 的 tile 读进快速存储
+s[BB].compute_at(s[C], jo)            # 每个 (i.outer, j.outer) 块开头搬一次
+```
+
+```text
+// 前：每次乘法都从 B 的原位置读（命不命中缓存靠运气）
+for (i.outer) for (j.outer) for (i.inner) for (j.inner) for (k)
+    C[..] += A[i, k] * B[k, j]
+
+// 后：块入口多了一个搬运阶段，计算阶段只读暂存
+for (i.outer) for (j.outer) {
+    for (k) for (j.inner)                       // 搬运：N × 16 个元素
+        B.shared[k, j.inner] = B[k, j.outer*16 + j.inner]
+    // ── 这里需要一次 barrier：搬完才能算 ──
+    for (i.inner) for (j.inner) for (k)
+        C[..] += A[i, k] * B.shared[k, j.inner]  // 每个搬进来的元素被用 16 次
+}
+```
+
+**复用次数 / 并行度对照**（`N=1024`，tile `16×16`，f32；假设快速存储放得下 16 行 A 与 16 列 B 的带，但放不下整个 B）
+
+| 版本 | 每个 B 元素平均被用几次 | 从下一级存储读入的元素数 | 可并行单元数 | 额外快速存储 |
+|------|------------------------|--------------------------|--------------|--------------|
+| 默认 `i,j,k` | 1（`i` 前进就得重读整个 B） | ≈ N³ = 1.07×10⁹（≈ 4.3 GB） | `i`：1024 路 | 0 |
+| `split`+`reorder`（tile 16×16） | 16（块内被 `i.inner` 复用） | ≈ 2N³/16 = 1.34×10⁸（≈ 0.54 GB） | `(io,jo)`：64×64 = 4096 块 | 0（靠缓存自动命中） |
+| 再加 `cache_read(B→shared)` | 16（同上，但**由程序保证**） | 同上 | 同上，块内可再绑 256 线程 | B 的带 = 1024×16×4 B = 64 KiB |
+
+**三条读法**
+
+1. 访存量降到约 1/8，FLOPs 一点没变——所以这是一次**纯粹的带宽侧优化**，Roofline 上是向右移（见 [§4.3](#43-roofline先问瓶颈在哪)）。
+2. `split` 只提供结构，真正省访存的是 `reorder` 之后**最内层工作集变小**；`cache_read` 把「命中靠缓存运气」变成「命中由代码保证」，代价是多一次搬运 + 一次 barrier。
+3. 上表最后一格 64 KiB 已经超过常见 GPU 每 block 的 shared memory 预算——这就是真实 schedule 还要**再 split `k`**（k-tile）的原因：三层 tiling 不是炫技，是被容量逼出来的。
+
+> **自测**：把 tile 从 16 改成 64，上表哪一列会先撞墙？
 
 ### 4.3 Roofline：先问瓶颈在哪
 
@@ -346,6 +567,91 @@ W7–W8 研究问题收束      ◄─ §3.4 选型 · §9.5 ·（回看 §3.3 �
 > 经验法则：**图级与高维变换尽量留在 tensor 世界；靠近硬件再 bufferize。** 过早 bufferize = 过早引入别名，后面融合/变换变难。
 
 详见 [`mlir-learning-guide.md`](./mlir-learning-guide.md) §8。
+
+#### 示例精讲：同一个 `c = a + b` 的 tensor 版与 memref 版
+
+**最小具体输入**：`c = a + b`，紧接着 `d = relu(c)`，长度 8 的 f32 向量。两段 IR 语义完全一样，唯一的区别是「`c` 是一个**值**，还是一块**内存**」。
+
+**版本 A：tensor（值语义）**
+
+```mlir
+func.func @add_relu_tensor(%a: tensor<8xf32>, %b: tensor<8xf32>) -> tensor<8xf32> {
+  %z  = arith.constant 0.0 : f32
+  %e0 = tensor.empty() : tensor<8xf32>
+  %c  = linalg.add ins(%a, %b : tensor<8xf32>, tensor<8xf32>)
+                   outs(%e0 : tensor<8xf32>) -> tensor<8xf32>   // %c 是新的 SSA 值
+  %e1 = tensor.empty() : tensor<8xf32>
+  %d  = linalg.generic
+          {indexing_maps = [affine_map<(i) -> (i)>, affine_map<(i) -> (i)>],
+           iterator_types = ["parallel"]}
+          ins(%c : tensor<8xf32>) outs(%e1 : tensor<8xf32>) {
+  ^bb0(%x: f32, %o: f32):
+    %r = arith.maximumf %x, %z : f32
+    linalg.yield %r : f32
+  } -> tensor<8xf32>
+  return %d : tensor<8xf32>
+}
+```
+
+**版本 B：memref（存储语义）** —— bufferize 之后的同一段计算
+
+```mlir
+func.func @add_relu_memref(%a: memref<8xf32>, %b: memref<8xf32>, %c: memref<8xf32>) {
+  %z  = arith.constant 0.0 : f32
+  %c0 = arith.constant 0 : index
+  %c1 = arith.constant 1 : index
+  %c8 = arith.constant 8 : index
+  scf.for %i = %c0 to %c8 step %c1 {                  // 循环 1：add
+    %x = memref.load %a[%i] : memref<8xf32>
+    %y = memref.load %b[%i] : memref<8xf32>
+    %s = arith.addf %x, %y : f32
+    memref.store %s, %c[%i] : memref<8xf32>           // 中间结果**落地**
+  }
+  scf.for %i = %c0 to %c8 step %c1 {                  // 循环 2：relu
+    %v = memref.load %c[%i] : memref<8xf32>
+    %r = arith.maximumf %v, %z : f32
+    memref.store %r, %c[%i] : memref<8xf32>           // 原地覆盖，旧值消失
+  }
+  return
+}
+```
+
+**两版的依赖边**
+
+```text
+版本 A：边 = SSA 依赖
+  %a ─┐
+      ├─ linalg.add ──▶ %c ──▶ linalg.generic(relu) ──▶ %d
+  %b ─┘                 ▲
+                        └── 单定义 + 单使用 → 这条边可融合
+
+版本 B：边 = 「对同一块内存的读写顺序」
+  循环1 ──store──▶ [ %c 这块内存 ] ──load──▶ 循环2
+                        ▲
+                        └── 能否合并两个循环，取决于别名分析能否证明
+                            %a / %b / %c 互不重叠（调用方可以传同一块进来）
+```
+
+**逐条读**
+
+1. A 的 `%c` 只有一个定义、一个使用：融合就是把 relu 的计算体搬进 add 的循环体，整个 `%c` 张量根本不必存在（可退化成寄存器里的一个 `f32`）。
+2. A 的 `tensor.empty()` 不是分配，只是给 destination-passing style 一个形状占位；真分配推迟到 bufferization——这正是 One-Shot Bufferize 能「原地复用」的余地。
+3. B 的 `%c` 是函数参数里的一块内存：循环 2 从它读、又写回它。这里没有 SSA 边可看，只有 store/load 的先后。
+4. B 的 `memref.store %r, %c[%i]` 是原地覆盖：一旦执行，add 的结果永久消失——想再读它的 Pass 已经晚了。
+
+**并排对照**
+
+| | 版本 A（tensor） | 版本 B（memref） |
+|--|------------------|------------------|
+| `%c` 是什么 | SSA 值，不可变 | 内存位置，可被 store 改写 |
+| 哪条边允许融合 | `linalg.add → %c → relu` 这条 SSA 边 | 无 SSA 边；只有「先写后读同一 memref」的顺序约束 |
+| 判定融合合法性要什么 | 看 use-def 就够 | 先做别名分析，证明不重叠 |
+| 中间结果能否消掉 | 能（融合后 `%c` 不落地） | 已落地，只能靠后续内存优化补救 |
+| 适合的优化 | 融合、tiling、shape 推导 | 内存复用、向量化 load/store、对接运行时 |
+
+> 一句话：**可融合的那条边是版本 A 里的 `%c`**。bufferize 之后它退化成「对同一块内存的读写顺序」，融合的门槛就从「看一眼 use-def」升级成「证明不别名」——这就是 §5.1 那条经验法则的机械原因。
+
+> **自测**：要把版本 B 的两个 `scf.for` 合成一个，编译器必须先证明哪几个 memref 之间的什么性质？
 
 ### 5.2 Layout（数据布局）
 
@@ -416,6 +722,101 @@ IREE 的 `linalg → flow → stream → hal` 是同一哲学在「执行规划�
 flow 固化「怎么切成 dispatch」；stream 固化「时序与资源寿命」；hal 固化「用哪块设备对象」。
 
 详见 [`mlir-learning-guide.md`](./mlir-learning-guide.md) §1、[`iree-learning-guide.md`](./iree-learning-guide.md) §2。
+
+#### 示例精讲：conv + relu 在三层的形态，以及「conv」是在哪一刀之后消失的
+
+**最小具体输入**：`out = relu(conv2d(in, flt))`。NHWC 输入 `1×8×8×4`，HWCF 卷积核 `3×3×4×4`，stride 1、无 padding，因此输出 `1×6×6×4`。
+
+**第 1 层：linalg on tensors —— 「这是一次卷积」本身是一个 op**
+
+```mlir
+// 片段：省略 func 头；%in / %flt 是参数，%c0f 是 0.0 : f32
+%z    = tensor.empty() : tensor<1x6x6x4xf32>
+%init = linalg.fill ins(%c0f : f32) outs(%z : tensor<1x6x6x4xf32>) -> tensor<1x6x6x4xf32>
+%conv = linalg.conv_2d_nhwc_hwcf
+          {strides = dense<1> : tensor<2xi64>, dilations = dense<1> : tensor<2xi64>}
+          ins(%in, %flt : tensor<1x8x8x4xf32>, tensor<3x3x4x4xf32>)
+          outs(%init : tensor<1x6x6x4xf32>) -> tensor<1x6x6x4xf32>
+%z2   = tensor.empty() : tensor<1x6x6x4xf32>
+%out  = linalg.generic {iterator_types = ["parallel","parallel","parallel","parallel"], …}
+          ins(%conv : tensor<1x6x6x4xf32>) outs(%z2 : tensor<1x6x6x4xf32>) {
+  ^bb0(%x: f32, %o: f32):
+    %r = arith.maximumf %x, %c0f : f32
+    linalg.yield %r : f32
+} -> tensor<1x6x6x4xf32>
+```
+
+这一层能做：把 relu 融进 conv 的输出侧（conv 属 complex-out-fusable，见 [§3.2](#32-算子语义分类与融合fusion)）、换 layout、推导 shape。因为 op 名字还在，Pattern 可以直接匹配 `linalg.conv_2d_nhwc_hwcf`。
+
+**第 2 层：scf + memref —— 循环骨架已定，conv 还在**
+
+```mlir
+scf.for %oh = %c0 to %c6 step %c3 {
+  scf.for %ow = %c0 to %c6 step %c3 {
+    // 输出 3×3 的 tile，配 3×3 卷积核、stride 1 → 需要 5×5 的输入窗口
+    %in_t  = memref.subview %In[0, %oh, %ow, 0] [1, 5, 5, 4] [1, 1, 1, 1]
+                : memref<1x8x8x4xf32> to memref<1x5x5x4xf32, strided<[…]>>
+    %out_t = memref.subview %Out[0, %oh, %ow, 0] [1, 3, 3, 4] [1, 1, 1, 1]
+                : memref<1x6x6x4xf32> to memref<1x3x3x4xf32, strided<[…]>>
+    linalg.conv_2d_nhwc_hwcf ins(%in_t, %Flt : …) outs(%out_t : …)   // ← 名字还在
+  }
+}
+```
+
+这一层能做：改 tile 大小、把外层绑到 block/thread、给 `%in_t` 加一层 shared memory 暂存。**tile 尺寸已被固化**，但「这是卷积」这条信息还没丢。
+
+**第 3 层：纯 load / mulf / addf / store —— 语义已经丢了**
+
+```mlir
+scf.for %oh = %c0 to %c6 step %c1 {
+ scf.for %ow = %c0 to %c6 step %c1 {
+  scf.for %f = %c0 to %c4 step %c1 {
+   %acc = scf.for %kh = %c0 to %c3 step %c1 iter_args(%a0 = %c0f) -> f32 {
+     %a1 = scf.for %kw = %c0 to %c3 step %c1 iter_args(%a2 = %a0) -> f32 {
+       %a3 = scf.for %ci = %c0 to %c4 step %c1 iter_args(%a4 = %a2) -> f32 {
+         %ih = arith.addi %oh, %kh : index
+         %iw = arith.addi %ow, %kw : index
+         %x  = memref.load %In[%c0, %ih, %iw, %ci]  : memref<1x8x8x4xf32>
+         %w  = memref.load %Flt[%kh, %kw, %ci, %f]  : memref<3x3x4x4xf32>
+         %m  = arith.mulf %x, %w : f32
+         %s  = arith.addf %a4, %m : f32
+         scf.yield %s : f32
+       }
+       scf.yield %a3 : f32
+     }
+     scf.yield %a1 : f32
+   }
+   %r = arith.maximumf %acc, %c0f : f32
+   memref.store %r, %Out[%c0, %oh, %ow, %f] : memref<1x6x6x4xf32>
+}}}
+```
+
+只剩「六层循环 + `mulf`/`addf`」。它与一段手写的、语义完全不同的六层循环在 IR 上**无法区分**。
+
+**结构树对照**
+
+```text
+第 1 层  func.func
+         └─ linalg.conv_2d_nhwc_hwcf   ← 按 op 名就能匹配
+            + linalg.generic (relu)
+第 2 层  func.func
+         └─ scf.for / scf.for                （tile 已固化）
+            └─ linalg.conv_2d_nhwc_hwcf   ← 仍能匹配
+第 3 层  func.func
+         └─ scf.for × 6
+            └─ memref.load / arith.mulf / arith.addf / memref.store
+                              ↑ 没有任何 op 叫 conv
+```
+
+| 层 | 谁还能匹配到 conv | 这一层可做的变换 | 这一层固化了什么 |
+|----|-------------------|------------------|------------------|
+| linalg on tensors | 能（op 名 + indexing maps） | 融合、layout、shape 推导、tiling 决策 | 还几乎没固化 |
+| scf + memref | 能（循环里那条 named op） | 调 tile、绑线程、加 shared 暂存 | 循环结构、内存与别名 |
+| 纯循环 + arith | **不能** | 只剩通用循环优化（unroll、LICM、向量化） | 迭代顺序与逐元素运算 |
+
+**哪一层之后 Pass 再也匹配不到 conv**：**第 2 层 → 第 3 层那一刀（linalg → loops）**。只要 `linalg.conv_2d_nhwc_hwcf` 还在，`RewritePattern` 就能按名字找到它；一旦展成 `scf.for` + `arith.*`，要重新认出「这是卷积」只能靠 idiom recognition / raising，代价高且不可靠。所以**所有需要知道「这是卷积」的决定（融合、layout、tile 策略、要不要换 Tensor Core kernel）都必须在这一刀之前做完**——这就是「渐进 lowering」的全部理由。
+
+> **自测**：如果一个 Pass 想在第 3 层把这段循环替换成 Tensor Core 指令，它必须先恢复出哪些信息？
 
 ### 6.3 Pass：分析与变换
 
@@ -514,6 +915,69 @@ Driver ──▶ Device ──▶ Allocator ──▶ Buffer (+ BufferView: shap
 | Fence | 常作为「一批 wait/signal 的宿主侧句柄」 | — |
 
 **编译期**若不能显式表达依赖，就无法把「计算–通信重叠」「stream-ordered allocation」做进产物。这就是为什么 IREE 把 timeline 视为灵魂。
+
+#### 示例精讲：两条队列 + 一个 semaphore，重叠是怎么被「表达」出来的
+
+**最小具体输入**：一个梯度张量被切成 2 块；每块先在设备上算（`mm`），再跨设备 AllReduce（`ar`）。设 `mm` 一块耗 3 个单位时间，`ar` 一块耗 2 个单位。两条队列：`Q0` 计算、`Q1` 通信。
+
+**写法 (a)：只有「host 等全部完成」这一种同步**
+
+```text
+Q0: dispatch @mm(块0)
+Q0: dispatch @mm(块1)
+host: device.synchronize()        // 整批等：IR 里没有「块0 已就绪」这个概念
+Q1: all_reduce(块0)
+Q1: all_reduce(块1)
+host: device.synchronize()
+```
+
+**写法 (b)：用 timeline semaphore 逐块表达依赖**
+
+> 伪 IR 示意（形态贴近 IREE 的 stream/hal，具体 op 名以所用版本为准）
+
+```text
+%c = semaphore.create initial(0)     // 计算时间线
+%n = semaphore.create initial(0)     // 通信时间线
+
+Q0: dispatch @mm(块0)      wait(—)        signal(%c = 1)
+Q0: dispatch @mm(块1)      wait(—)        signal(%c = 2)
+Q1: all_reduce(块0)        wait(%c >= 1)  signal(%n = 1)   // 块0 算完即可发车
+Q1: all_reduce(块1)        wait(%c >= 2)  signal(%n = 2)
+Q0: dispatch @apply(块0)   wait(%n >= 1)  signal(%c = 3)   // 通信回来就能用
+host: fence.wait(%n >= 2)                                  // 只在最后等一次
+```
+
+**时间轴对照**（示意；每个方块标了自己的起止时刻）
+
+```text
+(a) 粗同步：IR 里只有「整批等」
+  Q0 计算  [ mm 块0 : 0→3 ][ mm 块1 : 3→6 ]
+  Q1 通信                                    [ ar 块0 : 6→8 ][ ar 块1 : 8→10 ]
+  host                     ↑ 等全部计算完     ↑ 等全部通信完
+  总时长 = 6（计算）+ 4（通信）= 10
+
+(b) semaphore：逐块依赖
+  Q0 计算  [ mm 块0 : 0→3 ][ mm 块1 : 3→6 ]
+  Q1 通信                   [ ar 块0 : 3→5 ]   [ ar 块1 : 6→8 ]
+                            ↑ wait(%c>=1) 已满足 → 与 mm 块1 并行跑
+  总时长 = 8   （ar 块0 完全藏进了 mm 块1 的时间里）
+```
+
+**逐条读**
+
+1. (a) 与 (b) 的**设备工作量完全相同**，差别只在「IR 里有没有一条能被调度器利用的细粒度依赖」。省下的 2 个单位是纯粹的表达力收益。
+2. `wait(%c >= 1)` 这种「等某个计数值」的写法，让 signal 与 wait **不必按提交顺序配对**：编译期可以先发 `Q1` 的 wait，再发 `Q0` 的 signal，运行时自会对齐。CUDA event 更像「录制一个已发生的点」，跨多队列 + host/device 统一时间线时表达力不够（见上表的「局限」列）。
+3. 关键结论：**重叠不是运行时「聪明」出来的，是编译期写进产物里的**。如果降级到 (a) 那种只有整批同步的形态，运行时无论多聪明都看不出「块0 已经可以发车」——依赖信息已经在 IR 里丢了。
+
+| | 写法 (a) 粗同步 | 写法 (b) timeline semaphore |
+|--|-----------------|------------------------------|
+| IR 里的依赖粒度 | 整批（队列级） | 每块（工作项级） |
+| 能否 overlap 计算与通信 | 不能 | 能 |
+| host 参与次数 | 每个阶段一次 | 只在最末尾一次 |
+| 块数变多时 | 总时长 = 计算 + 通信 | 总时长 ≈ 计算 + 一个块的通信 |
+| 谁做决定 | host 代码（编译器看不见） | 编译期固化在产物里 |
+
+> **自测**：若把块数从 2 提到 8（每块 `mm` 0.75、`ar` 0.5 单位），写法 (b) 的总时长趋近于哪个数？
 
 ### 8.3 AOT vs JIT
 

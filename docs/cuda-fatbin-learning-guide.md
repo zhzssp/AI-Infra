@@ -109,6 +109,68 @@ NVCC 不是单一编译器，而是一个**驱动（compiler driver）**：它�
 
 要点：① Host / Device 两条路，设备码以 blob 嵌进宿主对象；② Device 上先 PTX 再 SASS（第 3 章重点）；③ fatbinary 是设备侧多镜像容器。
 
+#### 示例精讲：用仓库里的 `add.cu` 走一遍两条路径
+
+**最小具体输入**：仓库里已有的最小 kernel [`../tvm-fatbin-lab/cuda/add.cu`](../tvm-fatbin-lab/cuda/add.cu)（全文九行，**故意不写 host `main`**）：
+
+```cuda
+// Minimal device kernel for fatbin multi-arch packaging demo.
+// Host main is intentionally omitted — we only need the device image container.
+
+extern "C" __global__ void add(const float *a, const float *b, float *c, int n) {
+  int i = blockIdx.x * blockDim.x + threadIdx.x;
+  if (i < n) {
+    c[i] = a[i] + b[i];
+  }
+}
+```
+
+**源码里每个记号决定它走哪条路**
+
+| 源码里的东西 | 走哪条路 | 在产物里留下什么 |
+|--------------|----------|------------------|
+| `__global__` | 函数体整体走 **Device 路径** | PTX / SASS 里的一个 entry |
+| `extern "C"` | 影响符号命名 | 名字就是 `add`，不被 C++ mangle——所以 dump 里能一眼认出（见 §3.2、§5.2） |
+| `blockIdx.x` / `blockDim.x` / `threadIdx.x` | Device 侧特殊寄存器 | PTX 里变成 `%ctaid.x` / `%ntid.x` / `%tid.x` |
+| `const float *a` 等形参 | 两侧都要 | Device 侧是 `.param` 槽；Host 侧是 launch stub 的参数打包 |
+| （没有 `main`） | Host 路径只剩 stub | 宿主侧只有 launch stub + fatbin 注册代码 |
+
+**两条命令，两种「fatbin 在哪」**
+
+```bash
+# 路径 1：只要设备侧容器（仓库 lab 用的就是这条）
+nvcc -fatbin tvm-fatbin-lab/cuda/add.cu -o add.fatbin \
+  -gencode arch=compute_75,code=sm_75 \
+  -gencode arch=compute_80,code=sm_80
+
+# 路径 2：正常编成宿主目标文件 —— 没有独立 .fatbin 文件，它嵌在 .o 里
+nvcc -c tvm-fatbin-lab/cuda/add.cu -o add.o \
+  -gencode arch=compute_75,code=sm_75 \
+  -gencode arch=compute_80,code=sm_80
+cuobjdump -lelf add.o        # 打开的正是 .o 里嵌着的那份 fatbinary
+```
+
+**把这个文件贴到 §2.1 总图上**
+
+```text
+add.cu（1 个 __global__，0 个 main）
+├─ Host 路径（NVCC → MSVC/gcc/clang）
+│    · 为 add 生成 launch stub：<<<>>> 最终展开成 cudaLaunchKernel(...)
+│    · 生成 fatbin 注册代码（形如 __cudaRegisterFatBinary(&__fatbinwrap…)，
+│      符号名随 toolkit 版本变）
+│    · 本文件没有 main，所以宿主侧仅此而已 → 不能直接链成可执行文件
+└─ Device 路径（NVCC → cicc → ptxas）
+     · 函数体 → PTX：compute_75 一份、compute_80 一份
+     · 每份 PTX → ptxas → SASS：sm_75、sm_80
+     · 两份 SASS 写进 ★ fatbinary（容器）
+          └─ 路径 1：直接落成 add.fatbin
+          └─ 路径 2：作为数据嵌进 add.o ──▶ 链接进 exe / .so / .dll
+```
+
+**要带走的一句**：`.o` 里同时住着「宿主机器码」和「一整个 fatbinary」。`cuobjdump` 之所以能对 `.o` 工作，就是因为它去找的是这份**嵌进去的容器**，而不是某个独立文件（§2.2 结尾说的正是这件事）。
+
+> **自测**：为什么 `add.cu` 没有 `main` 也能 `nvcc -c` 成功，却不能直接 `nvcc add.cu -o add.exe`？
+
 ### 2.2 三种常见设备产物
 
 | 产物 | 大致是什么 | 典型怎么得到 |
@@ -139,6 +201,45 @@ fatbinary
 4. 都没有 → 加载失败。
 
 > 官方文档把「带 PTX 以兼容未来 GPU」称为一种 **forward compatibility** 策略；「只带 SASS」则偏向 **load 快、体积可控、但不面向未知架构**。
+
+#### 示例精讲：逻辑 image 列表 ↔ dump 里的字段
+
+**最小具体输入**：按仓库 lab 的第二条命令编一份「两档 SASS + 一份 PTX 退路」的容器（[`../tvm-fatbin-lab/scripts/run_fatbin.sh`](../tvm-fatbin-lab/scripts/run_fatbin.sh) 生成的 `add_with_ptx.fatbin` 就是它）：
+
+```bash
+nvcc -fatbin tvm-fatbin-lab/cuda/add.cu -o add_with_ptx.fatbin \
+  -gencode arch=compute_75,code=sm_75 \
+  -gencode arch=compute_80,code=[sm_80,compute_80]
+```
+
+**它的逻辑结构（本节开头那张图的实例化）**
+
+```text
+add_with_ptx.fatbin
+├── image[0]:  kind=ELF/cubin , arch=sm_75       ← 第一条 -gencode
+├── image[1]:  kind=ELF/cubin , arch=sm_80       ← 第二条里的 sm_80
+└── image[2]:  kind=PTX       , arch=compute_80  ← 第二条里的 compute_80
+```
+
+**并排：每个 image 用哪条命令看得见**
+
+> 输出形态示意（以本地工具版本为准）：条目的**命名规则随 CUDA Toolkit 版本变化**，请只依赖「有几条、每条对应哪一档」这两个信号。
+
+| 逻辑 image | 由哪段命令产生 | 用哪条命令列出 | 输出行的形态 | 你真正要读的字段 |
+|------------|----------------|----------------|--------------|------------------|
+| `image[0]` sm_75 SASS | `arch=compute_75,code=sm_75` | `cuobjdump -lelf` | `ELF file    1: add.1.sm_75.cubin` | 条目序号 + 名字里的 `sm_75` |
+| `image[1]` sm_80 SASS | `code=[sm_80,…]` | `cuobjdump -lelf` | `ELF file    2: add.2.sm_80.cubin` | 同上，确认**出现了两条** |
+| `image[2]` compute_80 PTX | `code=[…,compute_80]` | `cuobjdump -lptx` | `PTX file    1: add.1.sm_80.ptx` | 有无条目、对应哪一档 |
+
+三个容易踩的点：
+
+1. **`-lelf` 看不见 PTX，`-lptx` 看不见 cubin**——两条命令覆盖的是同一容器的两类 image。想一次看全用 `cuobjdump -all`。
+2. PTX 条目名里出现的可能是 `sm_80` 而不是 `compute_80`（PTX 文本内部的 `.target` 也写作 `sm_80`，见 §3.2 的示例）。**不要据此认为它已经是 SASS**——它躺在 `-lptx` 的列表里，就是 PTX。
+3. 只编 SASS 的那份（lab 里的 `add.fatbin`）跑 `-lptx` 会**是空的或没有对应档**；这正是 lab 让你并排看 `dump_sass_only.txt` 与 `dump_with_ptx.txt` 的用意。
+
+**运行时怎么用这张列表**：本节的选择规则就是在这三条 image 上做匹配——8.0 卡命中 `image[1]` 直接加载；7.5 卡命中 `image[0]`；9.0 卡两档 SASS 都不匹配，于是落到 `image[2]` 走 JIT（走读见 [§3.3](#33-运行时-jit没有匹配-sass-时会发生什么)）。
+
+> **自测**：你写了两条 `-gencode`，但 `-lelf` 只列出一条，最可能的两个原因是什么？
 
 ---
 
@@ -184,6 +285,91 @@ CUDA C++  ──►  PTX (compute_XX)  ──►  SASS (sm_XX)
 
 也可以**两者都带**：常见生产配置是「为目标卡带 SASS + 再带一份较高档的 PTX 做前向兼容」。
 
+#### 示例精讲：同一个 `add` kernel 的 PTX 与 SASS 并排
+
+**最小具体输入**：还是 [`../tvm-fatbin-lab/cuda/add.cu`](../tvm-fatbin-lab/cuda/add.cu) 里那个 `c[i] = a[i] + b[i]`。两条命令分别停在两层：
+
+```bash
+nvcc -ptx   tvm-fatbin-lab/cuda/add.cu -o add.ptx   -gencode arch=compute_80,code=compute_80
+nvcc -cubin tvm-fatbin-lab/cuda/add.cu -o add.cubin -gencode arch=compute_80,code=sm_80
+cuobjdump -sass add.cubin
+```
+
+**左：PTX（`compute_80`，虚拟 ISA）**
+
+> 输出形态示意（以本地工具版本为准）：`.version`、寄存器计数、标签名都随版本变。
+
+```ptx
+.version 7.0
+.target  sm_80            // 注意：PTX 的 .target 也写作 sm_80，指的是 compute_80 这一档能力
+.address_size 64
+
+.visible .entry add(
+        .param .u64 add_param_0,      // const float *a
+        .param .u64 add_param_1,      // const float *b
+        .param .u64 add_param_2,      // float *c
+        .param .u32 add_param_3       // int n
+)
+{
+        .reg .pred %p<2>;             // 虚拟寄存器：要多少声明多少
+        .reg .f32  %f<4>;
+        .reg .b32  %r<6>;
+        .reg .b64  %rd<9>;
+
+        ld.param.u64  %rd1, [add_param_0];
+        ld.param.u32  %r2,  [add_param_3];
+        mov.u32       %r3, %ctaid.x;          // blockIdx.x
+        mov.u32       %r4, %ntid.x;           // blockDim.x
+        mov.u32       %r5, %tid.x;            // threadIdx.x
+        mad.lo.s32    %r1, %r3, %r4, %r5;     // i = blockIdx*blockDim + threadIdx
+        setp.ge.s32   %p1, %r1, %r2;          // i >= n ?
+        @%p1 bra      $L__BB0_2;              // 是 → 跳到结尾
+        cvta.to.global.u64 %rd4, %rd1;        // 泛型地址 → global 地址空间
+        mul.wide.s32  %rd5, %r1, 4;           // i * sizeof(float)
+        add.s64       %rd6, %rd4, %rd5;
+        ld.global.f32 %f1, [%rd6];            // a[i]（b[i] 同理，略）
+        add.f32       %f3, %f1, %f2;
+        st.global.f32 [%rd8], %f3;            // c[i] = …
+$L__BB0_2:
+        ret;
+}
+```
+
+**右：SASS（`sm_80`，真实 ISA）**
+
+> 输出形态示意（以本地工具版本为准）：指令选择、常量偏移、寄存器编号都随架构与版本变。
+
+```text
+        code for sm_80
+                Function : add
+        /*0000*/  MOV R1, c[0x0][0x28] ;
+        /*0010*/  S2R R0, SR_CTAID.X ;                          // blockIdx.x
+        /*0020*/  IMAD R0, R0, c[0x0][0x0], R3 ;                // *blockDim + threadIdx，一条搞定
+        /*0030*/  ISETP.GE.AND P0, PT, R0, c[0x0][0x178], PT ;  // i >= n ?（n 在常量区）
+        /*0040*/ @P0 EXIT ;                                     // 是 → 直接退出，没有跳转标签
+        /*0050*/  IMAD.WIDE R2, R0, R5, c[0x0][0x160] ;         // 算 &a[i]
+        /*0060*/  LDG.E R4, [R2.64] ;                            // a[i]
+        /*0070*/  LDG.E R7, [R6.64] ;                            // b[i]
+        /*0080*/  FADD R9, R4, R7 ;
+        /*0090*/  STG.E [R10.64], R9 ;                           // c[i] = …
+        /*00a0*/  EXIT ;
+```
+
+**大致对应关系**（各举一条，**不是**一一映射）
+
+| 源码里的事 | PTX（`compute_80`） | SASS（`sm_80`） | 差别在哪 |
+|------------|---------------------|-----------------|----------|
+| 算线程下标 | `mov %ctaid.x` + `mad.lo.s32` | `S2R SR_CTAID.X` + `IMAD` | SASS 用专门的「读特殊寄存器」指令 |
+| 越界判断与跳出 | `setp.ge.s32` + `@%p1 bra` | `ISETP.GE.AND P0` + `@P0 EXIT` | 谓词寄存器数量有限；分支被折成直接退出 |
+| kernel 参数 | `.param` 槽 + `ld.param` | 常量存储 `c[0x0][0x160]` 一类偏移 | 参数区在真机上就是 constant bank |
+| 读 `a[i]` | `cvta.to.global` + `ld.global.f32` | `LDG.E`（地址空间体现在指令种类里） | 虚拟层显式的地址空间转换在真实层常被折进寻址 |
+| 浮点加 | `add.f32` | `FADD` | 少数「几乎一一对应」的情形 |
+| 寄存器 | `%f<4>` / `%rd<9>` 想声明多少都行 | `R0…`，物理寄存器有限 | **寄存器分配发生在 `ptxas`**，不在 PTX 层 |
+
+**结论三句**：① PTX 是「已经很像机器码、但寄存器无限、地址空间显式」的可移植镜像；② `ptxas` 在这一步做指令选择、寄存器分配、调度，所以**一条 PTX ≠ 一条 SASS**；③ 正因为这步还没做，PTX 才能在运行时被驱动 JIT 到别的 `sm_*`（§3.3）——而 SASS 已经把这些决定钉死在某一代硅片上。
+
+> **自测**：同一份 `compute_80` 的 PTX 分别 JIT 到 `sm_80` 与 `sm_90`，得到的 SASS 会一样吗？为什么？
+
 ### 3.3 运行时 JIT：没有匹配 SASS 时会发生什么
 
 当进程在某块 GPU 上 `cuModuleLoad*` / 启动 kernel 时，驱动大致做：
@@ -204,6 +390,39 @@ CUDA C++  ──►  PTX (compute_XX)  ──►  SASS (sm_XX)
 
 - **只发 SASS、不发 PTX**：在**清单内的卡**上启动快、行为确定；遇到**更新一代、你没编过的卡**可能直接挂。
 - **带 PTX**：新卡有机会靠 JIT「跑起来」——这是 NVIDIA 宣传的 **future-proof / forward compatible** 路径；代价是体积、首次延迟、以及 JIT 路径上偶发的边角差异（生产环境通常仍会为主要 SKU 预编 SASS）。
+
+#### 示例精讲：三个场景走一遍上面的判定树
+
+**最小具体输入**：两份用同一个 `add.cu` 编出来的容器，以及三块卡。
+
+```text
+F1（SASS-only）    = -gencode arch=compute_75,code=sm_75
+                     -gencode arch=compute_80,code=sm_80
+   → image: [sm_75 SASS] [sm_80 SASS]
+
+F2（SASS + PTX 退路）= F1 的两条，第二条改成 code=[sm_80,compute_80]
+   → image: [sm_75 SASS] [sm_80 SASS] [compute_80 PTX]
+
+卡：GPU-A 能力 8.0 · GPU-B 能力 8.6 · GPU-C 能力 9.0
+```
+
+**走读表**
+
+| 场景 | 容器 | 卡 | 驱动按判定树怎么走 | 首次加载代价 | 结果 |
+|------|------|----|--------------------|--------------|------|
+| ① 有匹配 SASS | F1 | GPU-A（8.0） | 第 1 步命中：容器里有 `sm_80`，与 8.0 精确匹配 → 直接映射加载 | 无 JIT | 跑起来，且指令是编译期就定好的 |
+| ①′ 同 major 兼容 | F1 | GPU-B（8.6） | 第 1 步的「或兼容」分支：官方 binary compatibility 规则允许 `X.y` 的 cubin 用在同 major、`z ≥ y` 的设备上，故 `sm_80` 可在 8.6 上加载 | 无 JIT | 能跑，但**不是**为 8.6 调优的码 |
+| ② 无 SASS 无 PTX | F1 | GPU-C（9.0） | 第 1 步不命中（7.5/8.0 跨 major，不适用兼容规则）→ 第 2 步查 PTX，容器里没有 → 走到判定树最后一格 | — | **加载失败**，报错与 `no kernel image is available` 一类相关 |
+| ③ 无 SASS 有 PTX | F2 | GPU-C（9.0） | 第 1 步不命中 → 第 2 步命中 `compute_80` PTX（8.0 ≤ 当前能力 9.0）→ 驱动 JIT 成 `sm_90` 的 SASS → 加载 | **首次有 JIT 开销**，结果可被驱动缓存 | 跑起来；性能取决于驱动 JIT 质量 |
+
+**逐条读**
+
+1. ① 与 ③ 的差别不在「能不能跑」，而在**谁付编译成本、什么时候付**：① 在你的构建机上付（AOT），③ 在用户第一次启动时付（JIT）。这就是 [`ai-compiler-foundations.md` §8.3](./ai-compiler-foundations.md#83-aot-vs-jit) 那张 AOT/JIT 表在 ISA 层的实物。
+2. ①′ 是**便宜但别依赖**的一格：它只在同 major 内成立，而且拿到的是老一代调优过的码。§3.5 说的「不要拿它替代正确的 `-gencode` 列表」指的就是这里。另外，带 `a` 一类后缀的架构特有目标（如 `sm_90a`）不参与这种宽松规则，需要时查官方文档。
+3. ② 是发货事故的标准形态：编译清单里没有的**更新一代**卡，且没留 PTX。修法只有两种——把新架构加进 `-gencode` 重新发一版，或者当初就留一份 `compute_*` PTX。
+4. 判定树是**按容器内容 + 当前卡**两个输入求值的，与你的源码无关。所以「换台机器就挂」几乎总能靠 `cuobjdump -lelf` / `-lptx`（[§5.2](#52-必会命令复制即用)）在三十秒内定位。
+
+> **自测**：场景 ③ 的首次延迟发生在进程的哪一步？为什么同一台机器第二次运行通常看不到它？
 
 ### 3.4 取舍：什么时候偏 PTX，什么时候偏 SASS
 
@@ -270,6 +489,51 @@ nvcc kernel.cu -c -o kernel.o \
 ```
 
 读法：为 Turing / Ampere 各留一份真码；再留 compute_80 的 PTX，让更新的卡有机会 JIT。
+
+#### 示例精讲：三种 `-gencode` 组合各产出几个 image（可照抄验证）
+
+**最小具体输入**：同一个 [`../tvm-fatbin-lab/cuda/add.cu`](../tvm-fatbin-lab/cuda/add.cu)，只改 `-gencode`，编出三份容器。
+
+```bash
+# 组合 A：纯 SASS 两档（对应 lab 的 add.fatbin）
+nvcc -fatbin tvm-fatbin-lab/cuda/add.cu -o A.fatbin \
+  -gencode arch=compute_75,code=sm_75 \
+  -gencode arch=compute_80,code=sm_80
+
+# 组合 B：纯 PTX 一档（一份 SASS 也没有）
+nvcc -fatbin tvm-fatbin-lab/cuda/add.cu -o B.fatbin \
+  -gencode arch=compute_80,code=compute_80
+
+# 组合 C：两档 SASS + 一份 PTX 退路（对应 lab 的 add_with_ptx.fatbin）
+nvcc -fatbin tvm-fatbin-lab/cuda/add.cu -o C.fatbin \
+  -gencode arch=compute_75,code=sm_75 \
+  -gencode arch=compute_80,code=[sm_80,compute_80]
+```
+
+验证用的两条命令（对三份产物各跑一遍）：
+
+```bash
+for f in A.fatbin B.fatbin C.fatbin; do
+  echo "== $f"; cuobjdump -lelf "$f"; cuobjdump -lptx "$f"
+done
+```
+
+**对照表：你应该看到几条**
+
+| 组合 | `-gencode` 条数 | `-lelf` 条目数（SASS） | `-lptx` 条目数（PTX） | 容器内 image 总数 | 这份产物的行为 |
+|------|-----------------|------------------------|------------------------|-------------------|----------------|
+| **A** 纯 SASS | 2 | **2**（`sm_75`、`sm_80`） | **0**（空或无对应档） | 2 | 7.5/8.0 卡零 JIT；9.0 卡直接加载失败 |
+| **B** 纯 PTX | 1 | **0** | **1**（`compute_80`） | 1 | 任何能力 ≥ 8.0 的卡都能跑，但**每台首次都要 JIT** |
+| **C** 混合 | 2 | **2** | **1** | 3 | 主力卡零 JIT + 新卡有 JIT 退路（生产常用） |
+
+**计数规则一句话**：容器里的 image 数 **= 所有 `-gencode` 里 `code=` 列出的目标数之和**，不是 `-gencode` 的条数。所以组合 C 的第二条 `code=[sm_80,compute_80]` **一条命令产生两个 image**——这是最容易数错的一处。
+
+两个配套直觉：
+
+1. `arch=compute_XX` 只有一个作用：**限定生成/检查 PTX 的特性档**（上限）。它不决定容器里放什么。
+2. `code=` 才决定放什么：写 `sm_XX` 放 SASS，写 `compute_XX` 放 PTX，写 `[sm_XX,compute_XX]` 两个都放。**`arch` 与 `code` 里的数字不必相同**，但 `code=sm_YY` 通常要求 `YY` 与 `arch` 的档位相容。
+
+> **自测**：`-gencode arch=compute_75,code=[sm_75,compute_75] -gencode arch=compute_80,code=sm_80` 会产出几个 image，各是什么类型与架构？
 
 ### 4.2 简写 `-arch` / `-code`（知道即可）
 
@@ -351,6 +615,77 @@ cuobjdump -lelf kernel.cubin
 - `PTX file ... compute_80` —— 有可 JIT 的虚拟镜像；
 - 若你写了两条 `-gencode` 却只看到一个 arch → 编译命令没按你想的生效（查是否被简写 `-arch` 覆盖、或文件不是你以为的那份）。
 
+#### 示例精讲：`-lelf` / `-lptx` 的输出长什么样，逐行怎么读
+
+**最小具体输入**：§4.1 组合 C 编出来的 `C.fatbin`（两档 SASS + 一份 PTX），也就是 lab 里的 `add_with_ptx.fatbin`。
+
+> **以下所有 dump 块都是输出形态示意（以本地工具版本为准）**：条目命名、缩进、info 行措辞都随 CUDA Toolkit 版本变化。**只依赖三件事**：条目数、每条对应哪一档架构、它出现在 `-lelf` 还是 `-lptx` 里。
+
+**① `cuobjdump -lelf`：有哪些 SASS**
+
+```text
+$ cuobjdump -lelf C.fatbin
+ELF file    1: add.1.sm_75.cubin
+ELF file    2: add.2.sm_80.cubin
+```
+
+| 这一段 | 怎么读 |
+|--------|--------|
+| `ELF file` | 该条目是 **cubin（ELF 容器里的 SASS）**，不是 PTX。这是「真码」的标志 |
+| `1:` / `2:` | 容器内的**序号**；数量就是你 `-gencode` 里 `code=sm_*` 的个数（§4.1 的计数规则） |
+| `add.…` | 来源 kernel/模块名。`add.cu` 里写了 `extern "C"`，所以没有 C++ mangle |
+| `sm_75` / `sm_80` | **要读的关键字段**：这份 SASS 对应哪一代真实架构 |
+| `.cubin` | 后缀提示它是可被直接加载的机器码镜像 |
+
+**② `cuobjdump -lptx`：有哪些可 JIT 的 PTX**
+
+```text
+$ cuobjdump -lptx C.fatbin
+PTX file    1: add.1.sm_80.ptx
+```
+
+| 这一段 | 怎么读 |
+|--------|--------|
+| `PTX file` | 该条目是**虚拟 ISA 镜像**，运行时可被驱动 JIT |
+| `1:` | 只有一份 PTX——对应 `code=[sm_80,compute_80]` 里的 `compute_80` |
+| `sm_80` | **陷阱**：这里（以及 PTX 文本里的 `.target`）常写成 `sm_80`，但它躺在 `-lptx` 列表里，所以它是 **`compute_80` 那一档的 PTX**，不是 SASS |
+
+**③ 只编了 SASS 时的 `-lptx`**
+
+```text
+$ cuobjdump -lptx A.fatbin
+（无输出，或一条 info 说明未找到 PTX）
+```
+
+空列表**不是报错**，而是「这份产物没有 JIT 退路」这一事实——对照 [§3.3](#33-运行时-jit没有匹配-sass-时会发生什么) 的场景 ②。
+
+**④ 打开的文件里根本没有设备码时**
+
+```text
+$ cuobjdump -lelf host_only.o
+cuobjdump info    : File 'host_only.o' does not contain device code
+```
+
+这条 info 说明你打开的是纯宿主对象——**不是**你的 `-gencode` 写错了。
+
+**⑤ `-sass` 的表头也是信息**
+
+```text
+$ cuobjdump -sass C.fatbin
+        code for sm_75
+                Function : add
+        …指令…
+        code for sm_80
+                Function : add
+        …指令…
+```
+
+`code for sm_XX` 出现几次，就等于 `-lelf` 列出几条——这是**交叉验证**镜像数最快的方式（指令本身不必细看，§5.3 说过到此为止）。
+
+**照着念一遍就是 §5.4 的验收台词**：「`-lelf` 有 `sm_75` 与 `sm_80` 两份 SASS；`-lptx` 有一份 `compute_80` 的 PTX；所以 7.5 / 8.0 卡直接加载，9.0 卡走 PTX JIT。」
+
+> **自测**：某份陌生 `.so` 的 `-lelf` 列出 6 条、`-lptx` 列出 1 条，它采用的是哪种发货策略？代价是什么？
+
 ### 5.3 `nvdisasm`（可选一眼）
 
 ```bash
@@ -401,6 +736,72 @@ hal.executable @my_kernel {
 ```
 
 官方对 variant 的定义要点（IREE 学习文档已引）：*多个 target-specific variant 编译期独立降低，运行时表现为**一个** executable（**类似 fat binary**）*。
+
+#### 示例精讲：同一个 `add` 在四栏里的样子
+
+**最小具体输入**：还是仓库里那个 kernel（[`../tvm-fatbin-lab/cuda/add.cu`](../tvm-fatbin-lab/cuda/add.cu)），逐元素加法。把它在四个视角下各写一遍。
+
+**栏①：CUDA kernel 签名（调用方看到的全部）**
+
+```cuda
+extern "C" __global__ void add(const float *a, const float *b, float *c, int n);
+// 宿主侧：add<<<grid, block>>>(dA, dB, dC, n);
+// 调用方不知道容器里有几份镜像
+```
+
+**栏②：fatbin image 列表（§4.1 组合 C 的产物）**
+
+```text
+add_with_ptx.fatbin
+├── image[0]: kind=ELF/cubin , arch=sm_75
+├── image[1]: kind=ELF/cubin , arch=sm_80
+└── image[2]: kind=PTX       , arch=compute_80
+```
+
+**栏③：IREE `hal.executable` + variant**
+
+> 语法示意（`layout` / binding 的写法随 IREE 版本变化，以你本地 `--compile-to=hal` 的 dump 为准）
+
+```mlir
+hal.executable private @add_dispatch {
+  hal.executable.variant public @cuda_nvptx_fb
+      target(#hal.executable.target<"cuda", "cuda-nvptx-fb">) {
+    hal.executable.export public @add ordinal(0)
+        layout(#hal.pipeline.layout<bindings = [
+          #hal.pipeline.binding<storage_buffer>,     // a
+          #hal.pipeline.binding<storage_buffer>,     // b
+          #hal.pipeline.binding<storage_buffer>]>)   // c
+    builtin.module { func.func @add() { /* 读 binding → 加 → 写回 */ return } }
+  }
+  hal.executable.variant public @vulkan_spirv_fb
+      target(#hal.executable.target<"vulkan", "vulkan-spirv-fb">) { /* 同一算子的另一份实现 */ }
+}
+```
+
+**栏④：选择键（谁在运行时挑）**
+
+```text
+CUDA :  cuModuleLoad*(fatbin) → 驱动读当前 GPU compute capability
+            → 在 image[] 里选一份（命不中 SASS 就 JIT image[2]）
+IREE :  hal.device 的 target 与 variant 的 target 匹配（+ 可选 condition）
+            → 选一个 variant → 按 ordinal/符号 lookup export → dispatch
+```
+
+**四栏并排**
+
+| 概念 | 栏① CUDA kernel | 栏② fatbin image | 栏③ IREE MLIR | 栏④ 选择键 |
+|------|-----------------|------------------|---------------|------------|
+| 逻辑可执行体 | 一个 `__global__ add` | 容器本身 | `hal.executable @add_dispatch` | 不参与选择，只用于查找 |
+| 一份具体实现 | 源码里只有一份 | `image[1]` = `sm_80` SASS | 一个 `hal.executable.variant` | compute capability ↔ `target` |
+| 可移植退路 | 无（源码层面看不见） | `image[2]` = `compute_80` PTX | PTX 为主的 `cuda-nvptx-fb` variant | 驱动 JIT ↔ condition / fallback |
+| 变的是哪一维 | — | **`sm_*` 架构** | **backend / target / 调参** | 两层可叠加（外层选 variant，内层选 image） |
+| 参数怎么进去 | 4 个 C 形参 | 已编进镜像的 `.param` / 常量区 | `layout` 里的 binding + push constant | ABI 固定，与变体无关 |
+| 入口 | `add<<<grid,block>>>` | 镜像里的 entry `add` | `hal.executable.export @add` + workgroup count | ordinal / 符号名 |
+| 失败模式 | — | 无可用 image → 加载失败 | 无可用 variant → 加载失败 | 都栽在「选择」这一步 |
+
+**一句收束**：栏① 到栏④ 说明**「一个逻辑 kernel、多份实现、一个廉价谓词来选」这套结构在两个体系里完全同构**；真正的差别只有两处——**变体轴不同**（`sm_*` vs backend/target），以及**参数传递被谁标准化**（CUDA 由 ABI 隐式约定，IREE 用 `hal.pipeline.layout` 显式写进 IR）。
+
+> **自测**：`add` 的第四个参数 `n` 在 IREE ABI 里最可能落到哪类资源上，为什么不是一个 binding？
 
 ### 6.2 同构映射表
 

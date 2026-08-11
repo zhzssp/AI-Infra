@@ -149,6 +149,62 @@ ONNX / …       ──frontend──►  Relax IRModule           ──relax.b
                               （符号/动态 shape）
 ```
 
+#### 示例精讲：同一个模型的静态 shape 与符号 shape
+
+最小具体输入：一个「conv2d → relu → global_avg_pool → dense」的分类骨架，输入是一张或多张 224×224 RGB 图。唯一变量是 **batch 维**。
+
+**A. Relay：batch 被写死成 1**
+
+```text
+#[version = "0.0.5"]
+def @main(%x: Tensor[(1, 3, 224, 224), float32],
+          %w: Tensor[(64, 3, 7, 7), float32],
+          %fc: Tensor[(1000, 64), float32]) -> Tensor[(1, 1000), float32] {
+  %0 = nn.conv2d(%x, %w, strides=[2, 2], padding=[3, 3, 3, 3]);
+                                    /* ty=Tensor[(1, 64, 112, 112), float32] */
+  %1 = nn.relu(%0);                 /* ty=Tensor[(1, 64, 112, 112), float32] */
+  %2 = nn.global_avg_pool2d(%1);    /* ty=Tensor[(1, 64, 1, 1), float32] */
+  %3 = squeeze(%2, axis=[2, 3]);    /* ty=Tensor[(1, 64), float32] */
+  nn.dense(%3, %fc)                 /* ty=Tensor[(1, 1000), float32] */
+}
+```
+
+注意每个 `/* ty=... */`：**中间张量的每一维都是编译期常量**。`(1, 64, 112, 112)` 这个 112 是类型推导时算死的整数，后面的内存规划、tile 因子、向量化宽度都可以直接依赖它。
+
+**B. Relax：batch 是符号变量 `n`**（TVMScript 打印形态，示意）
+
+```python
+@R.function
+def main(x: R.Tensor(("n", 3, 224, 224), "float32"),
+         w: R.Tensor((64, 3, 7, 7), "float32"),
+         fc: R.Tensor((1000, 64), "float32")) -> R.Tensor(("n", 1000), "float32"):
+    n = T.int64()                        # 符号 shape 变量，运行时才有值
+    with R.dataflow():
+        lv0 = R.nn.conv2d(x, w, strides=[2, 2], padding=[3, 3, 3, 3])
+        # lv0: R.Tensor((n, 64, 112, 112), "float32")   ← 第 0 维是表达式，不是常量
+        lv1 = R.nn.relu(lv0)
+        lv2 = R.mean(lv1, axis=[2, 3])   # R.Tensor((n, 64), "float32")
+        gv = R.matmul(lv2, R.permute_dims(fc))   # R.Tensor((n, 1000), "float32")
+        R.output(gv)
+    return gv
+```
+
+> API 形态随版本变化（算子命名空间、`R.nn.*` 覆盖范围、符号变量声明位置都改过），跑之前用本地 tvm 版本核对。
+
+**含义差异（这才是要背的部分）：**
+
+| 维度 | 静态 `(1, 3, 224, 224)` | 符号 `("n", 3, 224, 224)` |
+|------|------------------------|--------------------------|
+| shape 在 IR 里是什么 | 常量整数元组 | 符号变量 + 由算子推出的表达式 |
+| shape 推导 | 编译期一次算完，全部落成常量 | 编译期算出**符号表达式**，运行时代入 `n` |
+| 内存规划 | 可 AOT 算出每个 buffer 字节数与峰值 | 只能得到「关于 `n` 的表达式」，需运行时分配或按档位预留 |
+| kernel 特化 | 每个 shape 一份特化 kernel，性能上限高 | 一份 kernel 覆盖多个 batch；要极致性能仍需按 bucket 特化 |
+| batch 从 1 变 8 | 重新编译，或预编译多份产物 | 同一份产物直接跑 |
+| 执行器 | `graph_executor` 按拓扑序调用即可 | 需要 VM：**shape 计算本身也是要执行的指令** |
+| 影响的图级优化 | 常量折叠、静态内存规划全部可用 | 静态内存规划被削弱（§2.4 末尾那句的具体所指） |
+
+> **自测**：把上面 B 里的 `lv2` 换成 `R.reshape(lv1, (n * 64,))`，运行时要用到哪个符号变量的值，为什么这件事 graph executor 做不了？
+
 ### 2.2 算子融合：四类规则（重点）
 
 > **这是「子图划分」问题最经典的解法之一，必须吃透。**  
@@ -215,6 +271,64 @@ ONNX / …       ──frontend──►  Relax IRModule           ──relax.b
 
 论文实测融合单独贡献约 **1.2×–2×**（见 [`05-tvm.md`](./paper-notes/05-tvm.md)）；在带宽受限的 GPU/加速器上，省掉的是中间张量的全局内存往返。
 
+#### 示例精讲：`conv2d → bias_add → relu` 的融合前后
+
+最小具体输入：单张 56×56、64 通道特征图，3×3 卷积保持尺寸。
+
+- `%x`：`(1, 64, 56, 56)` float32
+- `%w`：`(64, 64, 3, 3)` float32
+- `%b`：`(64,)` float32
+- 输出与中间张量同形：`(1, 64, 56, 56)` = 200704 元素 = **784 KiB**（下面所有数字都以这个「一张中间张量 = 784 KiB」为单位）
+
+**融合前的 Relay 文本 IR**（`FuseOps` 之前，三个独立算子调用）：
+
+```text
+#[version = "0.0.5"]
+def @main(%x: Tensor[(1, 64, 56, 56), float32],
+          %w: Tensor[(64, 64, 3, 3), float32],
+          %b: Tensor[(64), float32]) -> Tensor[(1, 64, 56, 56), float32] {
+  %0 = nn.conv2d(%x, %w, padding=[1, 1, 1, 1], channels=64, kernel_size=[3, 3]);
+                              /* T1: Tensor[(1, 64, 56, 56), float32]，要落 DRAM */
+  %1 = nn.bias_add(%0, %b);   /* T2: Tensor[(1, 64, 56, 56), float32]，要落 DRAM */
+  nn.relu(%1)                 /* Y */
+}
+```
+
+**融合后**：`FuseOps` 把三个节点包进一个带 `Primitive=1` 标记的内联函数，这一整个函数才是后面 codegen 的**一个 kernel**（打印细节示意）：
+
+```text
+def @main(%x: Tensor[(1, 64, 56, 56), float32], %w, %b) {
+  %2 = fn (%p0, %p1, %p2, Primitive=1) -> Tensor[(1, 64, 56, 56), float32] {
+         %0 = nn.conv2d(%p0, %p1, padding=[1, 1, 1, 1], channels=64, kernel_size=[3, 3]);
+         %1 = nn.bias_add(%0, %p2);
+         nn.relu(%1)          /* T1/T2 只存在于这个函数内部，不再是图上的张量 */
+       };
+  %2(%x, %w, %b)              /* 一次 kernel 调用 */
+}
+```
+
+**数一下访存次数**（只数中间/输出张量；`%x`/`%w`/`%b` 两边都要读，可约掉）：
+
+| | kernel 数 | 中间张量落地 | 全局访存（× 784 KiB） | 合计 |
+|--|----------|-------------|---------------------|------|
+| 融合前 | 3 | T1、T2 各一次 | 写 T1 + 读 T1 + 写 T2 + 读 T2 + 写 Y = 5 | ≈ 3.83 MiB |
+| 融合后 | 1 | 无（累加器/寄存器里就地做完 bias、relu） | 写 Y = 1 | ≈ 784 KiB |
+
+省掉的正是 **4 次 784 KiB 往返 ≈ 3.06 MiB**（等于输出张量体积的 4 倍），外加 2 次 kernel launch。卷积本身的算力没变——所以这类融合在**带宽受限**时收益最明显，在完全算力受限的大卷积上收益就小。
+
+**对照表：算子类别 → 能否作为融合起点 / 能否被吸收**
+
+「起点」= fusion group 里决定循环骨架的**主节点**（TVM 里按 pattern kind 最高者充当）；「被吸收」= 作为附属计算贴到别人的循环里。
+
+| 类别 | 能作为融合起点 | 能被别人吸收 | 典型位置 |
+|------|---------------|-------------|---------|
+| **injective** | 可（一串 injective 自成一组，主节点就是其中之一） | 可，最灵活：既能被 complex-out 吸到输出侧，也能被 reduction 吸到输入侧 | 链首、链尾、epilogue |
+| **reduction** | 可，且通常是本组末端锚点（吃掉输入侧 injective） | 一般不被 complex-out 组吸收 | 组的末端 |
+| **complex-out-fusable** | 可，最典型的主节点：循环骨架由 conv/dense 决定 | 不被吸收（不会退化成别人的附属） | 组的核心 |
+| **opaque** | 只能自成单节点组 | 不可 | 组边界本身 |
+
+> **自测**：如果把上例改成 `conv2d → relu → conv2d`，`FuseOps` 会切出几个 group，中间张量落地几次？
+
 #### 2.2.4 为什么这是"子图划分"的经典解
 
 1. **用语义类别代替穷举模式**：不维护 `conv+bn+relu`、`depthwise+bias`……无限模式表，而是维护四类 + 规则——模式爆炸变成分类问题。
@@ -254,6 +368,77 @@ ONNX / …       ──frontend──►  Relax IRModule           ──relax.b
   dense → NC            NCHW 偏好           边界处保留转换
 ```
 
+#### 示例精讲：两节点图 `conv2d → relu` 的 transform 插入与外推
+
+最小具体输入：模型从 TensorFlow 侧导入，全图是 `NHWC`；目标是 CPU，`nn.conv2d` 的高效实现偏好 `NCHW`（再往下常是 `NCHWc`）。图只有两个节点。
+
+**阶段 0：原样导入，全图 NHWC**
+
+```text
+def @main(%x: Tensor[(1, 56, 56, 64), float32],       /* NHWC */
+          %w: Tensor[(3, 3, 64, 64), float32]) {      /* HWIO */
+  %0 = nn.conv2d(%x, %w, data_layout="NHWC", kernel_layout="HWIO",
+                 padding=[1, 1, 1, 1]);               /* (1, 56, 56, 64) */
+  nn.relu(%0)                                        /* (1, 56, 56, 64) */
+}
+```
+
+没有冲突，但 conv 跑在不被偏好的 layout 上——慢在算子实现里，图上看不出来。
+
+**阶段 1：只把 conv 换成偏好 layout，机械地在它两侧插 `layout_transform`**
+
+```text
+def @main(%x: Tensor[(1, 56, 56, 64), float32], %w: Tensor[(3, 3, 64, 64), float32]) {
+  %0 = layout_transform(%x, src_layout="NHWC", dst_layout="NCHW");  /* 数据转入 */
+  %1 = layout_transform(%w, src_layout="HWIO", dst_layout="OIHW");  /* 权重转入 */
+  %2 = nn.conv2d(%0, %1, data_layout="NCHW", kernel_layout="OIHW",
+                 padding=[1, 1, 1, 1]);                             /* (1,64,56,56) */
+  %3 = layout_transform(%2, src_layout="NCHW", dst_layout="NHWC");  /* 转回给 relu */
+  nn.relu(%3)
+}
+```
+
+3 个 transform，每个都是一次「全量读 + 全量写」的纯搬运。**这一步单独看是负优化**——conv 快了，但多了两趟 784 KiB 的数据重排。
+
+**阶段 2：传播 + 外推到边界**
+
+关键判据：`nn.relu` 是 **layout-agnostic** 的 injective 算子，逐元素计算，换 layout 只需改它的张量类型、不需改语义。于是把 conv 的 `NCHW` 偏好沿边**传播**给 relu，把转换推到图边界；权重侧的 transform 输入全是常量，被常量折叠（§2.4）直接吃掉：
+
+```text
+def @main(%x: Tensor[(1, 56, 56, 64), float32]) {
+  %0 = layout_transform(%x, src_layout="NHWC", dst_layout="NCHW"); /* 输入边界，保留 */
+  %1 = nn.conv2d(%0, %w_oihw /* 折叠后已是 OIHW 常量 */, data_layout="NCHW",
+                 padding=[1, 1, 1, 1]);                            /* (1,64,56,56) */
+  %2 = nn.relu(%1);                                                /* 在 NCHW 上逐元素 */
+  layout_transform(%2, src_layout="NCHW", dst_layout="NHWC")       /* 输出边界，保留 */
+}
+```
+
+```python
+# Relay 侧入口（示意）
+mod = relay.transform.ConvertLayout({"nn.conv2d": ["NCHW", "default"]})(mod)
+```
+
+> API 形态随版本变化（Relax 侧是另一套 layout/布局重写 pass，算子名与参数键都不同），跑之前用本地 tvm 版本核对。
+
+**对照表**
+
+| 阶段 | conv 的 layout | relu 的 layout | transform 节点数 | 额外搬运 | 评价 |
+|------|---------------|---------------|-----------------|---------|------|
+| 0 原样导入 | NHWC（非偏好） | NHWC | 0 | 0 | conv 慢 |
+| 1 只转 conv | NCHW | NHWC | 3（数据 2 + 权重 1） | 2 次张量往返（权重那次也在） | 可能整体更慢 |
+| 2 传播 + 外推 | NCHW | NCHW | 2（都在图边界） | 只在输入/输出边界 | 子图内部零转换 |
+
+**算子对 layout 的三种态度**（决定传播能推多远）：
+
+| 态度 | 例子 | 传播时怎么处理 |
+|------|------|---------------|
+| layout-sensitive | `nn.conv2d`、`nn.dense`、`nn.max_pool2d` | 声明偏好，是传播的**源头** |
+| layout-agnostic | `nn.relu`、`add`、`multiply` | 跟着上游走，只改类型 |
+| layout-fixed（带轴参数） | `concatenate(axis=1)`、`softmax(axis=-1)`、`squeeze(axis=[2,3])` | 能跟，但**必须同步改写 axis**；改不动就在此处停下、插 transform |
+
+> **自测**：若把 relu 换成 `concatenate(axis=3)`（NHWC 下的通道拼接），阶段 2 里那 2 个 transform 还能都留在边界吗？要改什么才行？
+
 #### 2.3.2 与研究问题②的关系
 
 根 README 研究问题②：**跨后端 layout / 量化兼容**。
@@ -274,6 +459,59 @@ ONNX / …       ──frontend──►  Relax IRModule           ──relax.b
 | **静态内存规划** | 预知中间张量生命周期，复用 buffer（类似寄存器分配，对象是张量） | 经典 CNN shape 静态 → 可 AOT 规划峰值显存 |
 
 这两项不是本文重点，但要知道它们和图融合、layout 一起，构成"图级四件套"。动态 shape（Relax）会削弱"完全静态规划"的假设——这又是 Relay→Relax 的动机之一。
+
+#### 示例精讲：常量折叠的小图 + 3 节点链的 buffer 复用
+
+**一、常量折叠：判据是「本节点所有输入都是常量」**
+
+最小具体输入：conv 后面跟一个 BatchNorm 被展开成的缩放链，`%gamma`、`%var` 是权重里的常量。
+
+```text
+【折叠前】
+%0 = add(%var /* const (64,) */, 1e-05f);      /* 输入全常量 → 可折 */
+%1 = sqrt(%0);                                  /* 输入全常量 → 可折 */
+%2 = divide(%gamma /* const (64,) */, %1);      /* 输入全常量 → 可折 */
+%3 = nn.conv2d(%x, %w);                         /* 依赖运行时输入 %x → 不可折 */
+%4 = multiply(%3, %2);                          /* 一个输入非常量 → 不可折 */
+
+【折叠后】
+%0 = nn.conv2d(%x, %w);
+%1 = multiply(%0, meta[relay.Constant] /* 编译期算好的 (64,) 张量 */);
+```
+
+三个节点在编译期被求值成一个常量张量，运行时图从 5 个节点变成 2 个。要点：折叠是**沿边向下传染**的（`%0` 折了 `%1` 才能折），且不折 opaque / 有副作用 / 随机算子。上一节 layout 例子里权重那个 `layout_transform` 消失，走的就是这条路。
+
+**二、静态内存规划：3 节点链的 storage id 复用**
+
+最小具体输入：`conv2d → relu → conv2d`，每个中间张量都是 `(1, 64, 56, 56)` = 784 KiB。
+
+```text
+%t1 = nn.conv2d(%x, %w1)   784 KiB   生于 step1，最后一次被读是 step2
+%t2 = nn.relu(%t1)         784 KiB   生于 step2，最后一次被读是 step3
+%t3 = nn.conv2d(%t2, %w2)  784 KiB   生于 step3，是图输出（活到最后）
+```
+
+按拓扑序线性扫描 + 空闲块 free list：
+
+| step | 事件 | 能复用谁 | 分配 | storage_id |
+|------|------|---------|------|-----------|
+| 1 | `%t1` 需要输出 buffer | 池子空 | 新开 **S0** | `%t1` → 0 |
+| 2 | `%t2` 需要输出 buffer | `%t1` 此刻**仍活着**（正被读），不能占 | 新开 **S1** | `%t2` → 1 |
+| 3 | `%t3` 需要输出 buffer | step2 结束后 `%t1` 死亡，S0 空闲且 ≥784 KiB | 复用 **S0** | `%t3` → 0 |
+
+```text
+峰值显存 = 2 × 784 KiB ≈ 1.53 MiB      （朴素每张量各一块则是 3 × 784 KiB ≈ 2.30 MiB）
+
+时间 →      step1        step2        step3
+S0        [ %t1 写 ][ %t1 读 ]······[ %t3 写 ]     ← 同一块内存，两个张量分时复用
+S1                  [ %t2 写 ][ %t2 读 ]
+```
+
+这份结果会直接落到 graph JSON 的 `storage_id` 字段（见 §6.2 的示例精讲）：**storage_id 相同 = 共享同一块内存**，`GraphModule` 初始化时按去重后的 id 申请存储池。
+
+注意两件事：一是相邻算子不默认 in-place（`%t2` 不能直接盖 `%t1`，除非算子明确支持原地写），所以最少也要两块；二是把 `conv+relu` 融成一个 kernel 后，`%t1` 连图上张量都不是了——**融合和内存规划是叠加收益**。
+
+> **自测**：如果第 3 个节点改成 `add(%t1, %t2)`（残差），上表的 storage_id 分配会变成什么，峰值是多少？
 
 ---
 
@@ -671,6 +909,92 @@ tensorize 才能匹配成功
 
 layout 决策与 tensorize **不独立**——这又回到第 2.3 节：图级 layout 在塑造算子级搜索空间。
 
+#### 示例精讲：1024³ matmul 用 16×16×16 intrinsic 做 tensorize
+
+最小具体输入：`C[1024,1024] = A[1024,1024] × B[1024,1024]`，硬件提供一条 `gemm_16x16x16` 指令（语义 = 两个 16×16 小块相乘累加到 16×16 累加块）。
+
+**第一步：把循环切成「外层 + 恰好 16×16×16 的内三层」**
+
+```python
+M = N = K = 1024
+A = te.placeholder((M, K), name="A")
+B = te.placeholder((K, N), name="B")
+k = te.reduce_axis((0, K), name="k")
+C = te.compute((M, N), lambda i, j: te.sum(A[i, k] * B[k, j], axis=k), name="C")
+
+s = te.create_schedule(C.op)
+i, j = C.op.axis
+(kk,) = s[C].op.reduce_axis
+io, ii = s[C].split(i, factor=16)
+jo, ji = s[C].split(j, factor=16)
+ko, ki = s[C].split(kk, factor=16)
+s[C].reorder(io, jo, ko, ii, ji, ki)     # 内三层 (ii, ji, ki) 正好是 16×16×16
+```
+
+**tensorize 前的循环 nest**（`tvm.lower(s, [A, B, C], simple_mode=True)` 的结构，示意）：
+
+```text
+for io in 0..63:                 # 1024/16
+  for jo in 0..63:
+    for ko in 0..63:
+      for ii in 0..15:               # ┐
+        for ji in 0..15:              # ├ 待被替换的 16×16×16 循环块
+          for ki in 0..15:            # ┘
+            C[io*16+ii, jo*16+ji] += A[io*16+ii, ko*16+ki] * B[ko*16+ki, jo*16+ji]
+```
+
+**第二步：声明 intrinsic（语义 + lowering 两半）**
+
+```python
+def intrin_gemm_16x16x16():
+    a = te.placeholder((16, 16), name="a")
+    b = te.placeholder((16, 16), name="b")
+    kr = te.reduce_axis((0, 16), name="kr")
+    # ① 语义：这块小计算在数学上等于什么（必须与内三层同构）
+    c = te.compute((16, 16), lambda x, y: te.sum(a[x, kr] * b[kr, y], axis=kr), name="c")
+    # strides=[stride, 1] 表示最内维连续；offset_factor 表示起始地址按 16 元素对齐
+    Ab, Bb, Cb = [tvm.tir.decl_buffer(t.shape, t.dtype, name=t.name + "b",
+                                      offset_factor=16,
+                                      strides=[te.var("s_" + t.name), 1])
+                  for t in (a, b, c)]
+
+    def intrin_func(ins, outs):      # ② lowering：变成哪条硬件调用
+        ib = tvm.tir.ir_builder.create()
+        ib.emit(tvm.tir.call_extern("int32", "gemm_16x16x16",
+                                    outs[0].access_ptr("rw"),
+                                    ins[0].access_ptr("r"), ins[1].access_ptr("r")))
+        return ib.get()
+
+    return te.decl_tensor_intrin(c.op, intrin_func, binds={a: Ab, b: Bb, c: Cb})
+
+s[C].tensorize(ii, intrin_gemm_16x16x16())   # 从 ii 往内的整块被替换
+```
+
+> API 形态随版本变化：TensorIR 路线是 `tir.TensorIntrin.register(...)` + `sch.tensorize(block_or_loop, "intrin_name")`，`te.decl_tensor_intrin` 属经典 TE 路线。跑之前用本地 tvm 版本核对。
+
+**tensorize 后**：内三层整体消失，换成一次外部调用：
+
+```text
+for io in 0..63:
+  for jo in 0..63:
+    for ko in 0..63:
+      gemm_16x16x16(&C[io*16, jo*16], &A[io*16, ko*16], &B[ko*16, jo*16])
+      # 16×16×16 = 4096 次乘加压成一条指令（或一段微码）
+```
+
+**对 layout / schedule 的要求**（tensorize 失败几乎全是这四条之一）：
+
+| 要求 | 具体内容 | 不满足的后果 |
+|------|---------|-------------|
+| **尺寸整除** | M/N/K 都要能被 16 整除；否则需 pad 或留 tail 循环 | 边界块匹配不上，报无法 tensorize |
+| **循环块同构** | 内层迭代范围、索引表达式必须与 intrinsic 的 TE 描述逐项对齐（这就是为什么要先 `reorder`） | 匹配失败 |
+| **连续性与对齐** | `decl_buffer` 的 `strides=[s, 1]` 要求最内维连续，`offset_factor` 要求起始地址对齐 | 生成非法地址，或退化到极慢路径 |
+| **专用 layout / fragment** | TensorCore 类指令的操作数在 fragment 里，有 row_major/col_major 之分，通常要先 `cache_read` 到 `"wmma.matrix_a"` / `"wmma.matrix_b"` 这类 memory scope | 根本无法发出 MMA |
+
+最后一条正是 §2.3 的回声：图级 layout 若没把张量摆成 MMA 友好形态，算子级再怎么 tile 也 tensorize 不了。
+
+> **自测**：若 K = 1000（不被 16 整除），你有哪两种做法让主体循环仍能 tensorize？各自代价是什么？
+
 ---
 
 ## 第 5 章 AutoTVM / Ansor / MetaSchedule：搜索闭环
@@ -758,6 +1082,99 @@ sch, args = task.apply_best("matmul.json")
 
 对学习路径：先跑通 AutoTVM + log 复用（验收任务），再读官方 MetaSchedule 教程把名词映射过去即可。
 
+#### 示例精讲：同一个 matmul 的三套「定义 → 调优 → apply best」
+
+最小具体输入：`C = A × B`，`M = N = K = 1024`，float32，target `llvm`。三段代码做的是同一件事，差别只在**谁定义搜索空间**。
+
+**A. AutoTVM：人写 template，knob 显式**
+
+```python
+import tvm
+from tvm import te, autotvm
+
+@autotvm.template("demo/matmul")                      # ① 定义：空间写在 template 里
+def matmul(M, N, K):
+    A = te.placeholder((M, K), name="A")
+    B = te.placeholder((K, N), name="B")
+    k = te.reduce_axis((0, K), name="k")
+    C = te.compute((M, N), lambda i, j: te.sum(A[i, k] * B[k, j], axis=k), name="C")
+    s = te.create_schedule(C.op)
+    cfg = autotvm.get_config()
+    i, j = s[C].op.axis
+    cfg.define_split("tile_i", i, num_outputs=2)      # ← knob 由人枚举
+    cfg.define_split("tile_j", j, num_outputs=2)
+    io, ii = cfg["tile_i"].apply(s, C, i)
+    jo, ji = cfg["tile_j"].apply(s, C, j)
+    s[C].reorder(io, jo, ii, ji)
+    return s, [A, B, C]
+
+task = autotvm.task.create("demo/matmul", args=(1024, 1024, 1024), target="llvm")
+opt = autotvm.measure_option(builder="local", runner=autotvm.LocalRunner(number=5))
+autotvm.tuner.XGBTuner(task).tune(                    # ② 调优
+    n_trial=64, measure_option=opt,
+    callbacks=[autotvm.callback.log_to_file("matmul.autotvm.log")])
+
+with autotvm.apply_history_best("matmul.autotvm.log"):   # ③ apply best
+    s, args = matmul(1024, 1024, 1024)
+    func = tvm.build(s, args, target="llvm")
+```
+
+**B. Ansor：只注册「算什么」，空间由编译器推**
+
+```python
+from tvm import auto_scheduler
+
+@auto_scheduler.register_workload                     # ① 定义：只有 TE compute
+def matmul(M, N, K):
+    A = te.placeholder((M, K), name="A")
+    B = te.placeholder((K, N), name="B")
+    k = te.reduce_axis((0, K), name="k")
+    C = te.compute((M, N), lambda i, j: te.sum(A[i, k] * B[k, j], axis=k), name="C")
+    return [A, B, C]                                  # ← 没有一行 schedule
+
+task = auto_scheduler.SearchTask(func=matmul, args=(1024, 1024, 1024), target="llvm")
+task.tune(auto_scheduler.TuningOptions(               # ②
+    num_measure_trials=64,
+    measure_callbacks=[auto_scheduler.RecordToFile("matmul.ansor.json")]))
+sch, args = task.apply_best("matmul.ansor.json")       # ③
+func = tvm.build(sch, args, target="llvm")
+```
+
+**C. MetaSchedule：对象换成 TensorIR，规则可插拔**
+
+```python
+from tvm import meta_schedule as ms
+
+A, B, C = matmul(1024, 1024, 1024)                             # 复用上面 B 段的 TE compute
+mod = tvm.IRModule({"main": te.create_prim_func([A, B, C])})   # ① 定义：TensorIR
+target = "llvm --num-cores=8"
+
+database = ms.tune_tir(mod=mod, target=target,                  # ②
+                       max_trials_global=64, work_dir="./ms_work")
+
+sch = ms.tir_integration.compile_tir(database, mod, target)     # ③
+func = tvm.build(sch.mod, target=target)
+```
+
+> API 形态随版本变化，MetaSchedule 这段尤其明显（`tune_tir` 的参数名、返回值，以及 `compile_tir` 所在模块都改过几轮；端到端用法是 `ms.relax_integration` / `MetaScheduleApplyDatabase` pass）。跑之前用本地 tvm 版本核对。日志/数据库的字段布局这里不展开，别按记忆写死格式。
+
+**三者并排**
+
+| | AutoTVM | Ansor（auto_scheduler） | MetaSchedule |
+|--|---------|------------------------|--------------|
+| 作用对象 | TE + schedule template | TE compute（workload） | TensorIR `IRModule` |
+| **谁定义搜索空间** | **人**：`define_split` / `define_knob` 枚举 | **编译器**：sketch 规则推导 | **编译器 + 可插拔规则**：人能加 Schedule Rule 约束 |
+| **谁生成候选** | 在 knob 笛卡尔积里采样 | sketch 生成骨架 + 随机填注解，再演化 | Schedule Rule 生成 trace + Postproc 校验 + 演化 |
+| **代价模型来源** | XGBoost，特征取自 lower 后的循环结构 | XGBoost 等，特征取自程序特征向量 | 可插拔（XGB / random / 自定义 PyCostModel） |
+| 真机 measure | Local / RPC runner | 同一套 measure 基建 | 同一套 measure 基建（Builder + Runner） |
+| 结果落盘 | tuning log 文件 | record 文件 | Database（workload + trace 记录） |
+| 复用入口 | `apply_history_best` | `apply_best` | `compile_tir` / `ApplyDatabase` pass |
+| 今天的定位 | 教学与经典闭环 | 证明「不写 template 也能搜」 | 统一框架，新工作首选 |
+
+一句话串起来：**AutoTVM 让人划定空间、机器挑点；Ansor 让机器同时划空间和挑点；MetaSchedule 把「划空间」变成可插拔规则，于是既能像 AutoTVM 那样被约束，也能像 Ansor 那样自动生成。**
+
+> **自测**：给一个厂商新加的张量指令（第 4 章），三套框架里你分别要动哪一处才能让搜索**自动尝试** tensorize？
+
 ### 5.6 Tuning log 复用：怎么回答「配置组合爆炸」
 
 ```
@@ -822,6 +1239,82 @@ sch, args = task.apply_best("matmul.json")
 ```
 
 特点：简单、开销可预测、极适合静态图推理。动态控制流弱 → 复杂模型可走 **VM**。
+
+#### 示例精讲：2 节点模型从 build 到 `get_output` 的全链路
+
+最小具体输入：`y = relu(dense(x, w))`，`x: (1, 128)`，`w: (64, 128)`，输出 `(1, 64)`。
+
+```python
+import numpy as np, tvm
+from tvm import relay
+from tvm.contrib import graph_executor
+
+x = relay.var("x", shape=(1, 128), dtype="float32")
+w = relay.var("w", shape=(64, 128), dtype="float32")
+f = relay.Function([x, w], relay.nn.relu(relay.nn.dense(x, w)))
+mod = tvm.IRModule.from_expr(f)
+params = {"w": tvm.nd.array(np.random.rand(64, 128).astype("float32"))}
+
+lib = relay.build(mod, target="llvm", params=params)   # → graph + lib + params 三合一
+```
+
+**build 产物里 graph JSON 的关键字段**（字段值为示意，以本地 `lib.get_graph_json()` 为准；`dense + relu` 已被 §2.2 的规则融成**一个** `tvm_op`）：
+
+```json
+{
+  "nodes": [
+    {"op": "null",   "name": "x", "inputs": []},
+    {"op": "null",   "name": "w", "inputs": []},
+    {"op": "tvm_op", "name": "tvmgen_default_fused_nn_dense_nn_relu",
+     "inputs": [[0, 0, 0], [1, 0, 0]],
+     "attrs": {"func_name": "tvmgen_default_fused_nn_dense_nn_relu",
+               "num_inputs": "2", "num_outputs": "1", "flatten_data": "0"}}
+  ],
+  "arg_nodes": [0, 1],
+  "heads": [[2, 0, 0]],
+  "node_row_ptr": [0, 1, 2, 3],
+  "attrs": {
+    "dltype":     ["list_str",   ["float32", "float32", "float32"]],
+    "shape":      ["list_shape", [[1, 128], [64, 128], [1, 64]]],
+    "storage_id": ["list_int",   [0, 1, 2]]
+  }
+}
+```
+
+字段怎么读：`op: "null"` = 占位输入（含权重），`arg_nodes` 列出它们；`inputs` 里的 `[节点号, 输出号, 版本号]` 就是数据依赖边；`func_name` 是去 `lib` 里查 PackedFunc 的**键**；`heads` 指出哪个输出是图输出；`storage_id` 就是 §2.4 那份内存规划的结果。
+
+**调用链**
+
+```python
+dev = tvm.cpu(0)
+gmod = graph_executor.GraphModule(lib["default"](dev))
+gmod.set_input("x", tvm.nd.array(np.zeros((1, 128), "float32")))   # 权重已随 build 预置
+gmod.run()
+out = gmod.get_output(0).numpy()        # (1, 64)
+```
+
+**对象关系树**
+
+```text
+relay.build(...) → ExecutorFactoryModule            （即上面的 lib）
+├─ graph_json : str                 ← 上面那段 JSON：拓扑、dtype/shape、storage_id
+├─ lib        : runtime.Module       ← 编译产物；按名字取出 PackedFunc
+│    └─ "tvmgen_default_fused_nn_dense_nn_relu"   ← 正是 JSON 里的 func_name
+└─ params     : Dict[str, NDArray]   ← {"w": ...}
+
+lib["default"](dev) → runtime.Module  （已绑定设备的 graph executor 实例）
+└─ GraphModule 包一层 Python 便捷接口
+   ├─ 初始化：解析 graph_json → 拓扑序 + 按去重 storage_id 申请存储池 → 预置 params
+   ├─ set_input(name, data)  → 拷进该 arg_node 对应的槽位 NDArray
+   ├─ run()                  → for node in 拓扑序:
+   │                              lib.get_function(node.func_name)(in_DLTensor..., out_DLTensor...)
+   │                            每次调用就是一次 PackedFunc 派发（§6.1）
+   └─ get_output(i)          → 读 heads[i] 指向的槽位
+```
+
+一句话串起来：**JSON 给顺序和内存，lib 给函数体，PackedFunc 给统一调用约定**——executor 本身不认识 dense 也不认识 CUDA，它只会「按序、按名字、拿着 DLTensor 指针调函数」。这就是为什么换后端不用改 executor。
+
+> **自测**：`storage_id` 里三个值若变成 `[0, 1, 0]`，说明什么被复用了？在这个 2 节点模型里为什么不会发生？
 
 ### 6.3 VM 路径（Relay VM / Relax VM）
 

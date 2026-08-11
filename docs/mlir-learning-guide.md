@@ -138,6 +138,48 @@ Operation（唯一的语义单元）
 
 Attribute 与 Type 的分工：Type 描述"运行时值长什么样"，Attribute 描述"编译期已知的静态信息"。例如 `arith.constant {value = 42 : i32}` 里，结果类型是 `i32`，常量本身是 Attribute。
 
+#### 示例精讲：把一段 IR 逐字段拆成 Value / Type / Attribute
+
+> 目的：拿到任何一行 MLIR，都能立刻指出「哪个是值、哪个是类型、哪个是编译期常量」。
+
+```mlir
+#map = affine_map<(d0, d1) -> (d0, d1)>        // ① 属性别名：一个 AffineMapAttr
+
+func.func @demo(%arg0: i32) -> i32 {
+  %c = arith.constant 42 : i32                 // ② 结果 %c；类型 i32；值 42 是 Attribute
+  %s = arith.addi %arg0, %c : i32              // ③ 两个 Operand，一个 Result
+  %t = arith.muli %s, %c : i32                 // ④ %c 被第二次使用（use-def 是图）
+  return %t : i32
+}
+```
+
+逐字段对号入座：
+
+| 文本片段 | 是什么 | 说明 |
+|----------|--------|------|
+| `%arg0` | **Value**（BlockArgument） | 定义点是入口 Block 的参数，不是某个 op 的结果 |
+| `%c` / `%s` / `%t` | **Value**（OpResult） | 定义点是各自那条 op |
+| `i32` | **Type** | 挂在 Value 上，描述运行时长什么样 |
+| `42` | **Attribute**（`IntegerAttr`） | 编译期就知道，存在 op 的属性字典里，**不是** Value |
+| `#map` | **Attribute**（`AffineMapAttr`） | 属性可以起别名复用，本身不可变、uniqued |
+| `arith.addi` | **Operation** | OpName = `dialect.opname` |
+
+关键区别：`42` 写在 op 里是 Attribute，但 `%c` 是它**物化出来的 Value**。所以下面两句含义不同：
+
+```mlir
+%c = arith.constant 42 : i32     // 有一个 SSA 值 %c，可被多处使用
+// 而属性 42 本身没有 SSA 名字，不能被别的 op 当操作数直接引用
+```
+
+`%c` 的 use-def 链（图，不是树）：
+
+```text
+%c ──use──▶ arith.addi (%arg0, %c)
+   └─use──▶ arith.muli (%s,   %c)
+```
+
+> **自测**：把 `%c` 删掉但保留 `arith.addi %arg0, %c`，verifier 会报什么类别的错——类型错还是定义缺失？
+
 > **速记**：[notes/mlir-type-attr-interface.md](./notes/mlir-type-attr-interface.md) —— Type≠必须内存布局；Attribute 值种类内置、key 由 Op 约定；Interface≠fold，是跨 dialect 能力契约。
 
 ### 2.3 Block arguments 为何替代 phi
@@ -163,6 +205,65 @@ cf.br ^bb3(%b : i32)     // 来自 bb2
 - phi 节点在概念上"不属于任何一个前驱"，对变换不友好；block argument 把汇合点固定在块入口。
 - 嵌套 Region 时，外层值通过 Region 参数或捕获进入内层，模型一致。
 - Verifier 更容易检查：每个前驱传给后继的参数个数/类型必须匹配。
+
+#### 示例精讲：`max0` —— 同一个汇合点，phi 版与 block argument 版
+
+> 目的：把「汇合点接收不同前驱的值」这件事，在两套 IR 里各看一遍，并能默画对象树。
+
+源语义：`int max0(int x) { return x > 0 ? x : 0; }`
+
+**LLVM IR（phi 版）**
+
+```llvm
+define i32 @max0(i32 %x) {
+entry:
+  %cmp = icmp sgt i32 %x, 0
+  br i1 %cmp, label %pos, label %neg
+pos:
+  br label %exit
+neg:
+  br label %exit
+exit:
+  %r = phi i32 [ %x, %pos ], [ 0, %neg ]   ; ← 汇合：按"从哪来"选值
+  ret i32 %r
+}
+```
+
+**MLIR（block argument 版）**
+
+```mlir
+func.func @max0(%x: i32) -> i32 {
+  %c0 = arith.constant 0 : i32
+  %cmp = arith.cmpi sgt, %x, %c0 : i32
+  cf.cond_br %cmp, ^exit(%x : i32), ^exit(%c0 : i32)   // ← 由前驱"把值传进去"
+^exit(%r: i32):
+  return %r : i32
+}
+```
+
+两者语义相同，差别只在**谁负责表达这次汇合**：
+
+| | LLVM phi | MLIR block argument |
+|--|----------|---------------------|
+| 汇合写在哪 | 后继块开头的 `phi`，列出 `(值, 来自哪个前驱)` | 后继块的**参数列表** `^exit(%r: i32)` |
+| 谁提供值 | phi 自己去"回看"前驱 | **前驱的终结符**在跳转时传参 `^exit(%x : i32)` |
+| 加一个前驱要改哪 | 改 phi 的 incoming 列表 | 改新前驱的终结符即可 |
+| verifier 检查 | incoming 数与前驱数一致 | 每个前驱传的参数个数/类型与块参数匹配 |
+
+MLIR 侧的对象树（Pass 拿到 `func.func` 时看到的就是这棵树）：
+
+```text
+func.func @max0                  ← Operation
+└─ Region
+   ├─ Block ^entry  args: %x
+   │    ├─ arith.constant
+   │    ├─ arith.cmpi
+   │    └─ cf.cond_br            ← Terminator，带两个后继 + 各自实参
+   └─ Block ^exit   args: %r     ← 汇合点：值从这里"进入"
+        └─ func.return
+```
+
+> **自测**：若把 `cf.cond_br` 的一侧实参从 `%c0` 改成一个 `f32` 值，报错会发生在 verifier 的哪一条规则上？
 
 读 [`llvm-learning-guide.md`](./llvm-learning-guide.md) §2.3 时，记住这句话：**MLIR 用 block argument 改进了 LLVM 的 phi 表示，语义等价、结构更干净**。
 
@@ -361,6 +462,67 @@ One-Shot Bufferize 的扩展点：每个可 bufferize 的 op 实现：
 
 实现常常放在 **External Model**（另一编译单元），避免 dialect 定义与 transforms 循环依赖。
 
+#### 示例精讲：四个接口各看一眼「它让通用 Pass 免于认 op 名」
+
+> 目的：每个接口配一段最小 IR + 一句「通用 Pass 因此能做什么」。
+
+**① MemoryEffectsOpInterface —— 能不能删**
+
+```mlir
+%s = arith.addi %a, %b : i32          // Pure：无副作用
+memref.store %s, %buf[%i] : memref<8xi32>   // 有 Write 效应
+```
+
+通用 DCE 的判断逻辑（伪代码）——它不认识 `arith.addi`，只问效应：
+
+```cpp
+if (isMemoryEffectFree(op) && op->use_empty())
+  rewriter.eraseOp(op);      // %s 若没人用可删；store 有 Write 效应，不能删
+```
+
+**② LoopLikeOpInterface —— 是不是循环**
+
+```mlir
+scf.for %i = %lb to %ub step %step iter_args(%acc = %init) -> (i32) {
+  %n = arith.addi %acc, %i : i32
+  scf.yield %n : i32
+}
+```
+
+接口把「归纳变量 / 上下界 / 步长 / 循环体 Region」统一暴露出来，于是 LICM、tiling 前置分析对 `scf.for`、`affine.for`、你自己的循环 op **同一套代码**即可。
+
+**③ DestinationStyleOpInterface（DPS）—— 结果写到哪份初值上**
+
+```mlir
+%0 = linalg.matmul ins(%a, %b : tensor<4x8xf32>, tensor<8x4xf32>)
+                   outs(%c : tensor<4x4xf32>) -> tensor<4x4xf32>
+```
+
+`outs(%c)` 就是 destination：结果 `%0` 与 `%c` 同形状。bufferize 时若无冲突，`%0` 可直接复用 `%c` 的 buffer（in-place），否则插 copy——见 §8.6。
+
+**④ BufferizableOpInterface —— 怎么从 tensor 变 memref**
+
+它是一组问答钩子，One-Shot Bufferize 逐个 OpOperand 去问：
+
+| 钩子回答什么 | 例子（对 `linalg.matmul` 的 `outs`） |
+|--------------|--------------------------------------|
+| 这个操作数会被读吗 | 是（累加初值要读） |
+| 这个操作数会被写吗 | 是 |
+| 结果与哪个操作数等价/别名 | 结果 ↔ `outs` |
+| 重写成什么 memref 形态 | `linalg.matmul` on memref |
+
+**共同点**：以上四个 Pass 都写成「walk + `dyn_cast<接口>`」，没有一处 `if (op->getName() == "linalg.matmul")`：
+
+```cpp
+getOperation()->walk([&](Operation *op) {
+  if (auto loop = dyn_cast<LoopLikeOpInterface>(op)) { /* 只认契约 */ }
+});
+```
+
+toy 项目里的 `ToyCostOpInterface` + `--toy-print-cost` 就是这套模式的教学版（见 §4.2）。
+
+> **自测**：把一个自定义循环 op 接上 `LoopLikeOpInterface` 之后，你**不需要**改动哪一类代码就能享受已有的循环变换？
+
 ### 4.5 论文四种策略 → 工程落点
 
 [`paper-notes/03-mlir.md`](./paper-notes/03-mlir.md) §3.5 的四种策略，对照今天的代码：
@@ -397,6 +559,64 @@ struct SimplifyMulOne : public OpRewritePattern<toy::MulOp> {
 
 多个 Pattern 放进 `RewritePatternSet`，交给驱动器执行。
 
+#### 示例精讲：`x*1 → x` 与 `x+0 → x` 的一次完整重写
+
+> 目的：看清「根 op → 沿 use-def 查条件 → replaceOp → 驱动器再来一轮」这条链，并理解不动点。
+> 可直接跑：`toy-opt test/simplify.mlir --toy-simplify`（见 [`mlir-toy-dialect/`](../mlir-toy-dialect/)）。
+
+**输入 IR**（把两条规则串起来，便于观察多轮迭代）
+
+```mlir
+func.func @chain(%arg0: i32) -> i32 {
+  %one  = toy.constant 1 : i32
+  %zero = toy.constant 0 : i32
+  %m = toy.mul %arg0, %one : i32     // 可被规则 1 命中
+  %a = toy.add %m, %zero : i32       // 规则 2 要等 %m 被替换后才"看得清"
+  return %a : i32
+}
+```
+
+**规则 1 在干什么**（`lib/ToyPasses.cpp` 的 `SimplifyMulByOne`，节选）
+
+```cpp
+LogicalResult matchAndRewrite(MulOp op, PatternRewriter &rewriter) const override {
+  // 根 = toy.mul；沿 use-def 向上看操作数的定义 op
+  if (isConstantWithValue(op.getRhs(), 1)) {     // getDefiningOp<ConstantOp>() + 值==1
+    rewriter.replaceOp(op, op.getLhs());         // 把 %m 的所有使用者改成 %arg0
+    return success();
+  }
+  return failure();                              // 不匹配就交给别的规则
+}
+```
+
+**驱动器的两轮迭代**
+
+```text
+第 1 轮：访问 toy.mul → 规则 1 命中 → %m 的用户全部改指向 %arg0
+         此时 IR 变成： %a = toy.add %arg0, %zero
+第 2 轮：访问 toy.add → 规则 2 命中（rhs 是常量 0）→ %a 的用户改指向 %arg0
+         %one / %zero 失去所有使用者 → 驱动器顺带做 DCE 清掉
+第 3 轮：没有规则再命中 → 到达不动点，结束
+```
+
+**输出 IR**
+
+```mlir
+func.func @chain(%arg0: i32) -> i32 {
+  return %arg0 : i32
+}
+```
+
+三个容易记混的点：
+
+| 直觉 | 实际 |
+|------|------|
+| pattern 会扫全图找子图 | 只以**当前 op 为根**，再沿 use-def 查有限几步 |
+| 一条规则要一次改到位 | 多条规则**互相喂**，靠驱动器反复迭代收敛 |
+| 常量要自己删 | `applyPatternsAndFoldGreedily` 会顺带 fold + 清死代码 |
+
+> **自测**：若把输入里的 `%zero` 换成函数参数（不再是常量），第 2 轮会发生什么？最终 IR 里还剩几条 op？
+
 > **速记**：[notes/mlir-pattern-rewriting.md](./notes/mlir-pattern-rewriting.md) —— 机制而非专属优化；子图=根+use-def 约束；宏观靠流水线/高层 op；Conversion 也用 pattern 外加 Target/TypeConverter。
 
 ### 5.2 贪心驱动器（Greedy Pattern Rewrite Driver）
@@ -428,6 +648,53 @@ toy 对照：`--toy-simplify`、`--toy-to-low`（贪心版）走这条路。
 | **Constant materializer** | dialect 钩子 | 把 fold 出的 Attribute 再变成 `dialect.constant` op |
 
 toy 里两种 fold 都有：`add/mul` 返回 Attribute；`unbox` 返回 Value（见 `ToyOps.cpp`）。
+
+#### 示例精讲：同一段 IR，`fold` 与 pattern 各消掉了什么
+
+> 目的：分清「算值」（fold）与「换结构」（pattern），并看到 materializer 在中间补的那一步。
+> 可直接跑：`toy-opt test/canonicalize.mlir --canonicalize`。
+
+**输入**
+
+```mlir
+func.func @mix(%arg0: i32) -> i32 {
+  %0 = toy.constant 10 : i32
+  %1 = toy.constant 20 : i32
+  %2 = toy.add %0, %1 : i32        // ① 两个操作数都是常量 → fold 能算出 30
+  %3 = toy.constant 1 : i32
+  %4 = toy.mul %arg0, %3 : i32     // ② 含未知值 %arg0 → fold 算不动，靠 pattern
+  %5 = toy.add %2, %4 : i32
+  return %5 : i32
+}
+```
+
+**三种机制各自负责哪一句**
+
+| 机制 | 命中哪句 | 产出 | 为什么是它 |
+|------|----------|------|-----------|
+| `fold()` | ① `toy.add 10, 20` | **Attribute** `30` | 操作数都是编译期常量，可直接算 |
+| Constant materializer | 承接上一步 | `toy.constant 30 : i32` | fold 只给 Attribute，要有人把它变回一条 op |
+| Canonicalization pattern | ② `toy.mul %arg0, 1` | 直接复用 `%arg0` | 结构化简，不涉及算值 |
+
+**`--canonicalize` 之后**
+
+```mlir
+func.func @mix(%arg0: i32) -> i32 {
+  %c30 = toy.constant 30 : i32          // ← fold 出 Attribute 30，再由 materializer 物化
+  %r = toy.add %c30, %arg0 : i32        // ← mul 已被换成 %arg0
+  return %r : i32
+}
+```
+
+一句话分工：
+
+> **fold 回答「这条 op 的结果是不是已经能算/已经存在」**（返回 Attribute 或已有 Value）；  
+> **pattern 回答「这块结构能不能换成更好的结构」**；  
+> **materializer 只在 fold 给出 Attribute 时补一条常量 op**。
+
+> **自测**：若只实现了 `fold()` 却忘了给 dialect 实现 `materializeConstant`，①那句会发生什么？
+
+
 
 ### 5.4 PassManager
 
@@ -514,6 +781,54 @@ builtin.module(
 
 你不必手写每对 dialect 的直接边。这是"专家混合编译器"（Mixture of Experts）能拼 pipeline 的基础设施前提。
 
+#### 示例精讲：两条规则拼出一条没人写过的降低路径
+
+> 目的：看清「链式合法化」不是玄学，而是「合法化目标 + 逐步重写」自然导出的结果。
+
+设有三层同语义的加法 op，你只写了**相邻两跳**的 pattern：
+
+```text
+已有 pattern：  hi.add  →  mid.add
+已有 pattern：  mid.add →  low.add
+Target 声明：   只有 low.* 合法
+```
+
+**输入**
+
+```mlir
+func.func @chain(%a: i32, %b: i32) -> i32 {
+  %0 = hi.add %a, %b : i32
+  return %0 : i32
+}
+```
+
+**框架的推进过程**（preorder walk，每轮只要求"离合法更近一步"）
+
+```text
+步骤 1：访问 hi.add → 非法 → 命中 pattern → 变成 mid.add
+步骤 2：新产生的 mid.add 重新入队 → 仍非法 → 命中第二条 pattern → 变成 low.add
+步骤 3：low.add 合法 → 该分支结束
+```
+
+**输出**
+
+```mlir
+func.func @chain(%a: i32, %b: i32) -> i32 {
+  %0 = low.add %a, %b : i32
+  return %0 : i32
+}
+```
+
+关键点：**你从没写过 `hi.add → low.add` 这条规则**，但因为「合法性」是终点声明、重写是逐步的，框架自己把两跳接了起来。
+
+| 对比 | 贪心驱动器 | Dialect Conversion |
+|------|-----------|-------------------|
+| 何时停 | 没有规则再命中 | 所有 illegal op 都合法化 |
+| 中途多出的 `mid.add` | 也会被继续改写（若有规则） | 同样继续，且**最终没降完会报错** |
+| 少写一跳规则 | 可能静默留下 `mid.add` | 报 `failed to legalize operation 'mid.add'` |
+
+> **自测**：若把 `mid.add → low.add` 那条规则删掉，Partial 模式下最终 IR 会变成什么？错误信息会指向哪个 op？
+
 ### 6.4 ConversionTarget：legal / illegal / dynamicallyLegal / recursive
 
 | 标记 | 含义 |
@@ -540,6 +855,59 @@ target.markOpRecursivelyLegal<MyKernelOp>();
 
 `dynamicallyLegal` 是真实 pipeline 的日常工具：例如 `func.func` 在类型转换完成前是非法的，签名转完后变成合法——用动态条件表达"阶段性合法"。
 
+#### 示例精讲：同一个 `func.func`，为什么先非法后合法
+
+> 目的：理解「合法与否是一个**随转换进度变化的判断**」，而不是一次性打的静态标签。
+
+**输入**（函数签名里还带着 `!toy.num`）
+
+```mlir
+func.func @sig(%n: !toy.num) -> !toy.num {
+  %x = toy.unbox %n : !toy.num -> i32
+  %c = toy.constant 4 : i32
+  %m = toy.mul %x, %c : i32
+  %r = toy.box %m : i32 -> !toy.num
+  return %r : !toy.num
+}
+```
+
+**Target 的三条标记，各自管什么**
+
+```cpp
+target.addIllegalDialect<toy::ToyDialect>();   // toy.* 一律要转掉
+target.addLegalDialect<low::LowDialect>();     // low.* 随便用
+target.addDynamicallyLegalOp<func::FuncOp>([&](func::FuncOp op) {
+  return converter.isSignatureLegal(op.getFunctionType());   // 签名里没有 !toy.num 才算合法
+});
+```
+
+**转换过程中的三个时刻**
+
+| 时刻 | `func.func @sig` 是否合法 | 原因 |
+|------|--------------------------|------|
+| 开始时 | **非法** | 签名是 `(!toy.num) -> !toy.num`，动态回调返回 false |
+| 签名转换 pattern 跑完后 | **合法** | 签名变成 `(i32) -> i32` |
+| 结束时 | 合法 | 函数体内 `toy.*` 也已全部换成 `low.*` |
+
+**结果**
+
+```mlir
+func.func @sig(%arg0: i32) -> i32 {
+  %c = low.constant 4 : i32
+  %m = low.mul %arg0, %c : i32
+  return %m : i32
+}
+```
+
+对照另外两种标记会怎样：
+
+| 换成 | 结果 |
+|------|------|
+| `addLegalOp<func::FuncOp>()`（静态合法） | 函数体被转了，但**签名永远不改**，最终留下类型不一致的 IR |
+| `markOpRecursivelyLegal<...>()` | 该 op **连同 Region 内部**都被跳过，内层 `toy.*` 不会被降低 |
+
+> **自测**：如果忘了写 `addDynamicallyLegalOp<func::FuncOp>`，`applyPartialConversion` 大概率在哪一步报错，报的是「无法合法化」还是「类型不匹配」？
+
 ### 6.5 ConversionPattern 与 remapped operands
 
 `ConversionPattern` 比普通 `RewritePattern` 多一个关键参数：**已经 remap 过的操作数**。
@@ -556,6 +924,65 @@ LogicalResult matchAndRewrite(Operation *op,
 | `operands[i]` / adaptor | **最近替换后**的值；若 pattern 绑了 TypeConverter，类型已是合法化类型 |
 
 类型变化时，驱动器会（概念上）插入 `builtin.unrealized_conversion_cast` 把新旧 IR 接上，避免在转换中途破坏类型契约。转换成功结束后，多余的 cast 应被消掉；**若还残留，说明 lowering 没做干净**——这是极有用的错误信号。
+
+#### 示例精讲：`operands[i]` 和 `op->getOperand(i)` 到底差在哪
+
+> 目的：用一段真实会发生类型变化的 IR，看清「原始操作数」与「已 remap 操作数」的区别。
+> 可直接跑：`toy-opt test/convert.mlir --toy-to-low-convert`。
+
+**输入**（`!toy.num` 会被 TypeConverter 映射成 `i32`）
+
+```mlir
+func.func @type_lowering(%arg0: i32) -> i32 {
+  %n = toy.box %arg0 : i32 -> !toy.num     // ① 装箱：i32 → !toy.num
+  %x = toy.unbox %n : !toy.num -> i32      // ② 拆箱：!toy.num → i32
+  %c = toy.constant 4 : i32
+  %m = toy.mul %x, %c : i32
+  return %m : i32
+}
+```
+
+**转换到 ② 时，pattern 手上有两份不同的东西**
+
+```cpp
+LogicalResult matchAndRewrite(toy::UnboxOp op,
+                              ArrayRef<Value> operands,        // ★ 已 remap
+                              ConversionPatternRewriter &rewriter) const override {
+  Value oldIn = op->getOperand(0);   // 原始：%n，类型仍是 !toy.num
+  Value newIn = operands[0];         // remap 后：来自已转换的 toy.box，类型已是 i32
+  // 因为 !toy.num 就映射成 i32，拆箱在低层退化成"什么都不做"
+  rewriter.replaceOp(op, newIn);
+  return success();
+}
+```
+
+| 你问 | 拿到什么 | 什么时候用 |
+|------|----------|-----------|
+| `op->getOperand(0)` | `%n`，**旧类型** `!toy.num` | 想读原始语义/属性时 |
+| `operands[0]`（或 adaptor） | 已替换的值，**新类型** `i32` | 构造新 op 时**必须**用这个 |
+
+用错的后果很直接：拿 `op->getOperand(0)` 去构造 `low.*`，会造出一条操作数类型为 `!toy.num` 的低层 op，随后 verifier 或后续 pattern 报类型不匹配。
+
+**中途的接缝长什么样**（若关闭 materialization 回调，框架会用 cast 顶上）
+
+```mlir
+// 转换进行中的示意快照：新旧类型用 cast 接住，避免中途破坏类型契约
+%0 = builtin.unrealized_conversion_cast %arg0 : i32 to !toy.num
+```
+
+**成功结束后**，这类 cast 应当全部消失：
+
+```mlir
+func.func @type_lowering(%arg0: i32) -> i32 {
+  %c = low.constant 4 : i32
+  %m = low.mul %arg0, %c : i32     // box/unbox 因类型映射成恒等而消失
+  return %m : i32
+}
+```
+
+> 若最终 IR 里还留着 `builtin.unrealized_conversion_cast`，不要忽略它：**它精确指出哪一对类型没人负责转**。
+
+> **自测**：如果只给 `toy.mul` 写了 pattern、忘了写 `toy.box`/`toy.unbox` 的，`applyPartialConversion` 会静默通过还是报错？报错信息里会出现哪个 op 名？
 
 ### 6.6 TypeConverter：conversion vs materialization
 
@@ -747,6 +1174,58 @@ Linalg 路径（保结构）:
 
 **融合不必理解"这是 softmax 还是 gelu"**——只看这两份元信息能否对齐。这正是相对 TOSA/StableHLO 上两两算子特殊融合规则的优势（IREE 文档同样强调这一点）。
 
+#### 示例精讲：读懂一个 `linalg.generic`，并据此判断能否融合
+
+> 目的：把 `indexing_maps` / `iterator_types` 从"术语"变成"能逐维读出来的东西"。
+
+**最小的逐元素加法**
+
+```mlir
+#id = affine_map<(d0, d1) -> (d0, d1)>          // 迭代空间 (d0,d1) → 操作数下标 (d0,d1)
+
+%out = linalg.generic {
+    indexing_maps  = [#id, #id, #id],           // 顺序：ins..., outs...
+    iterator_types = ["parallel", "parallel"]   // 两个维都可并行
+  } ins(%a, %b : tensor<4x8xf32>, tensor<4x8xf32>)
+    outs(%init : tensor<4x8xf32>) {
+  ^bb0(%x: f32, %y: f32, %acc: f32):            // 每个"点"上的标量计算
+    %s = arith.addf %x, %y : f32
+    linalg.yield %s : f32
+  } -> tensor<4x8xf32>
+```
+
+逐项读法：
+
+| 元信息 | 这里的取值 | 怎么读 |
+|--------|-----------|--------|
+| 迭代空间 | `(d0, d1)`，形状取自操作数 `4x8` | 一共要跑 4×8 个点 |
+| `indexing_maps[0]` | `(d0,d1) -> (d0,d1)` | 第一个输入按 `a[d0][d1]` 取 |
+| `indexing_maps[2]` | 同上 | 输出按 `out[d0][d1]` 写 |
+| `iterator_types` | `parallel, parallel` | 没有归约维，两维都能并行/切分 |
+| Region `^bb0` | 三个标量参数 | **点计算**：每个点做一次 `addf` |
+
+**对照 matmul（含归约维）**
+
+```mlir
+#A = affine_map<(m, n, k) -> (m, k)>
+#B = affine_map<(m, n, k) -> (k, n)>
+#C = affine_map<(m, n, k) -> (m, n)>            // 输出不含 k → k 是归约维
+// iterator_types = ["parallel", "parallel", "reduction"]
+```
+
+**融合合法性怎么判**：不看 op 名字，只看下游 op 读上游结果时的映射是否对得上。
+
+| 情形 | 上游写出的映射 | 下游读入的映射 | 能否直接融合 |
+|------|----------------|----------------|--------------|
+| add → relu（逐元素） | `(d0,d1)->(d0,d1)` | `(d0,d1)->(d0,d1)` | **可以**：同一个点只需算一次 |
+| matmul → relu | `(m,n)` | `(m,n)` | 可以（relu 作用在 matmul 的输出点上） |
+| transpose → add | `(d0,d1)->(d1,d0)` | `(d0,d1)->(d0,d1)` | 需要先对齐映射，不能盲目合并 |
+| 上游含 reduction，下游要整行 | 输出少一维 | 需要跨点访问 | 一般不能简单融合，要靠 tiling 配合 |
+
+这就是「保结构」的价值：只要还是 `linalg.*`，这两份元信息就一直在 IR 里；一旦过早降成三层 `scf.for`，就得靠依赖分析把它们**猜回来**。
+
+> **自测**：把上面 add 的 `iterator_types` 改成 `["parallel", "reduction"]`，输出类型应该变成什么？为什么？
+
 ### 8.3 Destination-Passing Style（DPS）
 
 在 tensor 世界里，SSA 值不可变："更新张量"其实是**返回新张量**。DPS 要求：每个 tensor 结果对应一个 **`outs` / destination 操作数**，表示"在这份初始值上更新"。
@@ -811,6 +1290,66 @@ Phase 2  Rewrite
 ```
 
 RaW（Read-after-Write）冲突靠 SSA use-def 链检测：若同一 tensor 值在写入后仍被其他用户读取，就不能 in-place，必须 copy。
+
+#### 示例精讲：同一段代码，一个能 in-place，一个必须 copy
+
+> 目的：亲手判一次 RaW 冲突，并看到 Phase 2 因此插出来的 `memref.copy`。
+
+**情形 A：写完就不再读旧值 → 可以 in-place**
+
+```mlir
+func.func @inplace(%A: tensor<8xf32>, %v: f32) -> tensor<8xf32> {
+  %c0 = arith.constant 0 : index
+  %0 = tensor.insert %v into %A[%c0] : tensor<8xf32>   // 写
+  return %0 : tensor<8xf32>                            // %A 之后没人再读
+}
+```
+
+Phase 1 的判断：`%A` 在写之后**没有其他读用户** → 结果 `%0` 可与 `%A` 共用同一块 buffer。
+
+Phase 2 产出（示意）：
+
+```mlir
+func.func @inplace(%A: memref<8xf32>, %v: f32) -> memref<8xf32> {
+  %c0 = arith.constant 0 : index
+  memref.store %v, %A[%c0] : memref<8xf32>   // 直接原地写，无 alloc / 无 copy
+  return %A : memref<8xf32>
+}
+```
+
+**情形 B：写完还要读旧值 → 必须 copy**
+
+```mlir
+func.func @conflict(%A: tensor<8xf32>, %v: f32) -> (tensor<8xf32>, f32) {
+  %c0 = arith.constant 0 : index
+  %c1 = arith.constant 1 : index
+  %0 = tensor.insert %v into %A[%c0] : tensor<8xf32>   // 写：产生新值 %0
+  %e = tensor.extract %A[%c1] : tensor<8xf32>          // ★ 仍读【旧】值 %A
+  return %0, %e : tensor<8xf32>, f32
+}
+```
+
+Phase 1 的判断：若让 `%0` 原地写在 `%A` 的 buffer 上，后面那句读到的就不再是旧值——**RaW 冲突**，因此 `%0` 必须落在新 buffer 上。
+
+Phase 2 产出（示意）：
+
+```mlir
+%new = memref.alloc() : memref<8xf32>
+memref.copy %A, %new : memref<8xf32> to memref<8xf32>   // ← 冲突的代价在这里显形
+memref.store %v, %new[%c0] : memref<8xf32>
+%e = memref.load %A[%c1] : memref<8xf32>                 // 旧值仍完好
+```
+
+两阶段各自的产物：
+
+| 阶段 | 输入 | 输出 | 关键动作 |
+|------|------|------|----------|
+| Phase 1 Analyze | tensor 语义 IR | **决策表**（每个 OpOperand：in-place / copy） | 查 `BufferizableOpInterface`，建 alias 与等价集合，判 RaW |
+| Phase 2 Rewrite | 决策表 | memref IR | 按决策换 op，必要处插 `alloc` / `copy` |
+
+> 因此「多做几次 tile/fuse 再 bufferize」是有道理的：tensor 世界里 SSA use-def 干净，冲突一眼可判；进了 memref 之后要靠更重的别名分析才能得到同样结论。
+
+> **自测**：把情形 B 里的 `tensor.extract %A` 改成 `tensor.extract %0`，还需要那次 copy 吗？为什么？
 
 ### 8.7 与 IREE / 算力网的关系
 

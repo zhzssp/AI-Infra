@@ -93,6 +93,85 @@
 
 **关键认知**：在 IREE 里 **HAL 本身就是一个 VM module**（就像 `math` 模块一样）。编译出来的程序调用 `hal.device.queue.execute` 这类函数，和调用一个普通函数没有区别。这样做的直接好处是：**用户可以替换掉 HAL 模块而不用改 IREE 核心代码**。官方文档原话是"在 IREE 里一切都是 module，包括 HAL 这样的运行时子系统"。
 
+#### 示例精讲：一个 `abs` 模型穿过三层
+
+最小输入（与 [7.3](#73-动手清单按顺序做) 是同一个文件，后面各节反复用它）：
+
+```mlir
+func.func @abs(%input : tensor<f32>) -> tensor<f32> {
+  %result = math.absf %input : tensor<f32>
+  return %result : tensor<f32>
+}
+```
+
+```bash
+iree-compile abs.mlir \
+  --iree-hal-target-device=local \
+  --iree-hal-local-target-device-backends=llvm-cpu \
+  -o abs.vmfb
+iree-run-module --device=local-sync --module=abs.vmfb --function=abs --input=f32=-2.0
+```
+
+**① 编译器产物 `abs.vmfb` 里有什么**
+
+```text
+abs.vmfb（FlatBuffer）
+├─ 依赖表   需要哪些 VM module 才能链接 —— 这里是内置的 hal
+├─ 导出表   @abs                        ← --function=abs 查的就是这张表
+├─ 函数体   宿主侧调度指令的 bytecode：建命令缓冲 / 派发 / 等 fence
+└─ rodata   设备侧代码：llvm-cpu → ELF，cuda → PTX
+```
+
+一句话：**「怎么调度」进了 bytecode，「算什么」进了 rodata**。
+
+**② VM 层：bytecode 去调 HAL 模块的导出函数**
+
+```mlir
+vm.module @module {
+  // HAL 是一个普通 module，它的每个 op 就是一个可调用的导入符号
+  vm.import private @hal.command_buffer.create(...) -> !vm.ref<!hal.command_buffer>
+  vm.import private @hal.device.queue.execute(...)
+  vm.import private @hal.fence.await(...) -> i32
+
+  vm.rodata private @abs_dispatch_0_binary ...        // 设备代码就躺在这
+
+  vm.func private @abs(%view: !vm.ref<!hal.buffer_view>) -> !vm.ref<!hal.buffer_view> {
+    %cmd = vm.call @hal.command_buffer.create(...) : (...) -> !vm.ref<!hal.command_buffer>
+    vm.call @hal.command_buffer.dispatch(...)
+    vm.call @hal.device.queue.execute(...)
+    %status = vm.call @hal.fence.await(...) : (...) -> i32
+    vm.return ...
+  }
+}
+```
+
+> 形态示意：`vm.import` 的参数列表很长，具体拼写以你本地 `--compile-to=vm` 的 dump 为准。这里要看的是结构：**调 HAL 和调普通函数没有区别**。
+
+**③ 运行时：`iree-run-module` 的执行路径**
+
+```text
+iree-run-module --device=local-sync --module=abs.vmfb --function=abs
+└─ 建 VM instance
+   └─ driver_registry 按 "local-sync" 找 driver → 建 device        【HAL】
+      └─ 把内置 hal module（已绑定该 device）与 abs.vmfb 链接成 context
+         └─ 查导出表拿到 @abs，把 --input 解析成 buffer_view，invoke
+            └─ VM 逐条解释 bytecode
+               ├─ vm.call @hal.command_buffer.create   → iree_hal_command_buffer_create()
+               ├─ vm.call @hal.command_buffer.dispatch → iree_hal_command_buffer_dispatch()
+               ├─ vm.call @hal.device.queue.execute    → iree_hal_device_queue_execute()
+               └─ vm.call @hal.fence.await             → 等到时间线推进
+                  └─ local-sync：当前线程直接跳进 rodata 里的 ELF kernel
+```
+
+| | 编译器 | VM | HAL |
+|--|--------|----|-----|
+| 输入 | `.mlir` | `.vmfb` 里的 bytecode | VM 传来的对象与参数 |
+| 干的事 | **决定**调度 | **复述**调度 | **翻译**给驱动 |
+| 智能程度 | 全部智能在这 | 无优化 | 薄，无调度决策 |
+| 换后端要改什么 | target backend | 不用改 | 写一个新 driver |
+
+> **自测**：设备侧 kernel 存在 `.vmfb` 的哪一部分，宿主侧的派发顺序又存在哪一部分？
+
 ---
 
 ## 第 2 章 编译侧：dialect 流水线
@@ -120,6 +199,43 @@ start → input → abi → preprocessing → global-optimization → dispatch-c
 
 `iree.dev` 上还列了一批"内部 dialect"，值得知道名字：`Util`（跨 dialect 通用类型与 op）、`IREECodegen` / `IREEGPU` / `IREECPU` / `IREEVectorExt`（codegen 侧）、`VMVX`（可移植解释后端）、`HAL/Inline` 与 `HAL/Loader`（HAL 的精简变体，见 [4.10](#410-hal-的三种形态full--inline--loader)）、`IO/Parameters`（外部参数/权重加载）、`PCF`（并行控制流建模）。
 
+#### 示例精讲：用 `--compile-to` 逐相位盯 op
+
+一条命令把各相位全 dump 出来（模型仍是上面的 `abs.mlir`）：
+
+```bash
+for phase in input abi global-optimization dispatch-creation \
+             flow stream executable-sources executable-targets hal vm; do
+  iree-compile abs.mlir \
+    --iree-hal-target-device=local \
+    --iree-hal-local-target-device-backends=llvm-cpu \
+    --compile-to=$phase \
+    -o abs.$phase.mlir
+done
+```
+
+打开每个文件时**只找下表里的东西**：找到了，就说明这一相位该干的活落地了。
+
+| 相位 | 该出现的关键 op / 类型 | 读法 |
+|------|---------------------|------|
+| `input` | 输入方言原样：`stablehlo.*` / `tosa.*` / `torch.*`，纯 `func.func` | 还没有任何 IREE 概念 |
+| `abi` | `hal.tensor.import` / `hal.tensor.export` | **边界建立**：外面是 `!hal.buffer_view`，里面是 `tensor` |
+| `global-optimization` | `util.global`、融合后的 `linalg.generic` | 权重变 global；算子按结构融合 |
+| `dispatch-creation` | `flow.dispatch.region` | 「哪几段打包成一次设备调用」已定，但还没外提 |
+| `flow` | `flow.executable` / `flow.executable.export` / `flow.dispatch` / `!flow.dispatch.tensor` | dispatch 被**外提成独立单元** |
+| `stream` | `stream.cmd.execute` / `stream.cmd.dispatch` / `stream.resource.alloca` / `!stream.resource<transient>` / `!stream.timepoint` | 出现**时序与生命周期** |
+| `executable-sources` | `hal.executable` + `hal.executable.variant`，内部还是设备无关 IR | executable 骨架成型，未选实现策略 |
+| `executable-configurations` | variant 内部多出 codegen 配置属性（tile size、translation 策略等） | 「怎么算」的决定 |
+| `executable-targets` | variant 内部已降到 LLVM / SPIR-V dialect | 设备代码定型 |
+| `hal` | `hal.command_buffer.create` / `.dispatch` / `.finalize`、`hal.device.queue.execute`、`hal.fence.*` | 只剩驱动调用 |
+| `vm` | `vm.module` / `vm.func` / `vm.call @hal.*` / `vm.rodata` | 宿主程序的最终形态 |
+
+> 形态示意：`executable-configurations` 里的配置属性名各版本差异较大，以本地 dump 为准。表里要记的是「**这一相位新增了哪一类信息**」。
+
+三个最值得直接 `diff` 的跃迁：`flow → stream`（多出时序）、`stream → hal`（抽象资源变设备对象）、`hal → vm`（op 变函数调用）。
+
+> **自测**：如果 `abs.stream.mlir` 里找不到 `stream.resource.alloca`，说明这个程序的中间结果处于什么状态？
+
 ### 2.2 三个最需要理解的转折点
 
 **转折点 1：Linalg → Flow，形成 dispatch region**
@@ -145,6 +261,86 @@ Stream 是 IREE 最独特、也最容易被忽略的一层。它做四件事：
 **转折点 3：Stream → HAL，从抽象资源到具体设备对象**
 
 Stream 里的"某个资源"变成 `!hal.buffer`；"某批工作"变成 `!hal.command_buffer` 里的一串命令；"某个时间点"变成 `!hal.fence`；"某段 kernel"变成 `hal.executable` 里的一个 export。这一层往下就没有抽象了，只剩下驱动调用。
+
+#### 示例精讲：`abs` 在 linalg / flow / stream / hal 的四张面孔
+
+同一个函数、四段骨架 IR，每段只看**新增了什么、消失了什么**。
+
+**① Linalg：只有计算结构**
+
+```mlir
+%init = tensor.empty() : tensor<f32>
+%0 = linalg.generic {indexing_maps = [affine_map<() -> ()>, affine_map<() -> ()>],
+                     iterator_types = []}
+     ins(%arg0 : tensor<f32>) outs(%init : tensor<f32>) {
+^bb0(%in: f32, %out: f32):
+  %1 = math.absf %in : f32
+  linalg.yield %1 : f32
+} -> tensor<f32>
+```
+
+新增 `iterator_types` + `indexing_maps`（融合与 tiling 的全部依据）；设备、内存、时序一概没有。
+
+**② Flow：计算被打包成 dispatch**
+
+```mlir
+flow.executable private @abs_dispatch_0 {
+  flow.executable.export public @abs_dispatch_0_generic
+  builtin.module {
+    func.func @abs_dispatch_0_generic(%in : !flow.dispatch.tensor<readonly:tensor<f32>>,
+                                      %out : !flow.dispatch.tensor<writeonly:tensor<f32>>) {
+      // load → linalg.generic → store
+    }
+  }
+}
+// 主函数里只剩一次调用
+%0 = flow.dispatch @abs_dispatch_0::@abs_dispatch_0_generic(%arg0) : (tensor<f32>) -> tensor<f32>
+```
+
+新增 `flow.executable` / `flow.dispatch` / `!flow.dispatch.tensor`（读写方向已声明）；算子体**搬离主函数**，主函数降级为「数据怎么流」。
+
+**③ Stream：出现时间线与生命周期**
+
+```mlir
+%alloc, %t0 = stream.resource.alloca uninitialized : !stream.resource<transient>{%sz} => !stream.timepoint
+%t1 = stream.cmd.execute await(%t0) => with(%in as %i : !stream.resource<external>{%sz},
+                                            %alloc as %o : !stream.resource<transient>{%sz}) {
+  stream.cmd.dispatch @abs_dispatch_0::@abs_dispatch_0_generic {
+    ro %i[%c0 for %sz] : !stream.resource<external>{%sz},
+    wo %o[%c0 for %sz] : !stream.resource<transient>{%sz}
+  }
+} => !stream.timepoint
+```
+
+新增 `await(...) => !stream.timepoint`（时序）、`<external>` / `<transient>`（生命周期）、`ro` / `wo`（访问权限）；`tensor` 消失，变成带字节长度的 `!stream.resource`。
+
+**④ HAL：全是设备对象**
+
+```mlir
+%cmd = hal.command_buffer.create device(%device : !hal.device)
+           mode("OneShot") categories("Transfer|Dispatch") : !hal.command_buffer
+hal.command_buffer.dispatch<%cmd : !hal.command_buffer>
+    target(%exe : !hal.executable)[%c0]
+    workgroups([%c1, %c1, %c1])
+    bindings([(%in_buf : !hal.buffer)[%c0, %sz], (%out_buf : !hal.buffer)[%c0, %sz]])
+    flags(None)
+hal.command_buffer.finalize<%cmd : !hal.command_buffer>
+hal.device.queue.execute<%device : !hal.device>
+    affinity(%affinity) wait(%wait) signal(%signal) commands(%cmd) flags(None)
+```
+
+新增 `!hal.device` / `!hal.buffer` / `!hal.executable` / `!hal.fence` 与 3D workgroup 数；`!stream.resource` 的生命周期语义消失——它已在编译期兑现成具体 buffer 与具体的分配位置。
+
+> 形态示意：四段都做了删减，operand / attribute 的准确拼写以本地 `--compile-to=` dump 为准。
+
+| 层 | 数据长什么样 | 时序怎么表达 | 谁来执行 |
+|----|-------------|-------------|---------|
+| Linalg | `tensor` | 无（SSA 依赖即顺序） | 未定 |
+| Flow | `tensor` + `!flow.dispatch.tensor` | 无（仍是数据流） | 未定 |
+| Stream | `!stream.resource<lifetime>{字节数}` | `!stream.timepoint` 的 await / produce | 某个 affinity |
+| HAL | `!hal.buffer` / `!hal.buffer_view` | `!hal.fence` 的 wait / signal | 具体 `!hal.device` |
+
+> **自测**：从 flow 到 stream，`tensor<f32>` 为什么必须变成带显式字节长度的 `!stream.resource`？
 
 ---
 
@@ -355,6 +551,68 @@ topology_builder.h profile_*.h
 
 一句话记忆：**allocator 造内存、command_buffer 攒工作、queue 提交工作、semaphore 排时序、executable 装代码、channel 做集合通信。**
 
+#### 示例精讲：一次 invocation 里对象按什么顺序被造出来
+
+把上面那张图从「有哪些对象」读成「谁先造、谁持有谁」。host 侧一次完整调用的骨架（伪代码，参数省略）：
+
+```c
+// ① 接入点：driver 只负责枚举与创建
+iree_hal_driver_registry_try_create(registry, IREE_SV("local-sync"), &driver);
+iree_hal_driver_create_device_by_id(driver, device_id, ..., &device);
+
+// ② 内存：allocator 挂在 device 上，不单独创建
+iree_hal_allocator_t* allocator = iree_hal_device_allocator(device);
+iree_hal_allocator_allocate_buffer(allocator, params, /*size=*/..., &buffer);
+iree_hal_buffer_view_create(buffer, shape_rank, shape, elem_type, enc_type, ..., &view);
+
+// ③ 设备代码：cache 把二进制「准备」成可执行对象并缓存
+iree_hal_executable_cache_create(device, IREE_SV("cache"), ..., &cache);
+iree_hal_executable_cache_prepare_executable(cache, &params, &executable);
+
+// ④ 工作：录制一段命令（此刻设备上什么都没发生）
+iree_hal_command_buffer_create(device, mode, categories, queue_affinity, ..., &cmd);
+iree_hal_command_buffer_begin(cmd);
+iree_hal_command_buffer_dispatch(cmd, executable, /*ordinal=*/0, ...);
+iree_hal_command_buffer_end(cmd);
+
+// ⑤ 时序：semaphore 是时间线本身
+iree_hal_semaphore_create(device, /*initial_value=*/0ull, ..., &semaphore);
+
+// ⑥ 提交：wait / signal 都是「(semaphore, value)」列表
+iree_hal_device_queue_execute(device, queue_affinity,
+                              /*wait=*/{semaphore, 0}, /*signal=*/{semaphore, 1}, cmd, ...);
+iree_hal_semaphore_wait(semaphore, /*value=*/1ull, timeout);
+```
+
+> 伪代码：各版本的参数列表有增删（例如 `queue_execute` 是否带 binding table），以本地 `runtime/src/iree/hal/*.h` 为准。要记住的是**顺序与依赖**。
+
+持有关系（实线箭头 = 创建 / 派生，虚线 = 引用计数持有）：
+
+```text
+driver_registry
+└─ driver                        ← 只持有动态加载的符号与设备枚举能力
+   └─ device                     ← 一切的中心，下面全由它派生
+      ├─ allocator（device 自带，非独立创建）
+      │  └─ buffer
+      │     └─ buffer_view ····> buffer（+ shape / dtype / encoding）
+      ├─ executable_cache
+      │  └─ executable           ← fat binary，内含多 variant
+      ├─ command_buffer
+      │  └─ 命令列表 [dispatch] ····> executable（target + ordinal）
+      │                         ····> buffer（bindings）
+      ├─ semaphore               ← 时间线本身，由 device 创建
+      ├─ fence ················> 一组 (semaphore, value)，只是时间点的打包
+      └─ queue：不是对象，是 device 上的一组 API + queue_affinity 位掩码
+```
+
+三个容易搞错的点：
+
+- **allocator 不是独立造出来的**，它由 device 提供（`iree_hal_device_allocator()`）。
+- **queue 不是对象**：`hal.device.queue.*` 全部挂在 device 上，用 `affinity` 位掩码选队列。
+- **HAL 对象都是引用计数的**：命令缓冲录进去的 buffer / executable 会被保活到不再需要为止；但「什么时候该分配、什么时候能还」是**编译器**算好的，不是运行时临场决定的（[4.1.1](#411-三条设计取向理解-hal-的钥匙)）。
+
+> **自测**：`command_buffer` 创建出来时，`executable` 必须已经准备好了吗？为什么？
+
 ### 4.3 设备与内存：driver / device / allocator / buffer / buffer_view
 
 #### driver 与 driver_registry
@@ -440,6 +698,49 @@ CUDA 的实现映射非常直接，可以用来记忆语义：
 
 还有一组 `hal.buffer.allocation.{discard, preserve, is_terminal}`，用于配合 stream-ordered allocation 表达"这块内存的内容还需不需要保留"。
 
+#### 示例精讲：同一块 buffer 的三副面孔
+
+一块内存从分配到被 kernel 读，中间换了三种「说法」，但**自始至终是同一个 `!hal.buffer`**：
+
+```mlir
+// ① 分配：说清「住哪」(MemoryType) 与「干什么用」(BufferUsage)
+%buffer = hal.allocator.allocate<%allocator : !hal.allocator>
+              affinity(%affinity)
+              type("DeviceVisible|DeviceLocal")
+              usage("TransferTarget|DispatchStorageRead")
+              : !hal.buffer{%length}
+
+// ② 加上 shape / dtype，变成 ABI 边界上的「张量」
+%view = hal.buffer_view.create buffer(%buffer : !hal.buffer)[%c0, %length]
+              shape([%c4, %c8])
+              type(%element_type)
+              encoding(%encoding_type) : !hal.buffer_view
+
+// ③ 派发时又退回裸 buffer + 字节区间：kernel 只认偏移和长度
+hal.command_buffer.dispatch<%cmd : !hal.command_buffer>
+    target(%exe : !hal.executable)[%c0]
+    workgroups([%c4, %c1, %c1])
+    bindings([(%buffer : !hal.buffer)[%c0, %length]])
+    flags(None)
+```
+
+> 形态示意：`type(...)` / `usage(...)` 的枚举串与 `encoding` 的取值以本地 dump 为准。
+
+**读法**：`buffer_view` 是给 **ABI 和人**看的（带 shape），`dispatch` 的 binding 是给 **kernel** 看的（只有 offset + length）。kernel 侧再用 [4.7.4](#474-pipeline-layouthost-与-device-的-abi-契约) 的 `hal.interface.binding.subspan` 把这段字节重新解释成 `memref<4x8xf32>`——**静态 shape 是编译期编死在 kernel 里的，运行时不传**。
+
+MemoryType / BufferUsage 怎么配，与 CUDA 的对照：
+
+| 场景 | MemoryType | BufferUsage 至少要有 | CUDA 上的落地 |
+|------|-----------|--------------------|--------------|
+| 输入 / 输出，host 要读写 | `HostLocal` | `Transfer` + 映射类（`MappingScoped` 等） | `cuMemHostAlloc()` |
+| 中间结果，只有 kernel 碰 | `DeviceLocal` | `DispatchStorage` | `cuMemAlloc()` |
+| device 为主但 host 也要看 | `DeviceLocal｜HostVisible` | `Transfer｜DispatchStorage` | `cuMemAllocManaged()` |
+| 只读常量 / 权重 | `DeviceLocal` | `DispatchStorageRead`（+ `SharingImmutable`） | `cuMemAlloc()`，只开读权限 |
+
+对照记忆：**MemoryType ≈ CUDA 里你挑哪个 `cuMemAlloc*`；BufferUsage 则是 CUDA 没有的一维**——CUDA 靠约定，IREE 要求把用途显式声明出来，编译器才敢做别名分析与内存复用。
+
+> **自测**：kernel 侧拿到的 `memref<4x8xf32>`，它的 `4x8` 是运行时从 `buffer_view` 读出来的吗？
+
 ### 4.4 工作表达：command_buffer
 
 `iree_hal_command_buffer_t` 是**一段命令的录制**；提交给设备后才在 GPU 上异步执行。这是"延迟提交"这条职责的载体。
@@ -523,6 +824,67 @@ hal.device.queue.execute<%device : !hal.device>
 
 > **注意 `alloca` / `dealloca` 也在这张表里**。这正是 stream-ordered allocation 的实现方式：内存分配本身就是一条排在时间线上的队列操作，可以在设备上远程完成，不需要 host 往返。
 
+#### 示例精讲：从建命令缓冲到等到结果的六步
+
+把 [4.4](#44-工作表达command_buffer) 和本节串起来，一次 dispatch 的完整链条只有六步（第 5 步发生在设备侧，host 看不到）：
+
+```mlir
+// 1. create：声明模式与要用到的队列能力
+%cmd = hal.command_buffer.create device(%device : !hal.device)
+           mode("OneShot") categories("Transfer|Dispatch") : !hal.command_buffer
+
+// 2. dispatch：只是录制
+hal.command_buffer.dispatch<%cmd : !hal.command_buffer>
+    target(%exe : !hal.executable)[%c0]
+    workgroups([%cx, %cy, %cz])
+    constants([%c8])
+    bindings([(%in : !hal.buffer)[%c0, %len], (%out : !hal.buffer)[%c0, %len]])
+    flags(None)
+
+// 3. finalize：封口，之后不可再改
+hal.command_buffer.finalize<%cmd : !hal.command_buffer>
+
+// 4. queue.execute：排到时间线上，立即返回
+hal.device.queue.execute<%device : !hal.device>
+    affinity(%affinity)
+    wait(%wait_fence)      // 到达前一条命令都不执行
+    signal(%signal_fence)  // 全部完成后置位
+    commands(%cmd)
+    flags(None)
+
+// 6. await：这里才是真正的同步点
+%status = hal.fence.await until([%signal_fence]) timeout_millis(%timeout) : i32
+```
+
+六步里「谁阻塞、谁不阻塞」是最该记牢的：
+
+| 步 | 动作 | 阻塞吗 | 此刻设备上发生了什么 |
+|----|------|-------|-------------------|
+| 1 | `create` | 否 | 造一个录制器 |
+| 2 | `dispatch` | 否 | **什么都没有**，只往缓冲里写一条命令 |
+| 3 | `finalize` | 否 | 命令缓冲转为只读，可提交 |
+| 4 | `queue.execute` | **否** | 交给驱动；`wait` 未到达时实现可以先压着不发 |
+| 5 | wait 到达 | —— | 命令按录制顺序执行 |
+| 6 | `fence.await` | **是** | host 挂起，直到 signal 值被推进 |
+
+此刻内存里的持有关系：
+
+```text
+device
+├─ executable            ← executable_cache 准备好，可被多次 dispatch 复用
+├─ buffer %in / %out     ← allocator 分配，或 queue.alloca 流序分配
+├─ command_buffer %cmd
+│  └─ 命令列表 [dispatch] ──► executable（target + ordinal=0）
+│                        ──► buffer %in / %out（bindings 里的 offset+length）
+└─ semaphore
+   ├─ %wait_fence   = {(semaphore, N)}
+   └─ %signal_fence = {(semaphore, N+1)}
+```
+
+关键：**第 4 步返回时，第 2 步录的 kernel 很可能一条都还没跑**。命令缓冲、buffer、executable 三者都必须活到执行真正完成——这就是 HAL 对象全都带引用计数的原因。
+
+> **自测**：如果把第 6 步删掉，计算结果会算错吗？会出什么问题？
+
 ### 4.6 同步：timeline semaphore 与 fence（HAL 的灵魂）
 
 这一节是整个 HAL 里最需要花时间的部分。
@@ -556,6 +918,70 @@ hal.fence.fail<%fence : !hal.fence> status(%status)               // 传播错�
 ```
 
 `hal.fence.fail` 值得注意：**错误也沿着时间线传播**。异步执行体系里，错误不能靠返回值传，只能靠 fence 带回来。
+
+#### 示例精讲：一个 semaphore 从 0 走到 3
+
+场景：同一条时间线上排两批工作，`cmd0` 完成后 `cmd1` 才能开始，host 最后取结果。
+
+```c
+// 伪代码：创建时给初值 0
+iree_hal_semaphore_create(device, /*initial_value=*/0ull, flags, &sem);
+
+// 第一批：等 1，完成后 signal 2
+iree_hal_device_queue_execute(device, affinity,
+    /*wait=*/  {{sem, 1ull}},
+    /*signal=*/{{sem, 2ull}}, cmd0, ...);
+
+// 第二批：等 2，完成后 signal 3   ← 与上一批的依赖只靠这两个数值
+iree_hal_device_queue_execute(device, affinity,
+    /*wait=*/  {{sem, 2ull}},
+    /*signal=*/{{sem, 3ull}}, cmd1, ...);
+
+iree_hal_semaphore_signal(sem, 1ull);                        // host 开闸
+iree_hal_semaphore_wait(sem, 3ull, iree_infinite_timeout()); // host 等结果
+```
+
+数值时间线（横轴是 semaphore 的值，不是墙钟时间）：
+
+```text
+sem   0 ──────► 1 ──────► 2 ──────► 3
+                ▲         ▲         ▲
+host  signal(1) ┘         │         │   host 开闸，cmd0 的等待条件才满足
+cmd0     wait(1) ═════════╝         │   放行 → 设备执行 → 完成时 signal(2)
+cmd1               wait(2) ═════════╝   等到 2 才放行 → 完成时 signal(3)
+host                       wait(3) ─┘   值到 3，host 返回，输出可读
+```
+
+逐步走读：
+
+| 时刻 | 值 | 发生了什么 |
+|------|----|-----------|
+| t0 | 0 | 两次 `queue_execute` 都已返回，但 `wait(1)` 不满足，**一条命令都没发给设备** |
+| t1 | 0→1 | host `signal(1)`：cmd0 条件满足，实现把它放行给驱动 |
+| t2 | 1 | cmd0 在设备上执行；cmd1 仍压着（等 2） |
+| t3 | 1→2 | cmd0 完成并 signal 2 → cmd1 被放行 |
+| t4 | 2→3 | cmd1 完成并 signal 3 |
+| t5 | 3 | host 的 `wait(3)` 返回，此时才能安全读输出 buffer |
+
+三个反直觉点，全都是「单调 64 位 + 多等待」直接推出来的：
+
+- **两批工作的先后不是靠提交顺序建立的**，是靠 `signal 2` / `wait 2` 这对数值。把两次 `queue_execute` 的调用顺序对调，结果一样。
+- **wait-before-signal 合法**：t0 时 `wait(1)` 先提交、`signal(1)` 后到，实现必须把工作压住——这正是 [4.6.2](#462-为什么这个抽象是难的cuda-上的落地) 里「待决动作队列」存在的理由。
+- **同一个值可以被任意多个等待者等**：再排一批 `wait(2)` 的工作，它就与 cmd1 并发。
+
+与 CUDA 的并排：
+
+| | IREE semaphore | CUDA `CUevent` |
+|--|----------------|----------------|
+| 状态 | 64 位单调递增值 | 二值（未发生 / 已发生） |
+| 一个同步点 = | 一个数值 | 一个 event 对象 |
+| 表达上面这条线 | 一个 semaphore，值 1 / 2 / 3 | 要 2~3 个 event 对象 |
+| wait 先于 signal | 允许 | **不允许**，必须先 record |
+| host 侧 signal | `iree_hal_semaphore_signal()` | **没有**，host 无法 signal 一个 event |
+| host 侧等待 | `iree_hal_semaphore_wait(值)` | `cuEventSynchronize()` |
+| 方向覆盖 | 四个方向全支持 | 只有 device→device / device→host |
+
+> **自测**：如果 host 始终不调 `signal(1)`，设备上会发生什么？两批工作各自处在什么状态？
 
 #### 4.6.2 为什么这个抽象是"难"的：CUDA 上的落地
 
@@ -845,6 +1271,53 @@ HAL dialect 的 op 按用途分为几组，读 IR 时按组认即可（完整清
 - **`consume` 标记表示所有权转移**：即使被导入的值仍有外部引用，资源也会"原子地从原持有者释放、被导入者持有"。这对应 [3.4](#34-stream-ordered-allocation峰值内存的关键) 里"用户把输入 buffer 的所有权转给程序，让程序可以提前复用这块存储"。
 - **`source_encoding` / `target_encoding` 允许 ABI 面向的类型与内部表示不同**（须可 bitcast、动态维数量一致），用来做 rank-0 与 rank-N、不同 element type 之间的转换。
 - **`on(%affinity)`** 指定这次导入/导出发生在哪个设备上。
+
+#### 示例精讲：一个完整的 `@main` 边界
+
+编译器为**带 fence 的异步 ABI** 生成的入口函数大致长这样：外面是 buffer_view 加一对 fence，里面是纯 tensor 世界。
+
+```mlir
+func.func @main(%input: !hal.buffer_view,
+                %wait: !hal.fence,     // 用户：这个到达前别读我的输入
+                %signal: !hal.fence)   // 用户：这个到达后你可以读输出
+    -> !hal.buffer_view {
+  // ① 进门：buffer_view → tensor，挂上 wait fence
+  %t0 = hal.tensor.import wait(%wait) => %input
+          : !hal.buffer_view -> tensor<4x8xf32>
+
+  // ② 中间：普通 tensor 计算，看不到任何 fence
+  %t1 = linalg.generic ... ins(%t0 : tensor<4x8xf32>) ... -> tensor<4x8xf32>
+
+  // ③ 打时间点：把「%t1 算完了」绑到 signal fence 上
+  %ready = hal.tensor.barrier join(%t1 : tensor<4x8xf32>) => %signal : !hal.fence
+
+  // ④ 出门：tensor → buffer_view
+  %out = hal.tensor.export %ready : tensor<4x8xf32> -> !hal.buffer_view
+  return %out : !hal.buffer_view
+}
+```
+
+> 形态示意：真实 dump 里外层通常还有 `iree.abi.*` 属性、参数名字符串与 `util.func` 包装，这里只留主干。
+
+与 [3.3](#33-输入输出与-fence-的绑定) 里用户侧写法的对照：
+
+| 用户侧 | IR 里的落点 | 含义 |
+|--------|-----------|------|
+| `(wait_fence, buffer_a)` 元组 | `hal.tensor.import wait(%wait) => %input` | fence 绑的是**这一个资源**，不是全局 barrier |
+| 值类型参数 `42` | 普通 SSA 值传入，**不挂 fence** | 值不需要排序 |
+| `(signal_fence, buffer_out)` | `hal.tensor.barrier ... => %signal` | 「算到这里」这个时间点被交回用户 |
+| `signal_fence.wait()` | 不在这个函数里，在**调用方** | 函数本身立即返回 |
+
+四个要点：
+
+1. **函数是立即返回的**。`@main` 返回时 kernel 可能一条都没跑，`%out` 要等 `%signal` 到达才可读。
+2. **`barrier` 必须在 `export` 之前**：先确定「什么时候算完」，才谈「把结果交出去」。
+3. **多个输出共用一个 signal fence** 时，`join` 可以接多个 tensor——这就是它叫 join 的原因。
+4. **`wait` 可选**：省掉表示输入立即可用（同步 ABI 就是这种形态，签名里连 fence 参数都没有）。
+
+再往下一层，这三个 op 会落成：`import` 的 wait fence 接到 [4.5](#45-工作提交device-queue-api) 里 `hal.device.queue.execute` 的 `wait`，`barrier` 的 signal fence 接到它的 `signal`。**所以「边界三 op」本质是把用户的时间线接进程序内部的时间线。**
+
+> **自测**：`@main` 返回之后、`%signal` 到达之前，用户去读 `%out` 对应的内存会读到什么？
 
 另外两个值得知道的 pseudo op：
 - **`hal.dispatch.extern`**：直接派发一个外部提供的 executable，**这是插入手写 kernel 的官方口子**。

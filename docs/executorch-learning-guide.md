@@ -134,6 +134,52 @@ edge = edge.to_backend(MyPartitioner())   # 或 to_backend(ep, MyPartitioner())
 
 新版高层封装（如 `to_edge_transform_and_lower`）把 Edge 变换与 Partitioner 捆在一起，底层仍是同一条流水线——学机制时以 `to_edge` + `to_backend` 为准。
 
+#### 示例精讲：同一个模型，四个相位各 dump 一次
+
+最小具体输入：`(x + y) * y`，两个 `[2,3]` 张量。
+
+```python
+import torch
+from torch.export import export
+from executorch.exir import to_edge
+
+class M(torch.nn.Module):
+    def forward(self, x, y):
+        return (x + y) * y
+
+inputs = (torch.randn(2, 3), torch.randn(2, 3))
+
+ep = export(M(), inputs)                       # 相位 2：ATen Dialect
+print(type(ep).__name__); print(ep.graph_module.code)
+
+edge = to_edge(ep)                             # 相位 3：Edge Dialect
+print(type(edge).__name__); print(edge.exported_program().graph)
+
+edge = edge.to_backend(MyPartitioner())        # 相位 4：Backend Dialect（可选，见第 7 章）
+print(edge.exported_program().graph)
+
+prog = edge.to_executorch()                    # 相位 5：ExecuTorch Program
+open("m.pte", "wb").write(prog.buffer)
+```
+
+> API 名称随版本变化（`prog.buffer` 与 `write_to_file`、`to_edge` 与 `to_edge_transform_and_lower`），跑之前核对本地版本。
+
+四次 dump 的产物类型与「能看见什么」：
+
+| 相位 | dump 入口 | 拿到的对象 | 图里长什么样 | 这一层看不到 |
+|------|----------|-----------|-------------|------------|
+| ATen | `ep.graph_module.code` | `ExportedProgram` | `torch.ops.aten.add.Tensor(x, y)` | 端侧算子集、dtype 特化 |
+| Edge | `edge.exported_program().graph` | `EdgeProgramManager`（内含 `ExportedProgram`） | `executorch_exir_dialects_edge__ops_aten_add_Tensor` | 谁去哪个后端 |
+| post-`to_backend` | 同上 | 仍是 `EdgeProgramManager` | 多出 `get_attr` + `executorch_call_delegate`；被委托的算子**从图里消失** | blob 内部（不透明） |
+| `.pte` | `prog.buffer`（bytes） | `ExecutorchProgramManager` | FlatBuffer：指令流 + 常量 + delegate 条目 | Python 侧的 `torch.fx.Graph` |
+
+两个「类型陷阱」值得单独记：
+
+1. **`ExportedProgram` ≠ `EdgeProgramManager`**。`to_edge` 返回的是 manager（可以装多个方法、多个 `ExportedProgram`），要拿图得先 `.exported_program()`。
+2. **相位 4 不产生新的容器类型**。委托只是把图里一段换成 `call_delegate` + `LoweredBackendModule`，外层仍是 Edge 层的 manager——所以「委托前后」可以用同一段代码对比（见 [4.4](#44-从-tag-到-blob融合preprocessloweredbackendmodule)）。
+
+> **自测**：跳过相位 4 直接 `to_executorch()`，`.pte` 里还会有 delegate 条目吗？指令流里剩几条 kernel 调用？
+
 与 [`iree-learning-guide.md`](./iree-learning-guide.md) 对照：IREE 的 `linalg → flow → stream → hal` 在**编译器内部**固化调度；ExecuTorch 的调度更多留在**运行时解释器 + 各 delegate**，编译期只决定"哪段图被哪块 blob 替换"。
 
 ---
@@ -184,6 +230,67 @@ Backend Delegation 的契约建立在 **Edge Dialect 图**上：
 若跳过 Edge、直接从松散 ATen 委托，每个 backend 都要自己消化 broadcast / promotion / Scalar——分区边界会更脏，研究问题②（layout / 量化 / 内存空间）会更早爆炸。
 
 **Backend Dialect** 是 Edge 之后的可选目标感知层：可插入 backend-specific op、元数据或已 lowered 的 module。它与"整段委托成 blob"是两条互补手段——融合模式可用 pattern→backend op；大块加速仍走 delegate。细节见官方 Backend Dialect 页；本仓库优先级上**先吃透 Partitioner，再碰 backend op 注册**。
+
+#### 示例精讲：`x + 1.0` 的 ATen 图 vs Edge 图
+
+最小具体输入：一个只做「加常数」的 Module，输入故意用 `int32`，让 dtype 有话可说。
+
+```python
+import torch
+from torch.export import export
+from executorch.exir import to_edge
+
+class M(torch.nn.Module):
+    def forward(self, x):
+        return x + 1.0
+
+ep = export(M(), (torch.ones(2, 3, dtype=torch.int32),))
+print(ep.graph)                              # ATen Dialect
+edge = to_edge(ep)
+print(edge.exported_program().graph)         # Edge Dialect
+```
+
+ATen Dialect（示意）：
+
+```text
+graph():
+    %x : [num_users=1] = placeholder[target=x]
+    %add : [num_users=1] = call_function[
+        target=torch.ops.aten.add.Tensor](args = (%x, 1.0), kwargs = {})
+    return (add,)
+```
+
+三处要盯住：`target` 在 `torch.ops.aten.*` 命名空间；第二个参数是**裸 Python float**（Scalar）；`int32 + float` 的结果 dtype 靠 ATen 的隐式 promotion 规则得到，**规则不写在图里**。
+
+Edge Dialect（示意）：
+
+```text
+graph():
+    %x : [num_users=1] = placeholder[target=x]
+    %full : [num_users=1] = call_function[
+        target=executorch_exir_dialects_edge__ops_aten_full_default](
+        args = ([1], 1.0), kwargs = {dtype: torch.float32})
+    %aten_add_tensor : [num_users=1] = call_function[
+        target=executorch_exir_dialects_edge__ops_aten_add_Tensor](
+        args = (%x, %full), kwargs = {})
+    return (aten_add_tensor,)
+```
+
+> 标量是否真被抬成张量、用哪个算子承载（`full` / `scalar_tensor` / 直接折叠成常量）随版本变化；跑之前先 dump 一次自己的图，再对照下表读。
+
+并排：
+
+| 维度 | ATen Dialect | Edge Dialect |
+|------|-------------|-------------|
+| 算子命名空间 | `torch.ops.aten.add.Tensor` | `executorch_exir_dialects_edge__ops_aten_add_Tensor` |
+| 常量 `1.0` | 节点 args 里的 Python float | 提升成 Tensor 节点，再当普通输入接进去 |
+| dtype | 运行时按 promotion 规则算（`int32 + float → float32`） | 算子已 dtype 特化，允许的组合写在 `edge.yaml` |
+| 后端要实现什么 | 「一个 add，自己处理所有 dtype 与 Scalar 重载」 | 「若干 (op, dtype) 组合的 kernel」 |
+| 计算节点数 | 1 | 2（多出来的 `full` 通常会被折叠进 `.pte` 的常量段） |
+
+对委托的直接后果：Partitioner 在 Edge 层看到的 `%aten_add_tensor`，**每个输入都是 Tensor 节点**——判断「这个节点我能不能吃」只需要看 `(target, 输入 dtype/shape)`，不必再分 Scalar 分支。这就是 [3.4](#34-为什么这层对委托至关重要) 说的「委托契约建在 Edge 层」的具体含义。
+
+> **自测**：如果 Partitioner 只 tag 了 `add` 而漏了那个 `full` 节点，委托子图的入参会多几个？
 
 ---
 
@@ -359,6 +466,63 @@ class PartitionResult:
 3. **`preprocess` 输入是 Edge 子图**。官方 demo（`BackendWithCompilerDemo`）会遍历节点，把 `add`/`mul`/`sin` 等编成字符串 blob，运行时再解析执行——教学用；真后端通常输出 TSI / 自定义二进制 / 厂商 compiler 产物。
 4. **权重**：preprocess 所见常为 lifted graph，权重作输入；AOT 可用 `torch._export.utils.get_params` 取出并**打进 blob**。若要优化常量，Partitioner 需把对应 placeholder（state）一并打上 tag。
 
+#### 示例精讲：打 tag 前后的图
+
+最小具体输入：`x+y → *y → -y`；Partitioner 只吃 `add` / `mul`，且让同一连通分量共用一个 tag。
+
+打 tag 前的 Edge 图（`meta` 里还没有 `delegation_tag`）：
+
+```text
+graph():
+    %x, %y = placeholder
+    %aten_add_tensor = call_function[target=...edge__ops_aten_add_Tensor](%x, %y)
+    %aten_mul_tensor = call_function[target=...edge__ops_aten_mul_Tensor](%aten_add_tensor, %y)
+    %aten_sub_tensor = call_function[target=...edge__ops_aten_sub_Tensor](%aten_mul_tensor, %y)
+    return (aten_sub_tensor,)
+```
+
+`partition` 只写两处，**图结构一个字节都没动**：
+
+```python
+node.meta["delegation_tag"] = "t0"                       # add / mul 两个节点
+partition_tags["t0"] = DelegationSpec("BackendWithCompilerDemo", [])
+```
+
+```text
+add  .meta["delegation_tag"] = "t0"
+mul  .meta["delegation_tag"] = "t0"
+sub  （无 tag → 留在 portable 路径）
+```
+
+`to_backend` 之后（示意）：
+
+```text
+graph():
+    %x, %y = placeholder
+    %lowered_module_0 = get_attr[target=lowered_module_0]         # ← LoweredBackendModule
+    %executorch_call_delegate = call_function[
+        target=torch.ops.higher_order.executorch_call_delegate](
+        args = (%lowered_module_0, %x, %y), kwargs = {})          # ← 委托点
+    %getitem = call_function[target=operator.getitem](
+        args = (%executorch_call_delegate, 0), kwargs = {})       # ← 取第 0 个输出
+    %aten_sub_tensor = call_function[target=...edge__ops_aten_sub_Tensor](%getitem, %y)
+    return (aten_sub_tensor,)
+```
+
+三个新东西各是什么：
+
+| 图上的节点 | 类型 | 里面装了什么 |
+|-----------|------|-----------|
+| `lowered_module_0` | `get_attr`，指向 `LoweredBackendModule` | `backend_id`、`preprocess` 产出的 blob、`compile_specs`、原子图 |
+| `executorch_call_delegate` | higher-order op 调用 | 第 1 个参数是 lowered module，其余是子图入参（这里是 `x`、`y`） |
+| `getitem` | 普通 `operator.getitem` | 委托返回的是 tuple，按位置取出 |
+
+对着数一遍：`add` / `mul` 两个节点**从图里消失了**（被吃进 blob），`sub` 原样留下，图从「3 个计算节点」变成「1 次委托 + 1 个 portable 算子」。
+
+> 属性名与 higher-order op 的限定名随版本变化，跑之前先 dump 一次自己的图。
+
+> **自测**：若把 `add` 与 `mul` 打成 `t0` / `t1` 两个不同 tag，上面这张图会多出哪几行？
+
 ### 4.5 运行时：`call_delegate` / init / execute
 
 `.pte` 加载后：
@@ -368,6 +532,55 @@ class PartitionResult:
 3. `destroy` 在程序生命周期结束时释放 backend 资源（可选）。
 
 对 Developer Tools 而言，delegate 内部默认**不透明**——调试/profiling 要靠 debug handle map，把 backend 内部 handle 映射回原始子图（见官方 Delegate Debugging）。这不影响分区机制本身，但提醒：分区后"算子级"观测变难，边界选择既影响性能也影响可观测性。
+
+#### 示例精讲：一次 `execute` 走过的路，与 `.pte` 里的 delegate 条目
+
+沿用上一节的图：一个 delegate（吃掉 `add`+`mul`）加一个 portable 的 `sub`。
+
+```text
+加载期（一次性）
+  Program::load(.pte)
+    └─ Method::load
+         ├─ 解析指令流、常量、张量元数据
+         └─ 对每个 delegate 条目：
+              backend = 按 id 查已注册的 backend       # register_backend 注册过才找得到
+              handle  = backend->init(ctx, processed_blob, compile_specs)
+                        （后端在这里解析自己的 blob，可能还要建图/分配私有内存）
+
+执行期（每次推理）
+  method.execute()
+    ├─ [0] DelegateCall  delegate_index = 0
+    │        └─ backend->execute(ctx, handle, args)     # args 是 EValue*：x / y / 输出缓冲
+    │              └─ 后端内部跑自己的 add+mul（对 ExecuTorch 不透明）
+    └─ [1] KernelCall    aten::sub.out                  # portable kernel，写进预分配的 out
+```
+
+`.pte`（FlatBuffer）里对应的条目（示意，字段名随 `schema/program.fbs` 版本变化）：
+
+```text
+ExecutionPlan "forward"
+├─ inputs / outputs : [value_index ...]
+├─ values[] : Tensor / TensorList / Int ...          # 含预分配输出缓冲的元数据
+├─ delegates[0] : BackendDelegate
+│     id            = "BackendWithCompilerDemo"      # ← 必须与设备上注册的名字一致
+│     processed     = 指向 blob 的引用（inline 段或独立数据段 + index）
+│     compile_specs = []
+└─ chains[0].instructions
+      [0] DelegateCall { delegate_index = 0, args = [...] }
+      [1] KernelCall   { op_index = <aten::sub.out>, args = [...] }
+```
+
+三条因果值得记住：
+
+| 现象 | 原因 |
+|------|------|
+| `init` 每个 delegate 只调一次，`execute` 每次推理都调 | blob 解析/建图的代价摊在加载期；**每次都付的是边界代价**（第 5 章） |
+| runtime 完全不知道 blob 里是 add 还是 mul | `processed` 对 ExecuTorch 只是字节数组，只有该 backend 认识 |
+| profiling 里只看到一条 `DelegateCall` | 想细分到算子得靠 debug handle map（上文 Developer Tools 段） |
+
+`id` 对不上是最常见的运行期故障：AOT 侧 `DelegationSpec("Backend1", ...)` 写了名字，设备端却没链接进注册该名字的 backend，加载直接失败——这也是为什么 tag 策略要连同「目标设备装了哪些 backend」一起决定。
+
+> **自测**：同一个后端被切成两个 delegate 子图时，`delegates[]` 有几项、`init` 调用几次、`execute` 每次推理调几次？
 
 ---
 
@@ -394,6 +607,59 @@ class PartitionResult:
 **观察实验（与动手清单呼应）**：用只 tag `add`/`mul` 的 Partitioner 跑官方 `+ * - / * +` 图，数 `call_delegate` / lowered submodule 个数。每增加一个夹在中间的 `-` 或 `/`，就多一条边界——把"分区边界有代价"从口号变成计数。
 
 与 IREE 对照：IREE 在 Flow 层形成 `flow.dispatch`，边界代价被编译进 Stream/HAL 的 copy 与 barrier；ExecuTorch 把边界留给 runtime + 各 delegate 的 buffer 约定。**问题同构，结算层不同**。
+
+#### 示例精讲：同一模型，两种 tag 粒度的边界账
+
+模型固定为官方那张 `+ * - / * +`（代码见[第 7 章](#第-7-章-最小-partitioner-示例概念代码)），可委托算子只有 `add` / `mul`：
+
+```text
+x,y ─▶ add0 ─v1─▶ mul1 ─v2─▶ sub2 ─v3─▶ div3 ─v4─▶ mul4 ─v5─▶ add5 ─▶ y
+       ★委托       ★委托       portable    portable    ★委托       ★委托
+```
+
+粒度 A：**逐节点一个 tag**（第 7 章示例代码就是这么写的）
+
+```text
+D0={add0}  D1={mul1}   [sub2 div3 portable]   D2={mul4}  D3={add5}
+跨界张量：v1 (D0→D1)  v2 (D1→portable)  v4 (portable→D2)  v5 (D2→D3)
+```
+
+粒度 B：**同一连通分量共用一个 tag**
+
+```text
+DA={add0, mul1}        [sub2 div3 portable]   DB={mul4, add5}
+跨界张量：v2 (DA→portable)  v4 (portable→DB)
+```
+
+对照表：
+
+| 指标 | A 逐节点 | B 连通分量 | 差别来自哪 |
+|------|---------|-----------|----------|
+| delegate 子图数 | 4 | 2 | tag 的**集合划分**直接决定 |
+| `preprocess` 调用 / blob 数 | 4 | 2 | 每个 blob 有自己的头部与常量副本 |
+| `call_delegate` 指令数 | 4 | 2 | 每条都要过一次 backend ABI |
+| 跨界张量交接 | 4（v1 v2 v4 v5） | 2（v2 v4） | v1、v5 本可以留在后端内部 |
+| `y` 被送进后端的次数 | 4 | 2 | 每个子图都得单独拿到 `y` |
+| 委托入参张量总数 | 8 | 4 | 同上 |
+| 后端内可做的融合 | 无（一次只看见一个算子） | `add+mul` 可以融成一个 kernel | 粒度越粗，后端优化空间越大 |
+
+数出来的办法（跑通后只改 tag 粒度，比 A/B 两组数字）：
+
+```python
+import torch
+gm = edge.exported_program().graph_module
+calls = [n for n in gm.graph.nodes
+         if n.op == "call_function"
+         and n.target is torch.ops.higher_order.executorch_call_delegate]
+print("delegate 子图数:", len(calls))
+print("委托入参张量总数:", sum(len(n.args) - 1 for n in calls))  # 第 1 个 arg 是 lowered module
+```
+
+> API 名称随版本变化，跑之前核对本地版本；没装 ExecuTorch 时，`onnx-delegate-lab` 的模拟报告也给同样这两组数字。
+
+结论一句话：**tag 粒度 = 图分割的自由度**。但 B 不是「永远更好」——若 `add0` 与 `mul1` 之间夹着后端不支持的属性组合，强行合并会让整块 `preprocess` 失败，反而退回全 portable。
+
+> **自测**：把 `sub2` 也变成可委托算子后，A 与 B 的 delegate 子图数各变成几个？
 
 ---
 
@@ -437,6 +703,86 @@ class Backend_1_2_Partitioner(Partitioner):
 特点：一次遍历可做**全局**划分（考虑边界代价、避免两后端抢同一节点）；实现复杂度和 cost model 都更高——也更接近研究问题①的真实形态。
 
 工程建议：先用选项 1 跑通双后端；需要联合优化边界时再上选项 2。
+
+#### 示例精讲：4 节点图上，两种写法各产出什么
+
+最小具体输入：4 个算子，前两个归 Backend1，后两个归 Backend2。
+
+```python
+class M(torch.nn.Module):
+    def forward(self, x, y):
+        a = x + y      # n0 → Backend1
+        b = a * y      # n1 → Backend1
+        c = b - y      # n2 → Backend2
+        d = c / y      # n3 → Backend2
+        return d
+
+inputs = (torch.randn(1, 3), torch.randn(1, 3))
+```
+
+**写法 1：串行两次 `to_backend`**
+
+```python
+ep = to_edge(export(M(), inputs)).exported_program()
+ep = to_backend(ep, AddMulPartitioner())    # 只 tag add/mul → Backend1
+ep = to_backend(ep, SubDivPartitioner())    # 只 tag sub/div → Backend2
+```
+
+关键点：第二次调用时 `add`/`mul` 已经被替换掉了，`SubDivPartitioner` **根本看不到它们**——它遍历到的只有 `get_attr`、`call_delegate`、`getitem`、`sub`、`div`。
+
+**写法 2：一个 Partitioner 打两种 tag**
+
+```python
+class TwoBackendPartitioner(Partitioner):
+    def __init__(self) -> None:
+        self.spec1 = DelegationSpec("Backend1", [])
+        self.spec2 = DelegationSpec("Backend2", [])
+        self.partition_tags: Dict[str, DelegationSpec] = {}
+
+    def partition(self, exported_program: ExportedProgram) -> PartitionResult:
+        for node in exported_program.graph_module.graph.nodes:
+            if node.op != "call_function":
+                continue
+            if node.target in (_ADD, _MUL):
+                node.meta["delegation_tag"] = "b1"
+                self.partition_tags["b1"] = self.spec1
+            elif node.target in (_SUB, _DIV):
+                node.meta["delegation_tag"] = "b2"
+                self.partition_tags["b2"] = self.spec2
+        return PartitionResult(exported_program, self.partition_tags)
+
+ep = to_backend(to_edge(export(M(), inputs)).exported_program(), TwoBackendPartitioner())
+```
+
+（`_ADD` 等 Edge op 常量与导入写法见[第 7 章](#第-7-章-最小-partitioner-示例概念代码)；`Partitioner` / `PartitionResult` / `DelegationSpec` 的模块路径随版本变化，跑之前核对本地版本。）
+
+两种写法的**最终图长得一样**：
+
+```text
+graph():
+    %x, %y = placeholder
+    %lowered_module_0 = get_attr[target=lowered_module_0]        # Backend1: add + mul
+    %d0 = call_function[target=torch.ops.higher_order.executorch_call_delegate](
+              args = (%lowered_module_0, %x, %y))
+    %g0 = call_function[target=operator.getitem](args = (%d0, 0))
+    %lowered_module_1 = get_attr[target=lowered_module_1]        # Backend2: sub + div
+    %d1 = call_function[target=torch.ops.higher_order.executorch_call_delegate](
+              args = (%lowered_module_1, %g0, %y))
+    %g1 = call_function[target=operator.getitem](args = (%d1, 0))
+    return (g1,)
+```
+
+差别不在结果图，在**决策能力**：
+
+| 维度 | 写法 1（串行） | 写法 2（单 Partitioner） |
+|------|--------------|----------------------|
+| 谁看得见全图 | 只有第一个；后者拿到的是被挖过的图 | 一次 `partition` 里看到完整 Edge 图 |
+| 两后端抢同一节点 | 先到先得，靠调用顺序表达优先级 | 可写显式规则（代价比较、设备亲和） |
+| 能否权衡边界位置 | 不能：第一次划分时不知道第二个后端想要什么 | 能：`b1` / `b2` 的分界点可以带代价模型选 |
+| 失败回退 | 某次 `preprocess` 失败只影响那一步 | 一次 `partition` 内要自己保证所有 tag 自洽 |
+| 实现成本 | 低，直接复用现成 Partitioner | 高，等于自己写图分割算法 |
+
+> **自测**：写法 1 里把两次调用顺序对调，最终图会变吗？如果两个 Partitioner 都想要那个 `mul`，谁拿到？
 
 ---
 

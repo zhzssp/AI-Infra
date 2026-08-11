@@ -126,6 +126,83 @@
 
 **记忆口诀**：Model 装元数据与能力声明；Graph 装拓扑与常量；Node 装一次算子调用；边不是指针，而是**共享的字符串名字**。
 
+#### 示例精讲：`Gemm → Relu` 从构图到 `print(model)`
+
+最小具体输入：一层线性 + 一个激活，权重全部只走 `initializer`。
+
+```python
+import numpy as np
+import onnx
+from onnx import helper, numpy_helper, checker, TensorProto
+
+W = numpy_helper.from_array(np.zeros((3, 4), np.float32), name="W")   # Gemm 的 B
+b = numpy_helper.from_array(np.zeros((4,), np.float32), name="b")     # Gemm 的 C
+
+gemm = helper.make_node("Gemm", ["x", "W", "b"], ["h"], name="gemm0")
+relu = helper.make_node("Relu", ["h"], ["y"], name="relu0")
+
+X = helper.make_tensor_value_info("x", TensorProto.FLOAT, [1, 3])
+Y = helper.make_tensor_value_info("y", TensorProto.FLOAT, [1, 4])
+
+graph = helper.make_graph([gemm, relu], "gemm_relu", [X], [Y], initializer=[W, b])
+model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 17)],
+                          producer_name="ai-infra-demo")
+model.ir_version = onnx.IR_VERSION
+checker.check_model(model)
+print(model)          # protobuf 文本格式
+```
+
+`print(model)` 的关键字段（省略 `raw_data` 与空字段）：
+
+```protobuf
+ir_version: 10                      # = onnx.IR_VERSION，随本地 onnx 版本变化
+producer_name: "ai-infra-demo"
+graph {
+  node { input: "x" input: "W" input: "b" output: "h" name: "gemm0" op_type: "Gemm" }
+  node { input: "h" output: "y" name: "relu0" op_type: "Relu" }
+  name: "gemm_relu"
+  initializer { dims: 3 dims: 4 data_type: 1 name: "W" raw_data: "..." }
+  initializer { dims: 4 data_type: 1 name: "b" raw_data: "..." }
+  input  { name: "x" type { tensor_type { elem_type: 1
+           shape { dim { dim_value: 1 } dim { dim_value: 3 } } } } }
+  output { name: "y" type { tensor_type { elem_type: 1
+           shape { dim { dim_value: 1 } dim { dim_value: 4 } } } } }
+}
+opset_import { version: 17 }        # 没有 domain 行 = 默认 domain 是空字符串
+```
+
+（真实输出每个字段单独一行；这里把 `node` / `shape` 压成一行省篇幅。`data_type: 1` = `TensorProto.FLOAT`。）
+
+内存里是同构的对象树：
+
+```text
+ModelProto                                   ← model
+├─ ir_version = 10
+├─ opset_import[0] = OperatorSetIdProto(domain="", version=17)
+├─ producer_name  = "ai-infra-demo"
+└─ graph : GraphProto                        ← model.graph
+   ├─ name = "gemm_relu"
+   ├─ node[0] : NodeProto  op_type="Gemm"  input=["x","W","b"]  output=["h"]
+   ├─ node[1] : NodeProto  op_type="Relu"  input=["h"]          output=["y"]
+   ├─ initializer[0] : TensorProto  name="W"  dims=[3,4]
+   ├─ initializer[1] : TensorProto  name="b"  dims=[4]
+   ├─ input[0]  : ValueInfoProto  name="x"
+   └─ output[0] : ValueInfoProto  name="y"
+```
+
+文本字段 ↔ 访问路径 ↔ 语义：
+
+| 文本里看到 | Python 访问 | 它是「节点」还是「边」 |
+|-----------|------------|--------------------|
+| `op_type: "Gemm"` | `model.graph.node[0].op_type` | 节点：一次算子调用 |
+| `output: "h"` / `input: "h"` | `node[0].output[0]` / `node[1].input[0]` | 边：同名字符串把两个节点接起来 |
+| `initializer { name: "W" }` | `model.graph.initializer[0]` | 常量定义；`W` 不出现在 `graph.input` |
+| `input { name: "x" }` | `model.graph.input[0]` | 唯一需要运行时喂的值 |
+
+中间值 `h` 在 `graph.value_info` 里**没有条目**——中间值的类型注解不是必须的，要靠[第 5 章](#第-5-章-shape-inference能推什么推不出什么)的 `infer_shapes` 补出来。
+
+> **自测**：把 `W` 也加进 `graph.input` 之后，`sess.get_inputs()` 会多出什么，模型为什么仍然合法？
+
 ### 2.2 ModelProto：元数据与能力声明
 
 `ModelProto` 的职责不是「算」，而是让加载方在真正执行前回答：**我能不能跑这个模型？**
@@ -222,6 +299,85 @@ ValueInfoProto
 - `dims` + `data_type` + 数据字段（`float_data` / `raw_data` / …）；
 - 大权重可用 **external data**（另文件 + offset/length），避免把 GB 级权重塞进单个 protobuf。
 
+#### 示例精讲：一个 Conv 节点的三件套 proto
+
+最小具体输入：`img[N,3,32,32] → Conv(3×3, 8 输出通道, pad=1) → feat`。
+
+```python
+conv = helper.make_node(
+    "Conv", ["img", "conv_w", "conv_b"], ["feat"], name="conv0",
+    kernel_shape=[3, 3], strides=[1, 1], pads=[1, 1, 1, 1], dilations=[1, 1], group=1,
+)
+```
+
+**NodeProto**（`print(conv)`，属性按名字排序）：
+
+```protobuf
+input: "img"
+input: "conv_w"
+input: "conv_b"
+output: "feat"
+name: "conv0"
+op_type: "Conv"
+attribute { name: "dilations"    ints: 1 ints: 1                 type: INTS }
+attribute { name: "group"        i: 1                            type: INT  }
+attribute { name: "kernel_shape" ints: 3 ints: 3                 type: INTS }
+attribute { name: "pads"         ints: 1 ints: 1 ints: 1 ints: 1 type: INTS }
+attribute { name: "strides"      ints: 1 ints: 1                 type: INTS }
+```
+
+**TensorProto**（`initializer` 里的权重，8×3×3×3）：
+
+```protobuf
+initializer {
+  dims: 8  dims: 3  dims: 3  dims: 3
+  data_type: 1                   # TensorProto.FLOAT
+  name: "conv_w"                 # ← 必须与 node.input[1] 同名
+  raw_data: "\000\000\200?..."   # 8*3*3*3*4 = 864 字节，小端裸内存
+}
+```
+
+权重大到不想塞进 protobuf 时换成 external data，数据字段整个消失：
+
+```protobuf
+  data_location: EXTERNAL
+  external_data { key: "location" value: "weights.bin" }
+  external_data { key: "offset"   value: "0" }
+  external_data { key: "length"   value: "864" }
+```
+
+**ValueInfoProto**（图输入 `img`，第 0 维是符号维）：
+
+```protobuf
+input {
+  name: "img"                    # ← 必须与 node.input[0] 同名
+  type {
+    tensor_type {
+      elem_type: 1               # 与 TensorProto.data_type 共用同一套枚举
+      shape {
+        dim { dim_param: "N" }   # 符号维
+        dim { dim_value: 3 }
+        dim { dim_value: 32 }
+        dim { dim_value: 32 }
+      }
+    }
+  }
+}
+```
+
+三者的引用关系全靠**字符串名字**，proto 里没有任何指针：
+
+| 名字 | 定义在哪 | 使用在哪 | 谁描述它的类型/形状 |
+|------|---------|---------|------------------|
+| `img` | `graph.input[i]`（ValueInfoProto） | `conv0.input[0]` | 就是那个 ValueInfoProto |
+| `conv_w` | `graph.initializer[j]`（TensorProto） | `conv0.input[1]` | TensorProto 自带 `dims` + `data_type` |
+| `conv_b` | 同上 | `conv0.input[2]` | 同上 |
+| `feat` | `conv0.output[0]`（SSA 定义点） | 下游节点的 `input` | 跑过 shape inference 后才在 `graph.value_info` 里出现 |
+
+一句话记住分工：**TensorProto 带数据、ValueInfoProto 只带类型、NodeProto 两个都不带，只带名字。**
+
+> **自测**：这段 proto 里能读出 `feat` 的形状吗？要拿到它得先调用什么？
+
 ### 2.5 Functions：模型本地函数
 
 `FunctionProto` = **算子签名 + 用更原语算子写成的函数体（子图）**。
@@ -277,6 +433,64 @@ graph.output:  "z"
 官方提醒：这种区分对某些实现的性能至关重要，对另一些实现则无关——但作为 IR 契约必须遵守。
 
 **常见错误**：把本该是 attribute 的常量做成输入（或反过来），导致 opset 校验失败，或让本可常量折叠的路径变成动态。
+
+#### 示例精讲：合法 3 节点图 vs 把 attribute 误做 input
+
+合法版：`x → MatMul(W) → Add(b) → Softmax(axis=-1) → y`。
+
+```python
+W = numpy_helper.from_array(np.zeros((3, 4), np.float32), name="W")
+b = numpy_helper.from_array(np.zeros((4,), np.float32), name="b")
+
+nodes = [
+    helper.make_node("MatMul",  ["x", "W"],  ["h"],  name="mm0"),
+    helper.make_node("Add",     ["h", "b"],  ["h2"], name="add0"),
+    helper.make_node("Softmax", ["h2"],      ["y"],  name="sm0", axis=-1),  # axis 是属性
+]
+```
+
+对应文本（只列关键行）：
+
+```protobuf
+node { input: "x"  input: "W" output: "h"  name: "mm0"  op_type: "MatMul" }
+node { input: "h"  input: "b" output: "h2" name: "add0" op_type: "Add" }
+node { input: "h2"            output: "y"  name: "sm0"  op_type: "Softmax"
+       attribute { name: "axis" i: -1 type: INT } }
+```
+
+逐条对上本章三条规则：
+
+| 规则 | 这张图怎么满足的 |
+|------|---------------|
+| 拓扑有序（3.1） | `mm0` 定义 `h` 排在 `add0` 使用 `h` 之前；把 `node` 列表倒过来写就非法 |
+| 输出 SSA（3.2） | `h` / `h2` / `y` 互不相同，也不与 `x` / `W` / `b` 撞名 |
+| 属性 vs 输入（3.3） | `axis` 走属性（构图时定死）；`W` / `b` 走 input + initializer（数据流上的常量） |
+
+反例：把 `axis` 做成第 2 个输入。
+
+```python
+axis = numpy_helper.from_array(np.array([-1], np.int64), name="axis")
+bad = helper.make_node("Softmax", ["h2", "axis"], ["y"], name="sm_bad")   # 多了一个 input
+```
+
+`checker.check_model` 直接拒绝（报错信息示意，措辞随版本变化）：
+
+```text
+onnx.checker.ValidationError: Node (sm_bad) has input size 2 not in range [min=1, max=1]
+```
+
+因为 opset 17 的 `Softmax` 签名就是「1 输入 1 输出 + `axis` 属性」——**签名由 opset 钉死，不是可选风格**（见 [4.1](#41-算子身份三元组)）。
+
+就算换成本来就允许该参数走输入的算子（例如 opset≥5 的 `Reshape`，`shape` 确实是 input），把编译期常量塞进数据流仍然有代价：
+
+| 影响面 | 属性版 | 输入版 |
+|-------|-------|-------|
+| 常量折叠 | 值在 schema 校验时已知，kernel 直接特化 | 要先做常量传播确认上游是 initializer，才敢折叠 |
+| Shape inference | 推断函数直接读属性，输出形状确定 | 上游若不是常量，推断退化为未知维（[5.3](#53-能力边界必须建立正确预期)） |
+| EP 分区 | 节点自洽，EP 一眼判断能否接管 | EP 通常要求该输入必须是 initializer，否则拒接 → 分区在此断开 |
+| 图改写 | 改属性一行搞定 | 要同时改 initializer，可能还要修拓扑序 |
+
+> **自测**：`Reshape` 的 `shape` 从 initializer 变成上游算出来的张量后，EP 为什么更可能把这个节点丢回 CPU？
 
 ### 3.4 Optional 输入/输出（知道即可）
 
@@ -395,6 +609,69 @@ onnx.save(inferred, "model.shaped.onnx")
 
 - **类型推断**多半由 schema 的 type constraint 自动完成（如共享类型变量 `T`）；
 - **形状推断**几乎总要算子自带 `TypeAndShapeInferenceFunction`。
+
+#### 示例精讲：`[None, 3]` 进来，`infer_shapes` 之后拿到什么
+
+最小具体输入：动态 batch 的 `x`，先与一个 `[5,3]` 常量沿 axis=0 拼接，再做 MatMul。
+
+```python
+import numpy as np, onnx
+from onnx import helper, numpy_helper, shape_inference, TensorProto
+
+C = numpy_helper.from_array(np.zeros((5, 3), np.float32), name="C")
+W = numpy_helper.from_array(np.zeros((3, 4), np.float32), name="W")
+
+nodes = [
+    helper.make_node("Concat", ["x", "C"],   ["cat"], name="cat0", axis=0),
+    helper.make_node("MatMul", ["cat", "W"], ["y"],   name="mm0"),
+]
+X = helper.make_tensor_value_info("x", TensorProto.FLOAT, [None, 3])   # 匿名动态维
+Y = helper.make_tensor_value_info("y", TensorProto.FLOAT, [None, 4])
+g = helper.make_graph(nodes, "dyn", [X], [Y], initializer=[C, W])
+m = helper.make_model(g, opset_imports=[helper.make_opsetid("", 17)])
+m.ir_version = onnx.IR_VERSION
+
+print(len(m.graph.value_info))               # 0：中间值一个注解都没有
+m2 = shape_inference.infer_shapes(m)
+print(len(m2.graph.value_info))              # 1：多出中间值 cat
+```
+
+`[None, 3]` 写成 proto 是这样——注意第 0 维**既没有 `dim_value` 也没有 `dim_param`**：
+
+```protobuf
+shape { dim { }  dim { dim_value: 3 } }
+```
+
+推断前后对比：
+
+```text
+# 推断前
+graph.value_info: []
+
+# 推断后（示意）
+value_info {
+  name: "cat"
+  type { tensor_type { elem_type: 1
+         shape { dim { dim_param: "unk__0" }   # ← 不是 "N+5"，也不是 5
+                 dim { dim_value: 3 } } } }
+}
+```
+
+> 未知维在推断结果里是留成空 `dim { }` 还是填一个自动生成的符号名（`unk__0` 之类），随 onnx 版本变化；两者含义相同：**一个与输入无关的未知维**。
+
+为什么拿不到 `N+5`：`TensorShapeProto.Dimension` 是个 oneof，只有三种状态——
+
+| 维的状态 | proto 形态 | 能表达什么 |
+|---------|-----------|----------|
+| 已知常量 | `dim_value: 5` | 具体长度 |
+| 符号 | `dim_param: "N"` | 「与别处同名的那个长度相同」 |
+| 未知 | 两个字段都不设 | 什么都不知道 |
+
+**没有第四种「表达式」状态**，所以 `? + 5` 只能退化成「未知」或一个新造的符号。`dim_param` 的语义是同名即同长，`unk__0` 与输入的动态维之间没有任何代数关系，只是个占位符。
+
+把 `x` 改成 `["N", 3]`（即 `dim_param: "N"`）结果一样：`Concat` 照样推不出 `N+5`。但换成 `Add` 这类逐元素算子，`N` 会**原样传播**下去——差别在于算子是否需要对维做算术。
+
+> **自测**：把 `[None,3]` 换成 `[8,3]` 后，`cat` 的第 0 维变成什么？EP 的分区决策会因此不同吗？
 
 ### 5.4 对多后端委托的含义
 
@@ -602,6 +879,54 @@ ONNX 逻辑图:   [Conv]→[BN]→[Relu]→[MatMul]→[Softmax]
 边界: MatMul 的输出要从 GPU 拷到 Host（或保持在统一内存），再进 Softmax
 ```
 
+#### 示例精讲：3 节点模型上，三拍各改变了图的什么
+
+最小具体输入：`x → Conv → Relu → Softmax → y`（3 个节点，Conv 权重在 initializer）。
+
+```python
+import onnxruntime as ort
+
+so = ort.SessionOptions()
+so.optimized_model_filepath = "opt.onnx"        # 落盘「优化 + 分区之后」的图
+sess = ort.InferenceSession("tiny.onnx", so,
+                            providers=["CUDAExecutionProvider", "CPUExecutionProvider"])
+```
+
+> API 名称随 ORT 版本变化，跑之前核对本地版本；下面的融合节点名与 domain 同样是示意。
+
+**先分清 EP 有两类**，三拍在它们身上长得不一样：
+
+| EP 类型 | 代表 | `GetCapability` 返回 | `Compile` | 优化后图里看到什么 |
+|--------|------|---------------------|-----------|-----------------|
+| kernel-based | CPU、CUDA | 一批**单节点** capability | 不走这条路（直接查 kernel registry） | 节点个数不变，只是各节点归属的 provider 变了 |
+| compiling | TensorRT、QNN、NNAPI… | 一个**子图** capability | 走：子图 → 引擎 / blob | 整块被换成**一个不透明的融合节点** |
+
+同一个模型，两种 provider 列表，`opt.onnx` 长得完全不同：
+
+```text
+# A. providers=["CUDAExecutionProvider","CPUExecutionProvider"]（kernel-based）
+node { op_type: "FusedConv" domain: "com.microsoft" input: "x"  output: "h2" }  # Conv+Relu
+node { op_type: "Softmax"   domain: ""              input: "h2" output: "y"  }
+
+# B. providers=["TensorrtExecutionProvider","CPUExecutionProvider"]（compiling）
+node { op_type: "TRTKernel_graph_tiny_0" domain: "com.microsoft"
+       input: "x" output: "y" }         # 三个节点整段被吃进一个引擎
+```
+
+三拍分别落在哪一步：
+
+| 时刻 | 发生什么 | 对应关系 |
+|------|---------|---------|
+| Session 初始化，分区**前** | L1 基础优化：常量折叠、冗余节点消除 | 拍 1 拿到的图已经被动过 |
+| 分区 | 按 `providers` 顺序问每个 EP `GetCapability`，先到先得 | **拍 1** |
+| 分区**后** | L2 扩展优化（如 Conv+Relu → `FusedConv`）只作用于分给 CPU / CUDA 的节点 | A 里的融合来自这里，**不是**拍 2 |
+| 每个 capability | 调该 EP 的 `Compile`，产出引擎/blob，图上留一个占位节点 | **拍 2** |
+| `session.run()` | 按分区结果派发；跨 EP 的边补数据搬运 | **拍 3** |
+
+所以「优化后的图里出现融合节点」有两种来源，看 `opt.onnx` 时必须先分清：**ORT 自己的图优化**（`FusedConv`，仍是可读算子、仍能逐节点观测）与 **EP `Compile` 的产物**（`TRTKernel_*`，内部不可见）。
+
+> **自测**：只用 `providers=["CPUExecutionProvider"]` 落盘一次 `opt.onnx`，`FusedConv` 还在吗？为什么一定没有 `TRTKernel_*`？
+
 ### 7.3 分区边界代价
 
 **每个分区边界都可能引入四类开销**（与 [`ai-compiler-foundations.md` §3.3](./ai-compiler-foundations.md#33-子图划分与委托partition--delegate)、[`executorch-learning-guide.md`](./executorch-learning-guide.md) §5 用同一套分类）——这正是研究问题 ①② 的根源：
@@ -630,6 +955,36 @@ ONNX 逻辑图:   [Conv]→[BN]→[Relu]→[MatMul]→[Softmax]
 - ORT EP 分区在**多后端之间**制造边界；
 - 好的划分 ≈ 在「后端算得快」与「边界次数/流量小」之间折中；
 - 贪心优先级**不会**自动做出这个折中——这就是研究空白。
+
+#### 示例精讲：`Conv`(GPU EP) → `Softmax`(CPU EP) 边界上到底多了什么
+
+构造方式：让 `Conv` 归 CUDA EP、`Softmax` 归 CPU EP（真实做法是给 `Softmax` 用该 EP 不支持的 dtype/属性，或用只注册了 `Conv` 的自定义 EP）。分区之后，ORT 的 memcpy 变换会在跨设备的边上插节点：
+
+```text
+分区前（逻辑图）
+  x ──▶ Conv ──h──▶ Softmax ──▶ y
+
+分区后（示意，节点名随版本变化）
+  x ──▶ MemcpyFromHost ──▶ Conv[CUDA] ──▶ MemcpyToHost ──▶ Softmax[CPU] ──▶ y
+       └──── e1 ────┘                   └──── e2 ────┘
+```
+
+`MemcpyFromHost` / `MemcpyToHost` 是 ORT 内部算子（不属于 `ai.onnx`），**只有图被切开且两侧不在同一设备时才出现**——它们是四类代价里最可见的那一类。
+
+四类代价各对应哪条边：
+
+| 代价 | 落在哪条边 | 图上的证据 | 什么条件下不出现 |
+|------|-----------|-----------|--------------|
+| **数据拷贝** | e1（H2D，喂 `x`）、e2（D2H，取 `h`） | 两个 `Memcpy*` 节点本身 | 用 IOBinding 把输入直接放到 device 上，e1 可消掉 |
+| **内存空间切换** | e1、e2 | `Memcpy*` 存在即说明两侧分配器不互认 | 统一内存；或两侧同为 CPU |
+| **同步点** | e2 | **图上看不见**；CPU 要读 `h` 就必须等 GPU 流跑完 | 下游仍在同一 stream 上 |
+| **Layout 转换** | 视 EP 偏好而定，通常也压在 e2 | 边上多出 `Transpose`（偏好 NHWC 的 EP 由 L3 layout 优化插入） | 两侧 layout 偏好一致 |
+
+e2 的代价与 `h` 的大小成正比：`Conv` 输出 `[1,64,56,56]` 的 FP32 ≈ 802 KB，一次 D2H 可能比在 CPU 上跑一次 `Softmax` 还贵——**这就是「多委托一个节点反而更慢」的最小复现**。
+
+反过来看：若 `Softmax` 也能进 CUDA，e2 直接消失，两个节点并成一块，边界从「图中间」退到「图两端」。所以分区的目标不是「委托节点数最大」，而是 **计算收益 − 边界代价** 最大（对照 [`ai-compiler-foundations.md` §3.3](./ai-compiler-foundations.md#33-子图划分与委托partition--delegate)）。
+
+> **自测**：把 Conv 输出通道从 64 降到 4，e2 的拷贝量变成多少？这时把 `Softmax` 也搬上 GPU 还划算吗？
 
 ### 7.4 与 ExecuTorch / IREE / TVM 的对照
 

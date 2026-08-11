@@ -85,6 +85,44 @@ Operation（操作，唯一的语义单元）
 - **Region**：Op 挂"肚子"里的容器，装一组 Block；Region 的语义完全由它所属的 Op 定义（比如 `affine.for` 的单 Block Region 表示循环体，`scf.if` 的两个 Region 表示 then/else 分支）。这是 MLIR 相对 LLVM **扁平 CFG** 最大的结构差异：LLVM 的指令不能嵌套指令，只有一层"函数 → 基本块 → 指令"；而 MLIR 的 Operation 可以任意递归嵌套 Region，天然表达循环树、闲包、并行区域等结构化语义。
 - **Symbol / SymbolTable**：一种不遵守 SSA 定义规则的命名机制（可以先使用后定义，用于表达递归引用，如函数自身调用自己）。带 SymbolTable 的 Op（如 `module`、`func.func`）内部的具名实体（函数、全局变量）注册在符号表里，可以嵌套。
 
+#### 示例精讲：把一段日常写法的 IR 摊成上面这棵树
+
+> 目的：术语树看得懂，但拿到真实 `.mlir` 时要能立刻指认每一层。
+
+```mlir
+module {
+  func.func @add2(%a: i32, %b: i32) -> i32 {
+    %s = arith.addi %a, %b : i32
+    return %s : i32
+  }
+}
+```
+
+对应的对象树（注意 `module` 和 `func.func` 本身也是 Operation）：
+
+```text
+Operation "builtin.module"                 ← 带 SymbolTable
+└─ Region
+   └─ Block                                ← 无参数，装全局符号
+      └─ Operation "func.func" @add2       ← Attributes 里存着函数名与函数类型
+         └─ Region                          ← 函数体
+            └─ Block ^entry                 ← BlockArguments: %a, %b
+               ├─ Operation "arith.addi"    ← Operands: %a,%b；Results: %s
+               └─ Operation "func.return"   ← Terminator
+```
+
+三处最容易被忽略的对应关系：
+
+| 文本里看到的 | 树里的位置 | 说明 |
+|--------------|-----------|------|
+| `@add2` | `func.func` 的 **Attribute**（符号名） | 不是 Value，不能被当操作数使用 |
+| `%a`, `%b` | 入口 Block 的 **BlockArguments** | 定义点是块，不是某条 op |
+| `return` | Block 的 **Terminator** | 每个 Block 必须以终结符结尾 |
+
+论文 Figure 3 的 generic 语法（`"dialect.op"(%operands) : (类型) -> 类型`）与上面的自定义语法描述的是**同一棵树**，只是打印形式不同——`mlir-opt --mlir-print-op-generic` 可以随时切过去看。
+
+> **自测**：`@add2` 这个名字如果写错成不存在的符号被别处引用，报错来自 Verifier 的哪一类检查（SSA dominance 还是符号解析）？
+
 `module { func.func { ... } }` 就是这棵树最外两层的具体实例：`ModuleOp` 带 1 个 Region 装全局符号表，`FuncOp` 带 1 个 Region 装函数体 Block，函数体 Block 里才是真正的计算 Op（如 `toy.add`）。这与仓库里 `mlir-toy-dialect/knowledge.md` 画的那棵"嵌套树"完全一致——理解那份笔记之后，本节内容就是把它推广到 MLIR 论文的正式术语上。
 
 ### 2.3 Dialect 是什么
@@ -128,6 +166,48 @@ Operation（操作，唯一的语义单元）
 
 **为什么这样设计**：LLVM IR 的指令不能嵌套指令，循环、条件等结构化控制流在 LLVM 层面必须被"拍扁"成 pre-header/header/latch/body 这种标准形态的基本块图。这种扁平化虽然便于统一处理，但一旦拍扁，循环的"结构"信息就丢了，后续如果还想做循环级变换（分块、向量化、多面体分析）就要重新从 CFG 里"raise"结构，既昂贵又不可靠。MLIR 选择把嵌套 Region 作为**一等公民**，允许在需要结构化信息的层级（如 `affine.for`、`scf.for`）保留循环树，只在真正需要扁平 CFG 语义的层级（如 `cf.br`/`llvm` dialect）才拍扁。
 
+#### 示例精讲：同一个循环，保结构 vs 拍扁
+
+> 目的：亲眼看到「拍扁之后循环结构去哪了」，从而理解为什么 MLIR 要保留 Region。
+
+**保结构（`scf.for`，循环体在 Region 里）**
+
+```mlir
+%sum = scf.for %i = %c0 to %c8 step %c1 iter_args(%acc = %init) -> (i32) {
+  %v = memref.load %buf[%i] : memref<8xi32>
+  %n = arith.addi %acc, %v : i32
+  scf.yield %n : i32
+}
+```
+
+这里「哪个是归纳变量、上下界是多少、循环体是哪一段」都是 IR 里**写着的**，tiling / 展开只需读这几个字段。
+
+**拍扁（`cf` 分支，标准 CFG 形态）**
+
+```mlir
+  cf.br ^header(%c0, %init : index, i32)
+^header(%i: index, %acc: i32):
+  %cond = arith.cmpi slt, %i, %c8 : index
+  cf.cond_br %cond, ^body, ^exit(%acc : i32)
+^body:
+  %v = memref.load %buf[%i] : memref<8xi32>
+  %n = arith.addi %acc, %v : i32
+  %i2 = arith.addi %i, %c1 : index
+  cf.br ^header(%i2, %n : index, i32)
+^exit(%r: i32):
+```
+
+语义一样，但「这是一个从 0 到 8 步长 1 的循环」这句话已经不再直接写在 IR 里——要靠循环识别与归纳变量分析**重新推回来**。
+
+| | `scf.for`（保结构） | `cf.*`（拍扁） |
+|--|--------------------|----------------|
+| 循环边界 | op 的操作数，直接可读 | 藏在 `cmpi` + 分支模式里 |
+| 循环体 | 一个 Region | 若干 Block，需靠支配关系判定 |
+| 做 tiling | 读字段即可 | 先做循环识别，代价高且易失败 |
+| 何时该用 | 高层变换阶段 | 接近 LLVM、准备最终 codegen 时 |
+
+> **自测**：如果一条 pipeline 在很早期就把 `scf.for` 降成 `cf.*`，后面还想做分块，会多付出什么代价？
+
 **带来什么能力**：编译器可以在同一 IR 内让"结构化的高层部分"与"已经拍扁的低层部分"共存——比如一个自定义加速器编译器可以复用 MLIR 提供的高层循环结构，同时混入自己特有的标量/向量指令。这直接服务于"maintain higher-level semantics"这一设计目标。
 
 ### 3.3 Progressive Lowering / 渐进式下降
@@ -152,6 +232,46 @@ Operation（操作，唯一的语义单元）
 
 **为什么这样设计**：论文提出一个尖锐的问题——"当操作和类型系统都开放可扩展时，如何写一个通用的编译器 pass？"完全保守（对未知 op 一律不动）能保证正确但收益有限。论文给出四种应对策略，由轻到重：① 基础 Trait（DCE/CSE 只需要"无副作用"、"可交换"这类简单位标记）；② 特权钩子（constant folding、`getCanonicalizationPatterns`，需要少量 C++ 代码但仍是通用机制）；③ Optimization Interface（如 inliner 不知道具体是 TensorFlow 图还是 Flang 函数，但只要 dialect 实现了 `DialectInlinerInterface`，通用 inliner 就能正确工作）；④ dialect 专属 pass（不追求通用，直接写死语义）。
 
+#### 示例精讲：一个 Pass 同时服务两个互不相识的 dialect
+
+> 目的：把「策略③ Optimization Interface」落到可读的代码与 IR 上。
+
+假设两个 dialect 各自有一个"很贵"的算子，都实现了同一个接口 `ToyCostOpInterface`（仓库 `mlir-toy-dialect` 里的教学版）：
+
+```mlir
+func.func @mixed(%a: i32, %b: i32) -> i32 {
+  %0 = toy.mul %a, %b : i32     // 实现了接口，getCost() = 3
+  %1 = low.add %0, %b : i32     // 实现了接口，getCost() = 1
+  %2 = arith.addi %1, %a : i32  // 【未】实现接口
+  return %2 : i32
+}
+```
+
+通用 Pass 完全不 `#include` 任何一个 dialect 的头文件：
+
+```cpp
+void runOnOperation() override {
+  int64_t total = 0;
+  getOperation()->walk([&](Operation *op) {
+    if (auto costOp = dyn_cast<ToyCostOpInterface>(op))   // 只认契约
+      total += costOp.getCost();
+    // 没实现接口的 op（如 arith.addi）直接跳过，不影响正确性
+  });
+}
+```
+
+结果：`total = 3 + 1 = 4`；`arith.addi` 被安全忽略。
+
+| 策略 | 本例对应物 | 代价 |
+|------|-----------|------|
+| ① Trait | 若只需判断"能否删"，`Pure` 就够 | 最轻，但表达力最弱 |
+| ③ Interface | `ToyCostOpInterface` | 每个 dialect 实现一次，通用 Pass 写一次 |
+| ④ 专属 Pass | 直接 `if (op名 == "toy.mul")` | 每加一个 dialect 就要改 Pass |
+
+这就是"开放 op 集合上仍能写通用 pass"的工程答案：**Pass 依赖接口，不依赖 op 名单**。
+
+> **自测**：给 `arith.addi` 也接上该接口，需要改动通用 Pass 的代码吗？
+
 **带来什么能力**：一套通用 pass（inliner、canonicalizer、CSE、DCE）可以同时服务几十个语义完全不同的 dialect，而各 dialect 只需要按需实现相应的 Trait/Interface，不需要修改通用 pass 本身——这是"add new ops/types"这一开发范式能够成立的关键支撑。
 
 ### 3.6 声明式（ODS/TableGen、PDL/DRR 重写规则）
@@ -167,6 +287,49 @@ Operation（操作，唯一的语义单元）
 **是什么**：每个 Op 携带一个可扩展的 `Location`（可以是文件:行:列、AST 节点引用、DWARF 调试信息，甚至是"由某次变换从另一个 Location 派生而来"的复合 Location），配合结构化的 Verifier 在每个 Op/Attribute 层面检查不变式。
 
 **为什么这样设计**：论文指出复杂编译系统普遍存在"lack-of-transparency"问题（WYSINWYX——你看到的不是你得到的），这在安全敏感场景（密码学代码、需要软件认证的系统）尤其致命，因为优化可能悄悄破坏某些非功能性属性（如抗侧信道特性）却不留痕迹。可追溯的位置信息让"这段代码是怎么从源码一步步变成现在这样的"始终可查。
+
+#### 示例精讲：一段违规 IR 与它触发的检查
+
+> 目的：把「Verifier 失败即停」从口号变成能认出来的报错形态。
+
+**违规一：Block 没有终结符**
+
+```mlir
+func.func @no_terminator(%a: i32) -> i32 {
+  %s = arith.addi %a, %a : i32
+  // 缺 return：Block 必须以 Terminator 结尾
+}
+```
+
+**违规二：使用了不支配自己的值**
+
+```mlir
+func.func @dominance(%c: i1) -> i32 {
+  cf.cond_br %c, ^a, ^b
+^a:
+  %x = arith.constant 1 : i32
+  cf.br ^b
+^b:
+  return %x : i32        // ^b 也可能从入口块直接来，此时 %x 未必已定义
+}
+```
+
+两类检查的分工：
+
+| 检查层 | 谁定义的 | 例子 |
+|--------|----------|------|
+| 结构不变式（框架统一做） | MLIR 核心 | 终结符完整性、SSA 支配关系、符号唯一性 |
+| Op 自定义约束 | 该 Op 的 `verify()` | 「`toy.repeat` 的次数必须 > 0」这类语义约束 |
+
+**Location 的价值**：每个 op 带位置，重写后还能保留派生关系，于是诊断能指回源头：
+
+```mlir
+%0 = toy.add %a, %b : i32 loc("model.mlir":3:5)
+```
+
+一次 pattern 重写把两条 op 合成一条时，新 op 的 Location 可以是二者的融合位置，从而回答「现在这条指令是从原来哪两句来的」。
+
+> **自测**：违规二如果把 `return %x` 换成 `return %c` 会不会仍然报错？为什么？
 
 **带来什么能力**：诊断信息可以精确定位到源码；测试可以用"文本 IR 作为输入 + 文本 IR 作为期望输出"的方式对单个 pass 做隔离测试（因为 IR 无隐藏状态，pass 的输出只依赖输入 IR，不依赖运行历史）；Verifier 失败会立刻中止编译并指出具体是哪个 Op 违反了哪条约束，而不是让错误的 IR 静默流入下一个 pass 产生更难排查的连锁错误。
 
