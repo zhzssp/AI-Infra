@@ -338,6 +338,7 @@ MPM.addPass(createModuleToPostOrderCGSCCPassAdaptor(
 **一个 PassManager 本身就是它那一层的 pass**，所以可以嵌套。
 
 > **速记**：[notes/llvm-pass-manager.md](./notes/llvm-pass-manager.md) —— New/Legacy 两套引擎；Module/CGSCC/Function/Loop 四层调度；默认 `default<O2>` 已含大量内置 pass；PM 对外也是 pass 故可嵌套。
+> **速记**：[notes/llvm-mlir-pass-ir-unit.md](./notes/llvm-mlir-pass-ir-unit.md) —— 与 MLIR 对照：传入的是内存 IR 根；四层是调度粒度不是黑盒；细匹配在 Pass 内，MLIR 则按 Op 嵌套锚定。
 
 **一条重要的实践建议**（官方明确写了）：应该把同层的 pass**打包进一个 PassManager**，而不是给每个 pass 各套一个 adaptor。区别是：
 

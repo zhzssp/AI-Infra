@@ -397,6 +397,8 @@ struct SimplifyMulOne : public OpRewritePattern<toy::MulOp> {
 
 多个 Pattern 放进 `RewritePatternSet`，交给驱动器执行。
 
+> **速记**：[notes/mlir-pattern-rewriting.md](./notes/mlir-pattern-rewriting.md) —— 机制而非专属优化；子图=根+use-def 约束；宏观靠流水线/高层 op；Conversion 也用 pattern 外加 Target/TypeConverter。
+
 ### 5.2 贪心驱动器（Greedy Pattern Rewrite Driver）
 
 入口：`applyPatternsAndFoldGreedily`（以及相关变体）。
@@ -447,6 +449,8 @@ builtin.module(
 - **IsolatedFromAbove**：可并行跑多个此类 op 的 Pass（use-def 不跨界）
 - **分析失效**：变换 Pass 必须声明保留了哪些分析（与 LLVM New PM 的 `PreservedAnalyses` 同构，见 [`llvm-learning-guide.md`](./llvm-learning-guide.md) 第 3 章）
 
+> **速记**：[notes/llvm-mlir-pass-ir-unit.md](./notes/llvm-mlir-pass-ir-unit.md) —— Pass 传入的是解析后的 IR 根对象；LLVM 四层 vs MLIR 按 Op 锚定；细粒度在回调内用 API/walk，Function/Op 不是黑盒。
+
 `toy-opt` ≈ LLVM 的 `opt`：注册 dialect + pass，读 `.mlir`，跑 pipeline。
 
 ### 5.5 贪心 lowering vs Dialect Conversion（预告）
@@ -468,7 +472,8 @@ builtin.module(
 > 官方文档：https://mlir.llvm.org/docs/DialectConversion/  
 > 这是跨 dialect lowering 的主武器，也是根 README §3.2 标 ★ 的必补项。
 
-> **速记**：[notes/conversion-llvm-vs-mlir.md](./notes/conversion-llvm-vs-mlir.md) —— 与 LLVM IR「Conversion」指令类不是一回事：那边是值级 cast，这里是跨 dialect lowering。
+> **速记**：[notes/conversion-llvm-vs-mlir.md](./notes/conversion-llvm-vs-mlir.md) —— 与 LLVM IR「Conversion」指令类不是一回事：那边是值级 cast，这里是跨 dialect lowering。  
+> **速记**：[notes/mlir-pattern-rewriting.md](./notes/mlir-pattern-rewriting.md) —— Conversion 的重写手段仍是 pattern（ConversionPattern）；Target/TypeConverter 管合法与类型。
 
 ### 6.1 框架三件套
 
