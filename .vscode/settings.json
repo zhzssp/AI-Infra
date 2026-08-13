@@ -10,5 +10,6 @@
   "C_Cpp.default.intelliSenseMode": "linux-gcc-x64",
 
   // 使用默认的 Tag Parser/IntelliSense 引擎
-  "C_Cpp.intelliSenseEngine": "default"
+  "C_Cpp.intelliSenseEngine": "default",
+  "cmake.ignoreCMakeListsMissing": true
 }

@@ -52,6 +52,50 @@ Interface = 一组可 `dyn_cast` 的方法，让通用 Pass 不写死 op 名：
 |--|-------|-----------|------|
 | 角色 | 标签（有没有某性质） | 方法契约（怎么做） | 单 Op 化简 |
 
+## 自定义类型为什么写成 `!mydialect.point<2>`
+
+`!` 不是“随便加的装饰”，而是把类型放进某个 dialect 的命名空间里：
+
+```mlir
+i32
+f32
+tensor<4xf32>
+!toy.rect
+!mydialect.point<2>
+!quant.uniform<i8:f32, 0.125>
+```
+
+- `i32`、`tensor<...>` 是 MLIR 内置类型，不带 `!`
+- `!toy.rect` / `!mydialect.point<2>` 是**自定义类型**，属于某个方言（dialect）
+- `!` 的作用是区分“内置类型”和“方言类型”，避免名字冲突
+
+### 为什么要用模板参数
+
+因为自定义类型往往不是只有一个名字，而是“同一类类型的多个具体实例”——例如：
+
+```mlir
+!mydialect.point<1>
+!mydialect.point<2>
+!mydialect.point<3>
+```
+
+这里三者都叫 `point`，但参数决定了它们分别代表 1D / 2D / 3D 的点语义。参数本身就是类型的一部分：
+
+- 维度
+- 元素类型
+- 量化缩放/精度
+- 布局或语义配置
+
+也就是说，模板参数会把“类型家族”和“具体实例”一起编码进去，编译器才能把它们视为不同的静态类型，并在 op 的签名中精确校验。
+
+```mlir
+func.func @demo(%p: !mydialect.point<2>) -> !mydialect.point<2> {
+  return %p : !mydialect.point<2>
+}
+```
+
+这里 `%p` 的类型不仅是 `point`，而是“2D point”，因此 `point<1>` 和 `point<2>` 不是同一个类型，不能互传。如果不带参数，类型信息就太粗糙，很多高层语义无法表达。
+
 ## 口诀
 
 **Type 描述值，Attribute 描述编译期事实，Interface 描述这类 op 能配合什么通用变换。**
