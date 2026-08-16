@@ -106,7 +106,7 @@
 
 ## 第 2 章 模型结构层次详解
 
-> **速记**：为什么 ONNX 用 Protobuf？Protobuf 与 gRPC 什么关系？→ [docs/notes/protobuf-grpc-explained.md](../notes/protobuf-grpc-explained.md)
+> **速记**：[notes/protobuf-grpc-explained.md](./notes/protobuf-grpc-explained.md) —— 为什么 ONNX 用 Protobuf？Protobuf 与 gRPC 什么关系？
 
 ### 2.1 总览：从文件到节点
 
