@@ -138,6 +138,8 @@ Operation（唯一的语义单元）
 
 Attribute 与 Type 的分工：Type 描述"运行时值长什么样"，Attribute 描述"编译期已知的静态信息"。例如 `arith.constant {value = 42 : i32}` 里，结果类型是 `i32`，常量本身是 Attribute。
 
+> **速记**：[notes/mlir-type-attr-interface.md](./notes/mlir-type-attr-interface.md) —— `!` 表示 dialect 自定义类型；`<...>` 把类型参数编码进去，让同一类类型能区分不同实例，如 `!mydialect.point<1>` / `<2>` / `<3>`。
+
 #### 示例精讲：把一段 IR 逐字段拆成 Value / Type / Attribute
 
 > 目的：拿到任何一行 MLIR，都能立刻指出「哪个是值、哪个是类型、哪个是编译期常量」。
@@ -1173,6 +1175,9 @@ Linalg 路径（保结构）:
 | **`indexing_maps`** | 仿射映射：迭代空间 → 操作数索引 | 数据访问模式、融合合法性 |
 
 **融合不必理解"这是 softmax 还是 gelu"**——只看这两份元信息能否对齐。这正是相对 TOSA/StableHLO 上两两算子特殊融合规则的优势（IREE 文档同样强调这一点）。
+
+> **速记**：[notes/mlir-affine-map.md](./notes/mlir-affine-map.md) —— `affine_map` 是“索引访问声明”，编译器用它做合法性检查、依赖分析和 fusion/tiling 等优化；`linalg.generic` 的核心是 `indexing_maps` + `iterator_types`。
+> **速记**：[notes/mlir-iterator-types-verifier.md](./notes/mlir-iterator-types-verifier.md) —— `iterator_types` 给出每一维的语义角色（parallel / reduction），而 verifier 负责把明显不合法的 IR 拦掉，防止后续 pass 基于错误假设工作。
 
 #### 示例精讲：读懂一个 `linalg.generic`，并据此判断能否融合
 
