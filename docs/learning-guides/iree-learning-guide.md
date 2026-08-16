@@ -4,14 +4,14 @@
 > - 基于 IREE **官方文档**（https://iree.dev）与 **主干源码**（`iree-org/iree`）整理，不是论文笔记。
 > - 目标读者是"要在算力网上搭分布式大模型执行基础设施"的编译器/系统工程师。
 > - **前 3 章建立坐标系（约 30% 篇幅），第 4 章是重点：IREE HAL 详解（约 55% 篇幅）**，第 5–7 章是落地与学习路径。
-> - TinyIREE 论文的简版印象见 [`paper-notes/07-tinyiree.md`](./paper-notes/07-tinyiree.md)；那篇讲得很浅，本文才是正式材料。
+> - TinyIREE 论文的简版印象见 [`paper-notes/07-tinyiree.md`](../paper-notes/07-tinyiree.md)；那篇讲得很浅，本文才是正式材料。
 >
 > **先修与邻接材料**
-> - **先修**：[`ai-compiler-foundations.md`](./ai-compiler-foundations.md) §3.3（子图划分）、§7.1（kernel）、§8（设备抽象机与同步）。
+> - **先修**：[`ai-compiler-foundations.md`](./ai-compiler-foundations-learning-guide.md) §3.3（子图划分）、§7.1（kernel）、§8（设备抽象机与同步）。
 > - **上游**：`linalg → flow` 之前的 MLIR 机制见 [`mlir-learning-guide.md`](./mlir-learning-guide.md)。
 > - **下游**：variant 里的机器码怎么来见 [`llvm-learning-guide.md`](./llvm-learning-guide.md) 第 5 章；多变体打包的 ISA 层同构物见 [`cuda-fatbin-learning-guide.md`](./cuda-fatbin-learning-guide.md)。
-> - **目标场景**：分布式训练侧的需求来自 [`paper-notes/01-efficient-training-distributed-infra.md`](./paper-notes/01-efficient-training-distributed-infra.md)。
-> - **划分对照（导出期 / Session 期）**：[`../onnx-delegate-lab/`](../onnx-delegate-lab/) —— 与 IREE 编译期 `flow.dispatch` 对照「决策时刻」差在哪。
+> - **目标场景**：分布式训练侧的需求来自 [`paper-notes/01-efficient-training-distributed-infra.md`](../paper-notes/01-efficient-training-distributed-infra.md)。
+> - **划分对照（导出期 / Session 期）**：[`../../onnx-delegate-lab/`](../../onnx-delegate-lab/) —— 与 IREE 编译期 `flow.dispatch` 对照「决策时刻」差在哪。
 >
 > **一句话读法**：如果只有两小时，读[第 1 章总图](#第-1-章-iree-是什么一分钟建立坐标系)、[第 2 章 dialect 流水线](#第-2-章-编译侧dialect-流水线)、[4.2 对象模型总览](#42-对象模型总览)、[4.6 timeline semaphore](#46-同步timeline-semaphore-与-fencehal-的灵魂)、[4.7 variant](#47-设备代码executable--variant--export)、[附录速查](#附录一页速查)。
 >
@@ -22,6 +22,39 @@
 > - HAL dialect 全量 op/attr/enum：https://iree.dev/reference/mlir-dialects/HAL/
 > - 部署配置：`guides/deployment-configurations/`
 > - HAL 运行时 C API：`runtime/src/iree/hal/*.h`
+
+---
+
+### 本篇在链路中的位置
+
+> 全局链路见 [`00-end-to-end-pipeline.md`](./00-end-to-end-pipeline.md)。本篇横跨**第 ⑤ 站（多层降低）到第 ⑦ 站（打包与运行时）**，是链路上唯一一个"从 linalg 一直管到真跑起来"的系统。
+
+```text
+③ 融合 ──▶ ④ 调度 ──▶ ⑤ 多层降低 ──▶ ⑥ 指令生成 ──▶ ⑦ 打包与运行时
+                        └────────── 本篇 ──────────┘        └── 本篇 ──┘
+                         flow / stream / hal 三层         .vmfb + HAL 运行时
+```
+
+| | |
+|--|--|
+| **上游交给我** | 一份 `linalg` 层的模型（知道"这是矩阵乘"、"这两维可并行"） |
+| **我固化** | kernel 边界（`flow`）、内存生命周期与时序（`stream`）、设备对象与多变体（`hal`）、宿主调度指令（`vm`） |
+| **我交给下游** | 一个 `.vmfb` —— 设备码 + 宿主调度字节码 + 常量，**单文件即可部署** |
+| **本篇的主角** | [`../../iree-lab/models/tiny_mlp.mlir`](../../iree-lab/models/tiny_mlp.mlir)：全仓库同一个 `Gemm→Relu→Add`，这次要真编真跑 |
+
+**本篇示例的来源约定**：凡是标了「**可跑**」的代码块，都能在 [`../../iree-lab/`](../../iree-lab/) 里复现，产物路径写在示例旁边。
+
+| 章节 | 示例来自 | 怎么跑 |
+|------|---------|--------|
+| 第 1–2 章（相位） | `iree-lab/models/{abs,tiny_mlp}.mlir` | `bash scripts/run_phases.sh` → `out/phases/`、`out/PHASES.md` |
+| 第 3、5 章（执行与部署） | 同上 | `bash scripts/run_execute.sh` → `out/execute/*.vmfb` |
+| 第 4 章（HAL 对象模型） | 编译产物 + 运行时 C API | `run_phases.sh` 的 hal 相位 + 本篇的 C 侧伪码 |
+| 第 4.7 / 5 章（变体与开关） | 三组对照实验 | `bash scripts/run_variants.sh` → `out/variants/` |
+
+> 第 4 章讲 HAL 运行时 C API 的部分**没有 lab 代码可指** —— 那是 C 语言的宿主侧接口，
+> 要写就得引入一个 CMake 工程，与本仓库"pip 装完即可跑"的取向冲突。
+> 所以那部分保持伪码，但**每个对象都会指出它在 `out/phases/tiny_mlp.hal.mlir` 里对应的那一行**，
+> 让你至少能看到编译器为它生成了什么。
 
 ---
 
@@ -95,7 +128,7 @@
 
 #### 示例精讲：一个 `abs` 模型穿过三层
 
-最小输入（与 [7.3](#73-动手清单按顺序做) 是同一个文件，后面各节反复用它）：
+**可跑** · 源码 [`iree-lab/models/abs.mlir`](../../iree-lab/models/abs.mlir)
 
 ```mlir
 func.func @abs(%input : tensor<f32>) -> tensor<f32> {
@@ -104,13 +137,24 @@ func.func @abs(%input : tensor<f32>) -> tensor<f32> {
 }
 ```
 
+**为什么用一个只有一个 op 的模型开场**：它小到每一相位 dump 出来都能整篇看完，
+所以适合回答"这一相**新增**了什么"。等到第 2.2 节要看**融合**时会换成
+[`tiny_mlp.mlir`](../../iree-lab/models/tiny_mlp.mlir) —— 单个 op 演示不了"几个 op 合成一个 kernel"。
+lab 里两个模型并存，就是这个分工。
+
 ```bash
-iree-compile abs.mlir \
-  --iree-hal-target-device=local \
-  --iree-hal-local-target-device-backends=llvm-cpu \
-  -o abs.vmfb
-iree-run-module --device=local-sync --module=abs.vmfb --function=abs --input=f32=-2.0
+cd iree-lab && bash scripts/run_execute.sh
+# 内部执行的就是这两条：
+#   iree-compile --iree-hal-target-device=local \
+#                --iree-hal-local-target-device-backends=llvm-cpu \
+#                models/abs.mlir -o out/execute/abs.vmfb
+#   iree-run-module --device=local-sync --module=out/execute/abs.vmfb \
+#                   --function=abs --input=f32=-2.0
 ```
+
+> **标志写法会变**：`--iree-hal-target-device=` 是新版写法，老版本是
+> `--iree-hal-target-backends=llvm-cpu`。`iree-lab/scripts/env.sh` 会**实际试一次**再决定用哪套，
+> 所以脚本跨版本不用改；你手敲时报 unknown option，换另一套即可。
 
 **① 编译器产物 `abs.vmfb` 里有什么**
 
@@ -123,6 +167,9 @@ abs.vmfb（FlatBuffer）
 ```
 
 一句话：**「怎么调度」进了 bytecode，「算什么」进了 rodata**。
+
+`run_execute.sh` 第 ④ 步会 `strings` 一遍 `.vmfb`，你能在里面看到 `llvm-cpu`、
+目标三元组、`tiny_mlp_dispatch_0` 这类字符串 —— 那就是 rodata 段里设备码的痕迹。
 
 **② VM 层：bytecode 去调 HAL 模块的导出函数**
 
@@ -201,18 +248,34 @@ start → input → abi → preprocessing → global-optimization → dispatch-c
 
 #### 示例精讲：用 `--compile-to` 逐相位盯 op
 
-一条命令把各相位全 dump 出来（模型仍是上面的 `abs.mlir`）：
+**可跑** · 脚本 [`iree-lab/scripts/run_phases.sh`](../../iree-lab/scripts/run_phases.sh) · 产物 `iree-lab/out/phases/`
 
 ```bash
-for phase in input abi global-optimization dispatch-creation \
-             flow stream executable-sources executable-targets hal vm; do
-  iree-compile abs.mlir \
-    --iree-hal-target-device=local \
-    --iree-hal-local-target-device-backends=llvm-cpu \
-    --compile-to=$phase \
-    -o abs.$phase.mlir
-done
+cd iree-lab && bash scripts/run_phases.sh
+# 对 abs.mlir 和 tiny_mlp.mlir 各跑一遍下面这个循环：
+#   for phase in input abi preprocessing global-optimization dispatch-creation \
+#                flow stream executable-sources executable-targets hal vm; do
+#     iree-compile <target-flags> --compile-to=$phase models/$m.mlir -o out/phases/$m.$phase.mlir
+#   done
 ```
+
+脚本第一件事是打一张**行数表**：
+
+```text
+phase                    abs行数    mlp行数    abs状态    mlp状态
+------------------------ --------  --------  --------  --------
+input                    ...       ...       ok        ok
+flow                     ...       ...       ok        ok
+stream                   ...       ...       ok        ok
+hal                      ...       ...       ok        ok
+vm                       ...       ...       ok        ok
+```
+
+**行数本身就是结论**：越往下走，同一份语义要写的字越多。多出来的字全是
+**「原来隐含、现在必须说清」**的东西 —— 谁分配内存、谁等谁、跑在哪个设备上。
+这也是理解"分层"最省力的入口：每一层不是包装，是**补信息**。
+
+> 脚本会自动跳过当前版本不支持的相位名（相位表历年有增删），跳过的记 `skip` 而不是报错。
 
 打开每个文件时**只找下表里的东西**：找到了，就说明这一相位该干的活落地了。
 
@@ -234,6 +297,15 @@ done
 
 三个最值得直接 `diff` 的跃迁：`flow → stream`（多出时序）、`stream → hal`（抽象资源变设备对象）、`hal → vm`（op 变函数调用）。
 
+`run_phases.sh` 第 ⑥ 步会替你做第一个 diff，只留新增行：
+
+```bash
+diff out/phases/abs.flow.mlir out/phases/abs.stream.mlir | grep '^>'
+```
+
+一个 `math.absf` 而已，stream 层却多出十几行 —— **多出来的全是内存与时序**。
+这是"抽象层不是包装，是补信息"最短的一份证据。
+
 > **自测**：如果 `abs.stream.mlir` 里找不到 `stream.resource.alloca`，说明这个程序的中间结果处于什么状态？
 
 ### 2.2 三个最需要理解的转折点
@@ -246,6 +318,25 @@ Linalg 的价值在于用 `iterator_types`（parallel / reduction）和 `indexin
 - **tiling 也只看这两组元信息**。切出来的 tile 被封装成 dispatch region。
 
 **dispatch region 是后面所有调度的最小单位**——记住这一点，Stream 和 HAL 两层都是围绕它做文章。
+
+**这句话可以直接数出来** · 模型 [`iree-lab/models/tiny_mlp.mlir`](../../iree-lab/models/tiny_mlp.mlir)
+
+主角模型里写了 **4 个 `linalg.generic`**（广播 `b` / Gemm / Relu / Add bias2）：
+
+```bash
+cd iree-lab && bash scripts/run_phases.sh
+grep -c '= flow.dispatch ' out/phases/tiny_mlp.flow.mlir
+```
+
+**数出来少于 4，就说明融合发生了。** Relu 和 Add 的 `iterator_types` 全是 `parallel`、
+`indexing_maps` 是恒等映射 —— 编译器据此判定它们可以并进上游 Gemm 的输出循环，
+于是 `h` 和 `r` 这两张中间张量**根本不需要落 DRAM**。
+
+注意编译器**从头到尾没有"认识" Relu 是什么**。它看的只是那两组元信息。
+这正是 [`00-end-to-end-pipeline.md`](./00-end-to-end-pipeline.md) 站 ③ 那条优化目标
+（"Gemm→Relu→Add 只碰一次 DRAM"）在 IREE 里的兑现方式 ——
+而在 TVM 里同一个决定是靠 [`OpPatternKind` 分类](./tvm-learning-guide.md)做的，
+两套系统的答案不同，问题却是同一个。
 
 **转折点 2：Flow → Stream，从"数据流"到"执行流"**
 
@@ -263,6 +354,8 @@ Stream 是 IREE 最独特、也最容易被忽略的一层。它做四件事：
 Stream 里的"某个资源"变成 `!hal.buffer`；"某批工作"变成 `!hal.command_buffer` 里的一串命令；"某个时间点"变成 `!hal.fence`；"某段 kernel"变成 `hal.executable` 里的一个 export。这一层往下就没有抽象了，只剩下驱动调用。
 
 #### 示例精讲：`abs` 在 linalg / flow / stream / hal 的四张面孔
+
+**可跑** · 产物 `iree-lab/out/phases/abs.{flow,stream,hal}.mlir`（`bash scripts/run_phases.sh` 生成）
 
 同一个函数、四段骨架 IR，每段只看**新增了什么、消失了什么**。
 
@@ -339,6 +432,17 @@ hal.device.queue.execute<%device : !hal.device>
 | Flow | `tensor` + `!flow.dispatch.tensor` | 无（仍是数据流） | 未定 |
 | Stream | `!stream.resource<lifetime>{字节数}` | `!stream.timepoint` 的 await / produce | 某个 affinity |
 | HAL | `!hal.buffer` / `!hal.buffer_view` | `!hal.fence` 的 wait / signal | 具体 `!hal.device` |
+
+**在主角模型上把生命周期数一遍**：
+
+```bash
+grep -o '!stream.resource<[a-z]*>' out/phases/tiny_mlp.stream.mlir | sort | uniq -c
+```
+
+`external` 是跨边界、宿主看得见的（不能随便复用），`transient` 是一次执行内的中间量
+（**可以和别人共享同一块内存**），`variable` 跨执行存活。
+`transient` 数量越多，说明编译器识别出的可复用内存越多 —— 这个数字直接决定峰值内存，
+[3.4 节](#34-stream-ordered-allocation峰值内存的关键)会展开。
 
 > **自测**：从 flow 到 stream，`tensor<f32>` 为什么必须变成带显式字节长度的 `!stream.resource`？
 
@@ -436,6 +540,19 @@ fence0 ─┬─ alloca0 ─┐
 - 内存不足时不会失败而是**自动串行化**：512MB 的系统可以跑两个各需 400MB 临时内存的独立 invocation，用户只感知到延迟变高。
 
 > 对算力网场景：这一条直接决定了"单卡能塞下多大的模型/多少并发请求"。
+
+**可跑** · 这套机制的输入就是 stream 层给每个资源打的 `Lifetime` 标签：
+
+```bash
+cd iree-lab && bash scripts/run_phases.sh
+grep -o '!stream.resource<[a-z]*>' out/phases/tiny_mlp.stream.mlir | sort | uniq -c
+grep -c 'stream.resource.alloca' out/phases/tiny_mlp.stream.mlir
+```
+
+只有被判为 `transient` 的资源才进得了上面那个"用完立刻退还"的流程 ——
+`external` 是用户传进来的、`variable` 要跨调用活着，两者都不能这么处理。
+所以**峰值内存的上限，在 stream 相位打标签那一刻就定了**，运行时再聪明也改不了。
+主角模型里如果 Relu/Add 被融进了 Gemm，中间张量连 `transient` 都不用做 —— 压根不存在。
 
 ---
 
@@ -553,7 +670,23 @@ topology_builder.h profile_*.h
 
 #### 示例精讲：一次 invocation 里对象按什么顺序被造出来
 
-把上面那张图从「有哪些对象」读成「谁先造、谁持有谁」。host 侧一次完整调用的骨架（伪代码，参数省略）：
+**部分可跑** · 左栏的 C 侧伪码**无 lab 对应**（要写就得引一套 CMake，与"pip 装完即跑"冲突）；
+右栏可跑 · 命令 `cd iree-lab && bash scripts/run_phases.sh` · 产物 `out/phases/tiny_mlp.hal.mlir`
+
+**每一步在编译产物里都留了痕**——右栏给出它在 `tiny_mlp.hal.mlir` 里的对应物，
+先跑上面的命令生成该文件，然后照着 grep：
+
+| 伪码这一步 | 在 `tiny_mlp.hal.mlir` 里 grep 什么 |
+|-----------|-----------------------------------|
+| ② 分配 buffer | `hal.allocator.allocate` / `hal.device.queue.alloca` |
+| ③ 准备 executable | `hal.executable` / `hal.executable_cache` |
+| ④ 录制命令 | `hal.command_buffer.create` / `.dispatch` / `.finalize` |
+| ⑤⑥ 时序与提交 | `hal.fence.create` / `hal.device.queue.execute` / `hal.fence.await` |
+
+**为什么值得对照着看**：伪码是"你手写会怎么写"，`hal.mlir` 是"编译器替你写成了什么"。
+两边一一对得上，说明 IREE 的运行时 API 不是另一套东西，而是**编译器生成的调度代码的目标语言**。
+
+host 侧一次完整调用的骨架（伪代码，参数省略）：
 
 ```c
 // ① 接入点：driver 只负责枚举与创建
@@ -700,6 +833,10 @@ CUDA 的实现映射非常直接，可以用来记忆语义：
 
 #### 示例精讲：同一块 buffer 的三副面孔
 
+**部分可跑** · ② 和 ③ 在 `iree-lab` 的 `out/phases/tiny_mlp.hal.mlir` 里能直接找到
+（`grep -n 'buffer_view\|command_buffer.dispatch'`）；① 那种显式 `hal.allocator.allocate`
+在编译产物里通常已被 stream 层的资源分配吸收掉，是 runtime API 侧的写法。
+
 一块内存从分配到被 kernel 读，中间换了三种「说法」，但**自始至终是同一个 `!hal.buffer`**：
 
 ```mlir
@@ -826,6 +963,14 @@ hal.device.queue.execute<%device : !hal.device>
 
 #### 示例精讲：从建命令缓冲到等到结果的六步
 
+**可跑（对着 dump 认）** · 跑 [`iree-lab/scripts/run_phases.sh`](../../iree-lab/scripts/run_phases.sh) 后，
+在 `out/phases/tiny_mlp.hal.mlir` 里按顺序 `grep` 这六个词，你会发现**它们的出现顺序和下面完全一致**：
+
+```bash
+grep -n 'command_buffer.create\|command_buffer.dispatch\|command_buffer.finalize\|queue.execute\|fence.await' \
+     iree-lab/out/phases/tiny_mlp.hal.mlir
+```
+
 把 [4.4](#44-工作表达command_buffer) 和本节串起来，一次 dispatch 的完整链条只有六步（第 5 步发生在设备侧，host 看不到）：
 
 ```mlir
@@ -920,6 +1065,11 @@ hal.fence.fail<%fence : !hal.fence> status(%status)               // 传播错�
 `hal.fence.fail` 值得注意：**错误也沿着时间线传播**。异步执行体系里，错误不能靠返回值传，只能靠 fence 带回来。
 
 #### 示例精讲：一个 semaphore 从 0 走到 3
+
+**无 lab 对应（C runtime API 伪码）**——lab 走的是 `iree-run-module`，
+时序被封在 runtime 里，看不到显式的 `signal/wait` 数值。
+编译产物侧的等价物是 `hal.fence.create` / `hal.fence.await`，
+在 `iree-lab/out/phases/tiny_mlp.hal.mlir` 里可以 grep 到（见上一节「从建命令缓冲到等到结果的六步」）。
 
 场景：同一条时间线上排两批工作，`cmd0` 完成后 `cmd1` 才能开始，host 最后取结果。
 
@@ -1040,6 +1190,19 @@ IREE 的做法是以 `CUevent` 为基线，**用多个原语拼出缺失的能�
 
 这是"低成本切换/共存多后端"的核心机制，也是编译期与运行期的接缝。
 
+**可跑** · 在主角模型上把这四层数出来（先 `bash scripts/run_phases.sh`）：
+
+```bash
+cd iree-lab
+grep -nE 'hal.executable |hal.executable.variant|hal.executable.export' \
+     out/phases/tiny_mlp.hal.mlir
+```
+
+> **和 fatbin 是同一个问题的同构答案**：CUDA 在一个 `.fatbin` 里按 `sm_*` 存多份 SASS，
+> IREE 在一个 `hal.executable` 里按 target 存多份 variant。
+> 两边都能亲手数：`cuobjdump -lelf` 数 image，`grep hal.executable.variant` 数 variant。
+> 对照见 [`cuda-fatbin-learning-guide.md`](./cuda-fatbin-learning-guide.md)。
+
 #### 4.7.1 四层结构
 
 ```mlir
@@ -1096,6 +1259,29 @@ hal.executable public @my_kernel {                          // ① 编译单元�
   abi = "lp32"
 }>
 ```
+
+**`cpu_features` 这一栏不是装饰，它直接决定向量宽度。**
+[`run_variants.sh`](../../iree-lab/scripts/run_variants.sh) 实验 B 就是在拧它：
+
+```bash
+cd iree-lab && bash scripts/run_variants.sh
+# 三份编译，只差 cpu_features：baseline / +avx2 / +avx512f,+avx512vl
+# 然后数各自 kernel LLVM IR 里的向量类型
+```
+
+打出来是这样一张表：
+
+```text
+配置       <4 x float>    <8 x float>    <16 x float>   vmfb字节
+baseline   ...            ...            ...            ...
+avx2       ...            ...            ...            ...
+avx512     ...            ...            ...            ...
+```
+
+这张表是 [`00-end-to-end-pipeline.md`](./00-end-to-end-pipeline.md) 那条优化目标
+「内层循环走 8 宽向量」的**最终落点**。要紧的是：它不是任何单个 pass 的功劳 ——
+linalg 层保住了并行语义、flow 层没把循环切碎、后端才有机会按 AVX 宽度打包，
+**缺一环就退回 `<4 x float>`**。
 
 **`#hal.device.target<deviceID, configuration, [executable_targets]>`** —— 跑在哪：
 
@@ -1274,6 +1460,18 @@ HAL dialect 的 op 按用途分为几组，读 IR 时按组认即可（完整清
 
 #### 示例精讲：一个完整的 `@main` 边界
 
+**可跑** · 在主角模型上看真实版本：
+
+```bash
+cd iree-lab && bash scripts/run_phases.sh
+grep -nE 'hal.tensor.import|hal.tensor.barrier|hal.tensor.export|!hal.fence' \
+     out/phases/tiny_mlp.abi.mlir out/phases/tiny_mlp.hal.mlir
+```
+
+`abi` 相位就是**专门做这件事的那一相** —— 之前 `input` 相位里 `@tiny_mlp` 还是个
+收 `tensor<2x3xf32>` 的普通函数，`abi` 之后它的签名被改写成上面这个样子。
+`run_phases.sh` 的行数表里，`input → abi` 那一跳增加的行，绝大部分就是这几行边界 op。
+
 编译器为**带 fence 的异步 ABI** 生成的入口函数大致长这样：外面是 buffer_view 加一对 fence，里面是纯 tensor 世界。
 
 ```mlir
@@ -1424,7 +1622,19 @@ iree-compile \
 | `--iree-stream-partitioning-favor=` | `max-concurrency`（默认）/ `min-peak-memory` |
 | `--compile-to=<phase>` | **在指定相位停下输出 IR，学习 IREE 的头号工具** |
 | `--mlir-print-ir-after-all` | 打印每个 pass 之后的 IR（配合 `--mlir-elide-elementsattrs-if-larger=8`） |
+| `--iree-llvmcpu-target-cpu-features=` | 指定 ISA（`+avx2` / `+avx512f`），**直接决定向量宽度** |
+| `--iree-hal-dump-executable-files-to=` | 把每个 kernel 的 `.ll` / `.s` / `.o` 全 dump 出来 |
 | `--iree-llvmcpu-static-library-output-path=` | 产出静态库供裸机链接 |
+
+> **标志名会随版本变**：`--iree-hal-target-device=` 曾经是 `--iree-hal-target-backends=`，
+> `--iree-llvmcpu-target-cpu-features=` 曾经是 `--iree-llvmaot-...`，
+> `--iree-hal-dump-executable-files-to=` 也有 `-intermediates-to` 的旧写法。
+> `iree-lab/scripts/` 的做法是**先拿一个空模型试一次**再决定用哪个，
+> 报 unknown option 时照 `iree-compile --help | grep -i <关键字>` 查即可。
+
+最后两个 flag 是 [`run_variants.sh`](../../iree-lab/scripts/run_variants.sh) 实验 B、C 的全部内容：
+dump 出来的 `.ll` **正是 [`llvm-learning-guide.md`](./llvm-learning-guide.md) 第 5 章的输入**。
+IREE 负责"切到什么粒度"，LLVM 负责"这一块怎么编"——两份指南在这个文件上握手。
 
 ### 5.2 运行与查看
 
@@ -1435,6 +1645,24 @@ iree-run-module --dump_devices            # 打印设备详细能力
 iree-run-module --device=cuda --module=model.vmfb \
                 --function=main --input=1x224x224x3xf32=0
 ```
+
+**可跑** · 主角模型的完整一轮（[`run_execute.sh`](../../iree-lab/scripts/run_execute.sh) 做的就是这件事）：
+
+```bash
+cd iree-lab
+iree-compile --iree-hal-target-device=local \
+             --iree-hal-local-target-device-backends=llvm-cpu \
+             models/tiny_mlp.mlir -o out/execute/tiny_mlp.vmfb
+iree-run-module --device=local-sync --module=out/execute/tiny_mlp.vmfb \
+                --function=tiny_mlp --input="2x3xf32=1 2 3 -4 -5 -6"
+```
+
+期望输出 `[[2.5 3.5 4.5 7.5] [1 1 1 1]]`，推导写在
+[`models/tiny_mlp.mlir`](../../iree-lab/models/tiny_mlp.mlir) 文件末尾，脚本会自动比对。
+
+**这一步不是仪式感。** 前面所有相位都只是文本，只有这行"数值一致"能证明
+flow 融了 op、stream 复用了内存、hal 换了 buffer 布局、vm 重排了调度之后，
+**语义确实没变**。第二行输入全负，`relu` 把整行钳成 0 —— 挑这组数就是为了让 Relu 不是摆设。
 
 Python 侧：
 
@@ -1489,26 +1717,27 @@ ireert.system_setup.query_available_drivers()
 
 ### 7.3 动手清单（按顺序做）
 
-**第一步：把流水线看穿**
+**第一步（前三小步已经封装成 lab，直接跑）**
 
 ```bash
-# 准备一个最小模型
-cat > abs.mlir <<'EOF'
-func.func @abs(%input : tensor<f32>) -> tensor<f32> {
-  %result = math.absf %input : tensor<f32>
-  return %result : tensor<f32>
-}
-EOF
-
-# 逐相位 dump，重点对比 flow → stream → hal 三次跃迁
-for phase in flow stream executable-sources hal vm; do
-  iree-compile abs.mlir \
-    --iree-hal-target-device=local \
-    --iree-hal-local-target-device-backends=llvm-cpu \
-    --compile-to=$phase \
-    -o abs.$phase.mlir
-done
+cd iree-lab
+pip install -r requirements.txt        # iree-base-compiler + iree-base-runtime
+bash scripts/run.sh 2>&1 | tee out/all.log
 ```
+
+| 脚本 | 回答的问题 | 先读哪个产物 |
+|------|-----------|-------------|
+| `run_phases.sh` | 编译器**做了什么**？每相位新增哪类信息？ | `out/PHASES.md` 的行数表 |
+| `run_execute.sh` | 这些变换**没改语义**吗？ | 手算 vs 实际输出的比对结果 |
+| `run_variants.sh` | **我能改什么**？ | 实验 B 的 `<4/8/16 x float>` 计数表 |
+
+**跑完先回答这五问**（答不上来就回对应章节，不要往下走）：
+
+1. `flow` 相位固化了什么？为什么这个决定之后再也改不了？（→ [2.2](#22-三个最需要理解的转折点)）
+2. `!stream.resource` 的 `external` / `transient` / `variable` 各自意味着什么约束？（→ [3.4](#34-stream-ordered-allocation峰值内存的关键)）
+3. 一个 kernel 为什么会有多个 variant？和 fatbin 什么关系？（→ [4.7](#47-设备代码executable--variant--export)）
+4. `.vmfb` 里装了哪三样东西？为什么运行时不用再带编译器？（→ [1 章示例](#示例精讲一个-abs-模型穿过三层)）
+5. 静态 shape 比动态 shape 在 stream 层省掉了哪一类指令？为什么**丢了补不回来**？（→ `run_variants.sh` 实验 A）
 
 `--compile-to=<phase>` 会在该相位结束后停下并输出**完整 IR**（不是产物），这是学 IREE 最高效的一个 flag。若还想看单个 pass 的效果，再叠加 `--mlir-print-ir-after-all --mlir-elide-elementsattrs-if-larger=8`。
 
@@ -1519,15 +1748,20 @@ done
 - `hal.tensor.import` / `export` 在函数边界的位置
 - variant 内部 `builtin.module` 里的 `hal.interface.*` op
 
-**第二步：跑起来并观察设备**
+**第二步：观察设备，并确认换 device 不用改任何东西**
 
 ```bash
-iree-compile abs.mlir --iree-hal-target-device=local \
-  --iree-hal-local-target-device-backends=llvm-cpu -o abs.vmfb
-iree-run-module --dump_devices
-iree-run-module --device=local-sync --module=abs.vmfb --function=abs --input=f32=-2.0
-# 换成 local-task 再跑一次，对比行为
+iree-run-module --dump_devices          # 打印本机设备详细能力
+# run_execute.sh 第 ③ 步已经用同一个 .vmfb 跑了 local-sync 和 local-task 两遍：
+iree-run-module --device=local-sync --module=out/execute/tiny_mlp.vmfb \
+                --function=tiny_mlp --input="2x3xf32=1 2 3 -4 -5 -6"
+iree-run-module --device=local-task --module=out/execute/tiny_mlp.vmfb \
+                --function=tiny_mlp --input="2x3xf32=1 2 3 -4 -5 -6"
 ```
+
+**调度策略换了，结果不变。** 能做到这点靠的是 stream 相位已经把依赖关系**显式写进 IR**，
+而不是靠宿主代码里的调用顺序隐式表达 —— 这是 [4.1.1](#411-三条设计取向理解-hal-的钥匙)
+那三条设计取向的直接回报。
 
 **第三步：精读三份源码**（按优先级）
 

@@ -18,11 +18,13 @@ def main() -> None:
     from onnx import TensorProto, checker, helper, numpy_helper, shape_inference
 
     rng = np.random.default_rng(0)
+    # W 用 [out, in] 布局：与 torch.nn.Linear(3,4).weight、TVM relay.nn.dense 的权重一致，
+    # 所以同一份权重能在三个系统之间直接搬——代价是 Gemm 必须声明 transB=1。
     W = numpy_helper.from_array(rng.standard_normal((4, 3), dtype=np.float32), name="W")
     b = numpy_helper.from_array(rng.standard_normal((4,), dtype=np.float32), name="b")
     bias2 = numpy_helper.from_array(np.ones(4, dtype=np.float32), name="bias2")
 
-    gemm = helper.make_node("Gemm", ["x", "W", "b"], ["h"], name="gemm")
+    gemm = helper.make_node("Gemm", ["x", "W", "b"], ["h"], name="gemm", transB=1)
     relu = helper.make_node("Relu", ["h"], ["h_act"], name="relu")
     add = helper.make_node("Add", ["h_act", "bias2"], ["y"], name="add")
 
@@ -93,6 +95,10 @@ ModelProto
 1. **ONNX ≠ 运行时**——本文件是交换 IR；ORT 才是执行器。
 2. `initializer` vs `graph.input`：权重在 initializer，不要误当成要喂的输入。
 3. `dim_param` / `None`：batch 维动态时，`infer_shapes` 能推出通道维，推不出具体 batch。
+4. `transB=1`：`W` 存成 `[out, in]=[4,3]`（与 `nn.Linear` / `relay.nn.dense` 一致），
+   靠 **attribute** 而不是靠转置数据来对齐 —— 属性决定权重怎么被读，是 layout 话题的最小样本。
+
+> 本模型是全仓库的图级主角，见 [`docs/learning-guides/00-end-to-end-pipeline.md`](../../../docs/learning-guides/00-end-to-end-pipeline.md)。
 """
     write_text(out / "01_READING.md", guide)
     print(guide)

@@ -13,8 +13,8 @@
 |--|--|
 | **角色** | P1/P2 动手：图级编译 + 多变体打包 |
 | **总规划** | [`../README.md`](../README.md) §4.1 · §5.4 |
-| **配套教材** | [`../docs/tvm-learning-guide.md`](../docs/tvm-learning-guide.md) · [`../docs/cuda-fatbin-learning-guide.md`](../docs/cuda-fatbin-learning-guide.md) |
-| **横切词汇** | [`../docs/ai-compiler-foundations.md`](../docs/ai-compiler-foundations.md) §3–4 · §7.3 |
+| **配套教材** | [`../docs/learning-guides/tvm-learning-guide.md`](../docs/learning-guides/tvm-learning-guide.md) · [`../docs/learning-guides/cuda-fatbin-learning-guide.md`](../docs/learning-guides/cuda-fatbin-learning-guide.md) |
+| **横切词汇** | [`../docs/learning-guides/ai-compiler-foundations-learning-guide.md`](../docs/learning-guides/ai-compiler-foundations-learning-guide.md) §3–4 · §7.3 |
 | **阶段导航** | [`../docs/README.md`](../docs/README.md) 阶段 4 / 阶段 6 |
 | **对照项目** | [`../llvm-hello-compile/`](../llvm-hello-compile/) · [`../mlir-toy-dialect/`](../mlir-toy-dialect/) · [`../onnx-delegate-lab/`](../onnx-delegate-lab/)（划分/委托，正交） |
 

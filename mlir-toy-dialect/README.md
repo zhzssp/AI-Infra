@@ -8,10 +8,10 @@
 |--|--|
 | **角色** | MLIR 深化的动手主战场（P0）：双 dialect · Region · Interface · Dialect Conversion |
 | **总规划** | [`../README.md`](../README.md) §3.2（必学清单 + 端到端验收） |
-| **配套教材** | [`../docs/mlir-learning-guide.md`](../docs/mlir-learning-guide.md)（机制主教材）· [`../docs/paper-notes/03-mlir.md`](../docs/paper-notes/03-mlir.md)（论文动机） |
+| **配套教材** | [`../docs/learning-guides/mlir-learning-guide.md`](../docs/learning-guides/mlir-learning-guide.md)（机制主教材）· [`../docs/paper-notes/03-mlir.md`](../docs/paper-notes/03-mlir.md)（论文动机） |
 | **阶段导航** | [`../docs/README.md` 阶段 2](../docs/README.md#阶段-2mlir-深化p0约-2-周) |
 | **上一站** | [`../llvm-hello-compile/`](../llvm-hello-compile/) —— SSA / Pass / lit 的同构预习 |
-| **下一站** | [`../docs/iree-learning-guide.md`](../docs/iree-learning-guide.md) —— 把多层 lowering 接到工业运行时 |
+| **下一站** | [`../docs/learning-guides/iree-learning-guide.md`](../docs/learning-guides/iree-learning-guide.md) —— 把多层 lowering 接到工业运行时 |
 
 > 本项目的核心机制（对照表见下）已经齐；按总规划验收，下一步是把 Toy 接到 `linalg → scf → llvm` 端到端链路上。
 
@@ -82,9 +82,30 @@ MLIR 的核心特性可以归成 **五组**。下表说明每一组在本项目�
 | **TableGen 定义 Pass（`Passes.td` + `GEN_PASS_DEF`）** | 只是 `PassWrapper` 的工程化包装，多了 Pass 选项/统计/依赖声明 | 给 Pass 加命令行选项时 |
 | **`--pass-pipeline` 文本管线、PassManager 嵌套** | 属于调度层，理解"Pass 是什么"之后自然会用 | 组织真实编译流水线时 |
 | **Symbol / SymbolTable / 模块间引用** | 本项目直接复用内置 `func.func` | 做跨函数分析、内联时 |
-| **Bufferization（tensor → memref）** | 是一整套独立子系统，需要先有张量语义 | 做真实的 AI 编译器降低时 |
-| **降低到 LLVM Dialect + JIT 执行** | 只是再多一次 lowering，机制与 `toy→low` 完全同构 | 需要真的把 IR 跑起来时 |
 | **数据流分析框架、DataLayout、位置追踪** | 高级话题，用得着的场景很窄 | 写复杂分析型 Pass 时 |
+
+### 📎 补在 `examples/upstream/`（不改 toy，用现成 mlir-opt 跑）
+
+`toy` 是标量 `i32` dialect，有三件事它**根本表达不了**。这三件事又是读懂任何真实 AI 编译器 IR 的前提，
+所以在 [`examples/upstream/`](examples/upstream/) 下各放了一份**最小可跑样例**——
+它们不属于 `toy`，`toy-opt` 也不认识，用 conda 环境自带的 `mlir-opt` 跑：
+
+| 文件 | 补什么 | 对应教材 |
+|------|--------|---------|
+| `01-linalg-generic.mlir` | 张量语义、`indexing_maps` / `iterator_types`、DPS | [mlir-learning-guide §8](../docs/learning-guides/mlir-learning-guide.md) |
+| `02-bufferize.mlir` | tensor → memref、in-place vs copy 的判据 | 同上 |
+| `03-memref-to-llvm.mlir` | memref descriptor 摊平、与 LLVM 的真实接缝 | [llvm-learning-guide 第 7 章](../docs/learning-guides/llvm-learning-guide.md) |
+
+```bash
+bash scripts/run_upstream.sh          # 产物落 out/upstream/，先读 UPSTREAM.md
+```
+
+三个文件用的都是全仓库图级主角 `tiny_mlp`（`Gemm → Relu → Add`）的片段，
+所以能和 [`../onnx-delegate-lab/`](../onnx-delegate-lab/)、[`../llvm-hello-compile/`](../llvm-hello-compile/) 接上——
+链路全图见 [`../docs/learning-guides/00-end-to-end-pipeline.md`](../docs/learning-guides/00-end-to-end-pipeline.md)。
+
+> **注意分寸**：补的是「每个概念一份实物」，不是完整子系统。真要做 bufferization 或 JIT，
+> 仍然是「遇到再学」——只是现在有代码可指，不必凭空读一段 IR。
 
 **一句话结论**：跑通本项目的 9 组演示 + 读完 10 个测试用例，
 你就已经掌握了阅读任意一个 MLIR 项目（IREE / Triton / Torch-MLIR）所需的全部基础概念，
@@ -132,11 +153,17 @@ mlir-toy-dialect/
 ├── tools/toy-opt/
 │   ├── CMakeLists.txt
 │   └── toy-opt.cpp             # mlir-opt 风格的命令行工具（注册两个 dialect + 五个 Pass）
+├── examples/upstream/          # ★ 上游 dialect 最小样例（不属于 toy，用现成 mlir-opt 跑）
+│   ├── README.md               #   为什么要有这个目录 + 与主角模型的关系
+│   ├── 01-linalg-generic.mlir  #   张量语义 / indexing_maps / iterator_types / DPS
+│   ├── 02-bufferize.mlir       #   tensor→memref：谁能就地写，谁必须拷一份
+│   └── 03-memref-to-llvm.mlir  #   memref descriptor 摊平：与 LLVM 的接缝
 ├── scripts/                    # 一键启动/构建/测试脚本（Linux + conda）
 │   ├── env.sh                  # 公共环境（激活 conda、导出路径）
 │   ├── setup.sh                # 安装依赖（幂等）
 │   ├── build.sh                # 配置 + 编译
 │   ├── run.sh                  # 手动运行九个演示
+│   ├── run_upstream.sh         # ★ 跑 examples/upstream/（只需 mlir-opt，不需构建 toy-opt）
 │   ├── test.sh                 # lit 自动化测试
 │   └── all.sh                  # 一键跑通全流程
 └── test/
@@ -178,7 +205,10 @@ bash scripts/setup.sh        # ① 安装依赖：conda 环境 mlir-env（mlir/l
 bash scripts/build.sh        # ② 配置+编译，产出 build/bin/toy-opt（加 clean 可全新构建）
 bash scripts/test.sh         # ③ lit 自动化测试（check-toy，共 10 个用例）
 bash scripts/run.sh          # ④ 手动运行九组演示，肉眼观察输出
+bash scripts/run_upstream.sh # ⑤ 上游 dialect 样例（linalg / bufferize / memref→llvm），只需 ① 即可跑
 ```
+
+> ⑤ 不依赖 `toy-opt`，装完 conda 环境就能跑。它补的是 `toy` 表达不了的张量侧概念，见下面「一点五」。
 
 ### 3.2 环境要点（脚本已自动处理，了解即可）
 

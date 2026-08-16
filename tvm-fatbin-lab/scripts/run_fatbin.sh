@@ -11,7 +11,7 @@ if ! have_cuda; then
   cat <<EOF
 [SKIP] 未找到 nvcc / cuobjdump。
 请安装 CUDA Toolkit，并确保二者在 PATH 中。
-本步骤对应 docs/cuda-fatbin-learning-guide.md 第 8 章。
+本步骤对应 docs/learning-guides/cuda-fatbin-learning-guide.md 第 8 章。
 EOF
   exit 2
 fi
@@ -86,7 +86,7 @@ cat > "${CUDA_OUT}/READING.md" <<EOF
 | 选择键 | compute capability | target + condition |
 | 退路 | PTX JIT | fallback export / 更通用 variant |
 
-详见 [\`docs/cuda-fatbin-learning-guide.md\`](../../docs/cuda-fatbin-learning-guide.md) §6。
+详见 [\`docs/learning-guides/cuda-fatbin-learning-guide.md\`](../../docs/learning-guides/cuda-fatbin-learning-guide.md) §6。
 EOF
 
 echo

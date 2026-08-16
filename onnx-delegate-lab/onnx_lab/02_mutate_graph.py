@@ -24,15 +24,22 @@ def replace_initializer(graph, name: str, array: np.ndarray) -> None:
 
 
 def insert_identity_after(graph, producer_output: str, new_name: str) -> None:
+    """在 producer_output 之后插一个 Identity 探针，并把原下游改接到 new_name。
+
+    两件事缺一不可，缺了哪件 checker 都会当场拒绝：
+    1. **改接下游**——否则 new_name 无人使用，Identity 成了死节点；
+    2. **插在生产者紧后面**——ONNX 要求 node 列表拓扑有序（§3.1）。
+       如果图省事写成 graph.node.append(...)，探针会排在消费它的 add 之后，
+       checker 直接报 "input 'h_act_probe' is not output of any previous nodes"。
+    """
     from onnx import helper
 
-    # Retarget consumers of producer_output → new_name, then append Identity.
-    for node in graph.node:
-        for i, inp in enumerate(list(node.input)):
-            if inp == producer_output and node.op_type != "Identity":
-                # Only retarget nodes that currently consume the original name
-                # and are not the identity we are about to add.
-                pass
+    producer_idx = next(
+        (i for i, n in enumerate(graph.node) if producer_output in n.output), -1
+    )
+    if producer_idx < 0:
+        raise ValueError(f"没有任何节点产出 {producer_output}")
+
     for node in graph.node:
         for i, inp in enumerate(list(node.input)):
             if inp == producer_output:
@@ -40,7 +47,9 @@ def insert_identity_after(graph, producer_output: str, new_name: str) -> None:
     for out in graph.output:
         if out.name == producer_output:
             out.name = new_name
-    graph.node.append(helper.make_node("Identity", [producer_output], [new_name], name="probe_identity"))
+
+    probe = helper.make_node("Identity", [producer_output], [new_name], name="probe_identity")
+    graph.node.insert(producer_idx + 1, probe)
 
 
 def main() -> None:
@@ -96,6 +105,14 @@ def main() -> None:
 2. 把 initializer `bias2` 改成全 0
 3. `checker` + `infer_shapes` + ORT 再跑
 
+### 插节点的两个硬约束
+
+- **改接下游**：新名字必须有人用，否则探针是死节点
+- **插在生产者紧后面**：`graph.node` 必须拓扑有序。
+  写成 `graph.node.append(probe)` 会让探针排在消费它的 `add` 之后，
+  `checker` 报 `input 'h_act_probe' is not output of any previous nodes`。
+  想亲眼看这条报错，把 `insert_identity_after` 里的 `insert` 换成 `append` 再跑一次。
+
 ## 数值对照（同一输入 x=ones）
 
 - 原图输出均值: {float(y0.mean()):.6f}
@@ -103,6 +120,9 @@ def main() -> None:
 - 是否变化: {not np.allclose(y0, y_mut)}
 
 改完图务必：`checker.check_model` + 数值冒烟。这是委托/分区实验前的基本功。
+
+> 拓扑序在 MLIR 里的对应物叫 Dominance，见
+> [`docs/learning-guides/onnx-learning-guide.md` §3.1](../../../docs/learning-guides/onnx-learning-guide.md)。
 """
     write_text(out_dir() / "onnx" / "02_READING.md", guide)
     print(guide)

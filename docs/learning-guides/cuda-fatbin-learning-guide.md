@@ -5,10 +5,10 @@
 > - 目标读者是在搭「异构算力网 / 多后端执行基础设施」的编译器与系统工程师——你真正要带走的是**设计模式**，不是 GPU 指令细节。
 > - **篇幅刻意压短（半天量）**：根 README §5.4 只要求三点；本文把这三点讲透，其余全部标成跳过。
 > - 与 [`iree-learning-guide.md`](./iree-learning-guide.md) **§4.7 ExecutableVariant** 是同一思想的两条实现路径；读完应对着那一节做同构对照。
-> - 阶段导航见 [`docs/README.md`](./README.md) 阶段 6（回填与收束）。
-> - **先修**：[`ai-compiler-foundations.md`](./ai-compiler-foundations.md) §7.2–7.3（虚拟 ISA vs 真实 ISA、多变体打包）；上游机器码怎么来见 [`llvm-learning-guide.md`](./llvm-learning-guide.md) 第 5 章。
-> - **动手项目**：[`../tvm-fatbin-lab/`](../tvm-fatbin-lab/) CUDA 轨 —— `bash scripts/run_fatbin.sh`（或随 `scripts/run.sh`）。
-> - **邻接**：多后端**划分**（不是 ISA 打包）见 [`../onnx-delegate-lab/`](../onnx-delegate-lab/)。
+> - 阶段导航见 [`docs/README.md`](../README.md) 阶段 6（回填与收束）。
+> - **先修**：[`ai-compiler-foundations.md`](./ai-compiler-foundations-learning-guide.md) §7.2–7.3（虚拟 ISA vs 真实 ISA、多变体打包）；上游机器码怎么来见 [`llvm-learning-guide.md`](./llvm-learning-guide.md) 第 5 章。
+> - **动手项目**：[`../../tvm-fatbin-lab/`](../../tvm-fatbin-lab/) CUDA 轨 —— `bash scripts/run_fatbin.sh`（或随 `scripts/run.sh`）。
+> - **邻接**：多后端**划分**（不是 ISA 打包）见 [`../../onnx-delegate-lab/`](../../onnx-delegate-lab/)。
 >
 > **主要信息源**
 > - NVCC 用户手册：*CUDA Compiler Driver NVCC*（`-gencode` / `-arch` / `-code` / `-fatbin`）
@@ -16,6 +16,41 @@
 > - 二进制工具：`cuobjdump` / `nvdisasm` 手册
 >
 > **一句话读法**：如果只有一小时，读[第 1 章问题动机](#第-1-章-为什么需要-fatbin)、[第 3 章 compute vs sm](#第-3-章-compute_xx-vs-sm_xx重点)、[第 6 章设计同构](#第-6-章-设计模式同构fatbin--executablevariant)，再做[第 8 章动手](#第-8-章-动手清单半天做完)。
+
+---
+
+### 本篇在链路中的位置
+
+> 全局链路见 [`00-end-to-end-pipeline.md`](./00-end-to-end-pipeline.md)。本篇覆盖**第 ⑦ 站（打包）**，是链路的**出口**——
+> 前面六站辛苦挑出来的变体，最后要装进一个能发货的容器里。
+
+```text
+① 表示 ──▶ ② 划分 ──▶ ③ 融合 ──▶ ④ 调度 ──▶ ⑤ 降低 ──▶ ⑥ 指令 ──▶【⑦ 打包 ← 本篇】
+                                                          谁编出的 SASS      多份实现装一个盒子，运行时选一份
+```
+
+| | |
+|--|--|
+| **上游交给我** | 若干份**已经编好的目标代码**（同一个 kernel 的不同架构 / 后端版本） |
+| **我固化** | ① 哪几个变体值得预编译<br>② 用什么廉价谓词在运行时选一个<br>③ 留不留一条更慢但更通用的退路 |
+| **我交给下游** | 一个能直接发货的容器（`.fatbin` / `.o` / `.vmfb`） |
+| **本篇的主角** | [`../../tvm-fatbin-lab/cuda/add.cu`](../../tvm-fatbin-lab/cuda/add.cu) 里的 `add` kernel——**不是** `tiny_mlp` |
+
+**为什么这一篇换了主角**：打包这件事只关心「一个 kernel、多份实现」，
+`tiny_mlp` 那三个算子在这里没有额外信息量，反而把 `-gencode` 的对照淹没了。
+九行的 `add.cu` 是**最小充分**的教具。要看主角模型走完整条链路后长什么样，
+去 [`iree-lab`](../../iree-lab/) 数 `hal.executable.variant`——
+[§6](#第-6-章-设计模式同构fatbin--executablevariant) 就是把这两者并排放。
+
+**为什么这一站不是单向阀**：和前六站不同，打包的决策**基本可以事后补救**——
+漏了一档 `sm_*` 就重编一次，多打一个变体只是体积和构建时间的代价。
+真正不可逆的是**前面丢掉的信息**：如果 ② 站把融合窗口关了，
+你在这里打一百个变体，每个变体里都还是那份没融合的代码。
+
+| 章节 | 示例来自 | 怎么跑 |
+|------|---------|--------|
+| 第 2–5 章（流水线、ISA 档、`-gencode`、dump） | `tvm-fatbin-lab/cuda/add.cu` | `bash scripts/run_fatbin.sh` → `out/cuda/dump_*.txt` |
+| 第 6 章（与 IREE 同构对照） | `iree-lab/` 的 `out/phases/tiny_mlp.hal.mlir` | `bash iree-lab/scripts/run_phases.sh` |
 
 ---
 
@@ -111,7 +146,10 @@ NVCC 不是单一编译器，而是一个**驱动（compiler driver）**：它�
 
 #### 示例精讲：用仓库里的 `add.cu` 走一遍两条路径
 
-**最小具体输入**：仓库里已有的最小 kernel [`../tvm-fatbin-lab/cuda/add.cu`](../tvm-fatbin-lab/cuda/add.cu)（全文九行，**故意不写 host `main`**）：
+**可跑（需 CUDA Toolkit）** · 源码 [`tvm-fatbin-lab/cuda/add.cu`](../../tvm-fatbin-lab/cuda/add.cu) ·
+命令 `cd tvm-fatbin-lab && bash scripts/run_fatbin.sh` · 产物 `out/fatbin/`
+
+最小 kernel 全文九行，**故意不写 host `main`**：
 
 ```cuda
 // Minimal device kernel for fatbin multi-arch packaging demo.
@@ -204,7 +242,10 @@ fatbinary
 
 #### 示例精讲：逻辑 image 列表 ↔ dump 里的字段
 
-**最小具体输入**：按仓库 lab 的第二条命令编一份「两档 SASS + 一份 PTX 退路」的容器（[`../tvm-fatbin-lab/scripts/run_fatbin.sh`](../tvm-fatbin-lab/scripts/run_fatbin.sh) 生成的 `add_with_ptx.fatbin` 就是它）：
+**可跑（需 CUDA Toolkit）** · 脚本 [`tvm-fatbin-lab/scripts/run_fatbin.sh`](../../tvm-fatbin-lab/scripts/run_fatbin.sh) 的第二条命令 ·
+产物 `out/fatbin/add_with_ptx.fatbin`
+
+编一份「两档 SASS + 一份 PTX 退路」的容器：
 
 ```bash
 nvcc -fatbin tvm-fatbin-lab/cuda/add.cu -o add_with_ptx.fatbin \
@@ -287,7 +328,9 @@ CUDA C++  ──►  PTX (compute_XX)  ──►  SASS (sm_XX)
 
 #### 示例精讲：同一个 `add` kernel 的 PTX 与 SASS 并排
 
-**最小具体输入**：还是 [`../tvm-fatbin-lab/cuda/add.cu`](../tvm-fatbin-lab/cuda/add.cu) 里那个 `c[i] = a[i] + b[i]`。两条命令分别停在两层：
+**可跑（需 CUDA Toolkit）** · 源码 [`tvm-fatbin-lab/cuda/add.cu`](../../tvm-fatbin-lab/cuda/add.cu) 里那个 `c[i] = a[i] + b[i]`
+
+两条命令分别停在两层：
 
 ```bash
 nvcc -ptx   tvm-fatbin-lab/cuda/add.cu -o add.ptx   -gencode arch=compute_80,code=compute_80
@@ -393,7 +436,11 @@ $L__BB0_2:
 
 #### 示例精讲：三个场景走一遍上面的判定树
 
-**最小具体输入**：两份用同一个 `add.cu` 编出来的容器，以及三块卡。
+**部分可跑** · 两份容器就是 [`tvm-fatbin-lab/scripts/run_fatbin.sh`](../../tvm-fatbin-lab/scripts/run_fatbin.sh) 落的
+`add.fatbin` 与 `add_with_ptx.fatbin`；**三块卡是推演**——除非你手边真有三代 GPU。
+能真跑的是「容器里有什么」那一半（`cuobjdump`），推演的是「驱动会选哪一份」那一半。
+
+**最小具体输入**：两份用同一个 [`add.cu`](../../tvm-fatbin-lab/cuda/add.cu) 编出来的容器，以及三块卡。
 
 ```text
 F1（SASS-only）    = -gencode arch=compute_75,code=sm_75
@@ -417,7 +464,7 @@ F2（SASS + PTX 退路）= F1 的两条，第二条改成 code=[sm_80,compute_80
 
 **逐条读**
 
-1. ① 与 ③ 的差别不在「能不能跑」，而在**谁付编译成本、什么时候付**：① 在你的构建机上付（AOT），③ 在用户第一次启动时付（JIT）。这就是 [`ai-compiler-foundations.md` §8.3](./ai-compiler-foundations.md#83-aot-vs-jit) 那张 AOT/JIT 表在 ISA 层的实物。
+1. ① 与 ③ 的差别不在「能不能跑」，而在**谁付编译成本、什么时候付**：① 在你的构建机上付（AOT），③ 在用户第一次启动时付（JIT）。这就是 [`ai-compiler-foundations.md` §8.3](./ai-compiler-foundations-learning-guide.md#83-aot-vs-jit) 那张 AOT/JIT 表在 ISA 层的实物。
 2. ①′ 是**便宜但别依赖**的一格：它只在同 major 内成立，而且拿到的是老一代调优过的码。§3.5 说的「不要拿它替代正确的 `-gencode` 列表」指的就是这里。另外，带 `a` 一类后缀的架构特有目标（如 `sm_90a`）不参与这种宽松规则，需要时查官方文档。
 3. ② 是发货事故的标准形态：编译清单里没有的**更新一代**卡，且没留 PTX。修法只有两种——把新架构加进 `-gencode` 重新发一版，或者当初就留一份 `compute_*` PTX。
 4. 判定树是**按容器内容 + 当前卡**两个输入求值的，与你的源码无关。所以「换台机器就挂」几乎总能靠 `cuobjdump -lelf` / `-lptx`（[§5.2](#52-必会命令复制即用)）在三十秒内定位。
@@ -492,7 +539,11 @@ nvcc kernel.cu -c -o kernel.o \
 
 #### 示例精讲：三种 `-gencode` 组合各产出几个 image（可照抄验证）
 
-**最小具体输入**：同一个 [`../tvm-fatbin-lab/cuda/add.cu`](../tvm-fatbin-lab/cuda/add.cu)，只改 `-gencode`，编出三份容器。
+**可跑（需 CUDA Toolkit）** · 源码 [`tvm-fatbin-lab/cuda/add.cu`](../../tvm-fatbin-lab/cuda/add.cu) ·
+组合 A 与 B 就是 [`scripts/run_fatbin.sh`](../../tvm-fatbin-lab/scripts/run_fatbin.sh) 落的
+`add.fatbin` / `add_with_ptx.fatbin`，组合 C 需自己敲
+
+同一份源码，只改 `-gencode`，编出三份容器。
 
 ```bash
 # 组合 A：纯 SASS 两档（对应 lab 的 add.fatbin）
@@ -617,6 +668,9 @@ cuobjdump -lelf kernel.cubin
 
 #### 示例精讲：`-lelf` / `-lptx` 的输出长什么样，逐行怎么读
 
+**可跑（需 CUDA Toolkit）** · 源码 [`tvm-fatbin-lab/cuda/add.cu`](../../tvm-fatbin-lab/cuda/add.cu) ·
+命令 `bash tvm-fatbin-lab/scripts/run_fatbin.sh` · 产物 `out/cuda/dump_sass_only.txt`、`dump_with_ptx.txt`
+
 **最小具体输入**：§4.1 组合 C 编出来的 `C.fatbin`（两档 SASS + 一份 PTX），也就是 lab 里的 `add_with_ptx.fatbin`。
 
 > **以下所有 dump 块都是输出形态示意（以本地工具版本为准）**：条目命名、缩进、info 行措辞都随 CUDA Toolkit 版本变化。**只依赖三件事**：条目数、每条对应哪一档架构、它出现在 `-lelf` 还是 `-lptx` 里。
@@ -739,7 +793,11 @@ hal.executable @my_kernel {
 
 #### 示例精讲：同一个 `add` 在四栏里的样子
 
-**最小具体输入**：还是仓库里那个 kernel（[`../tvm-fatbin-lab/cuda/add.cu`](../tvm-fatbin-lab/cuda/add.cu)），逐元素加法。把它在四个视角下各写一遍。
+**部分可跑** · 栏①②源码 [`tvm-fatbin-lab/cuda/add.cu`](../../tvm-fatbin-lab/cuda/add.cu)（需 CUDA Toolkit）；
+栏③④的 `hal.executable` + variant 可跑：`cd iree-lab && bash scripts/run_phases.sh`，
+产物 `out/phases/tiny_mlp.hal.mlir`，`grep -n 'hal.executable\|hal.executable.variant'`
+
+同一个逐元素加法，在四个视角下各写一遍。
 
 **栏①：CUDA kernel 签名（调用方看到的全部）**
 
@@ -760,7 +818,15 @@ add_with_ptx.fatbin
 
 **栏③：IREE `hal.executable` + variant**
 
-> 语法示意（`layout` / binding 的写法随 IREE 版本变化，以你本地 `--compile-to=hal` 的 dump 为准）
+> **可跑** · `bash iree-lab/scripts/run_phases.sh` 会落一份 `out/phases/tiny_mlp.hal.mlir`，
+> 里面就是下面这套结构的真身。数一下自己那份有几个 variant：
+>
+> ```bash
+> grep -c 'hal.executable.variant' iree-lab/out/phases/tiny_mlp.hal.mlir
+> ```
+>
+> 只编 CPU 后端时答案是 1——**这正好对应「只带一档 SASS」的 fatbin**。
+> 语法示意（`layout` / binding 的写法随 IREE 版本变化，以你本地的 dump 为准）
 
 ```mlir
 hal.executable private @add_dispatch {
@@ -854,7 +920,7 @@ CUDA fatbin 是这个模式在 **NVIDIA GPU ISA 层**的实例；IREE variant �
 
 ## 第 7 章 与 AI-Infra 的对接点
 
-位置：根 [`README.md`](../README.md) **P2 / 半天 / §5.4**；阶段入口 [`docs/README.md`](./README.md) **阶段 6**。卡住「多后端怎么低成本共存」时，fatbin 是最短的实物教具。
+位置：根 [`README.md`](../../README.md) **P2 / 半天 / §5.4**；阶段入口 [`docs/README.md`](../README.md) **阶段 6**。卡住「多后端怎么低成本共存」时，fatbin 是最短的实物教具。
 
 ### 7.1 低成本后端切换 + 多变体打包
 
@@ -890,7 +956,7 @@ bash scripts/run_fatbin.sh          # 或 bash scripts/run.sh 两轨一起
 # 先读 out/cuda/READING.md 与 out/ANALYSIS.md
 ```
 
-源码在 [`../tvm-fatbin-lab/cuda/add.cu`](../tvm-fatbin-lab/cuda/add.cu)；脚本会生成 SASS-only 与「SASS + PTX 退路」两份 fatbin，并落盘 `cuobjdump` 输出。
+源码在 [`../../tvm-fatbin-lab/cuda/add.cu`](../../tvm-fatbin-lab/cuda/add.cu)；脚本会生成 SASS-only 与「SASS + PTX 退路」两份 fatbin，并落盘 `cuobjdump` 输出。
 
 ### 8.1 最小复现（不跑 lab 时）
 
@@ -916,11 +982,30 @@ nvcc -fatbin tvm-fatbin-lab/cuda/add.cu -o add_with_ptx.fatbin \
 - [ ] SASS-only 的 `-lptx` 为空或无对应档；with_ptx 能看到 `compute_*`；  
 - [ ] 能解释：无 PTX 时在更新 GPU 上可能失败；有 `compute_*` 时可 JIT。
 
-### 8.2（可选）IREE 对照
+### 8.2 IREE 对照（不需要 GPU，`pip` 装完就能跑）
 
-对小模型 `--compile-to=hal`，找 `hal.executable` / `variant` / `export`，对照 fatbin 多 image；问 `target` ≈ 哪条 `-gencode`，`condition` ≈ 更丰富的选择谓词。
+```bash
+cd iree-lab && pip install -r requirements.txt
+bash scripts/run_phases.sh
+grep -n 'hal.executable\|hal.executable.variant\|hal.executable.export' \
+     out/phases/tiny_mlp.hal.mlir
+```
 
-**时间盒**：0–20 min 读 §1–3 → 20–40 min 跑 lab → 40–60 min 对照 IREE §4.7 写三句「问题 / 打包 / 选择」。
+**三个词一一对上**：
+
+| fatbin | IREE | 在你的 dump 里 |
+|--------|------|--------------|
+| 容器本身 | `hal.executable` | 外层那个 `hal.executable private @...` |
+| 一份 image（`sm_80` SASS） | `hal.executable.variant` | `#hal.executable.target<"llvm-cpu", ...>` |
+| 镜像里的 entry `add` | `hal.executable.export` | `hal.executable.export public @... ordinal(0)` |
+
+问自己：`target` ≈ 哪条 `-gencode`？`condition` ≈ 更丰富的选择谓词——它能表达 `-gencode` 表达不了的什么？
+
+> 这条对照没有 GPU 也做得成，**因为同构的是结构不是硬件**。
+> 同一个 `#hal.executable.target` 里的 `cpu_features` 字段还能接到
+> `iree-lab/scripts/run_variants.sh` 的 AVX 实验——那是「变体轴」在 CPU 上的样子。
+
+**时间盒**：0–20 min 读 §1–3 → 20–40 min 跑 `tvm-fatbin-lab` CUDA 轨 → 40–60 min 跑 `iree-lab` 对照 §6，写三句「问题 / 打包 / 选择」。
 
 ---
 
@@ -1001,4 +1086,4 @@ nvcc -fatbin tvm-fatbin-lab/cuda/add.cu -o add_with_ptx.fatbin \
 
 ---
 
-*文档版本随仓库自学体系维护；优先级与「只学三点」以根 README §5.4 为准。阶段入口：[`docs/README.md`](./README.md)。*
+*文档版本随仓库自学体系维护；优先级与「只学三点」以根 README §5.4 为准。阶段入口：[`docs/README.md`](../README.md)。*

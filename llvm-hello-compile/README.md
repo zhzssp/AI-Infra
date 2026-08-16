@@ -5,7 +5,7 @@
 | 脚本 | 回答什么问题 | 场景源码 |
 |------|-------------|---------|
 | `bash scripts/run.sh` | **链路**：一份源码怎么一步步变成可执行文件 | `src/sum.c` |
-| `bash scripts/tour.sh` | **要点**：[学习指南](../docs/llvm-learning-guide.md) §9.1 那 11 条必学点分别长什么样 | `src/kernel.c` + `src/poison_demo.ll` + `src/mini.td` |
+| `bash scripts/tour.sh` | **要点**：[学习指南](../docs/learning-guides/llvm-learning-guide.md) §9.1 那 11 条必学点分别长什么样 | `src/kernel.c` + `src/poison_demo.ll` + `src/mini.td` |
 
 `run.sh` 先跑（建立整体感），`tour.sh` 后跑（把每个概念都亲眼看一遍）。
 两者都会边跑边讲解，并把所有中间产物落盘。
@@ -19,11 +19,11 @@
 |--|--|
 | **角色** | 编译器地基（P2）：建立「单层 IR + Pass + CodeGen」手感 |
 | **总规划** | [`../README.md`](../README.md) §5.1 |
-| **配套教材** | [`../docs/llvm-learning-guide.md`](../docs/llvm-learning-guide.md)（机制）· [`../docs/paper-notes/02-llvm.md`](../docs/paper-notes/02-llvm.md)（动机） |
+| **配套教材** | [`../docs/learning-guides/llvm-learning-guide.md`](../docs/learning-guides/llvm-learning-guide.md)（机制）· [`../docs/paper-notes/02-llvm.md`](../docs/paper-notes/02-llvm.md)（动机） |
 | **阶段导航** | [`../docs/README.md` 阶段 0](../docs/README.md#阶段-0编译器地基半天1-天可与阶段-1-并行) |
 | **下一站** | [`../mlir-toy-dialect/`](../mlir-toy-dialect/) —— 同一套心智模型升到多层 dialect |
 
-> 建议在啃 MLIR 之前先跑通本项目（半天）；卡在 `llvm` dialect / `poison` / 向量化时再回 [`llvm-learning-guide`](../docs/llvm-learning-guide.md) 深挖。
+> 建议在啃 MLIR 之前先跑通本项目（半天）；卡在 `llvm` dialect / `poison` / 向量化时再回 [`llvm-learning-guide`](../docs/learning-guides/llvm-learning-guide.md) 深挖。
 
 ---
 
@@ -61,14 +61,14 @@ IR 是整个体系的枢纽，这也正是 MLIR「多层 IR」思想的源头。
 
 ## 一之二、核心要点覆盖表（`tour.sh` 的 17 个站点）
 
-学习指南 [§9.1「必须掌握」](../docs/llvm-learning-guide.md#91-必须掌握) 的 11 条，
+学习指南 [§9.1「必须掌握」](../docs/learning-guides/llvm-learning-guide.md#91-必须掌握) 的 11 条，
 在 `bash scripts/tour.sh` 里都有一个能亲眼看到的站点：
 
 | 站 | 学习指南 | 要点 | 在项目里怎么看 |
 |----|---------|------|--------------|
 | 0 | §2.1 | IR 三态：`.ll` ↔ `.bc` 无损互转 | `llvm-as` / `llvm-dis` 往返 + 体积对比 |
 | 1 | §2.2 | 类型系统：`iN` / `float` / **opaque `ptr`** / `<N x T>` / 结构体 | `kernel.c` 里的 `Tensor` 与向量类型 |
-| 2 | §2.3 | **SSA + 显式 CFG + terminator + `phi`** | `mem2reg` 前后：`alloca` 归零、`phi` 出现 |
+| 2 | §2.3 | **SSA + 显式 CFG + terminator + `phi`** | `clamp0` 的三份形态：`alloca`/`store` → `phi` → `select` |
 | 3 | §2.5 | **`getelementptr` 与 `inbounds` 承诺** | `relu_sum` 里 `t->data[i]` 展开的多条 GEP |
 | 4 | §2.6 | **属性与标志**：`noalias` / `align` / `dereferenceable`、`contract`→FMA | `restrict` 参数；`-ffp-contract=off` vs `fast` |
 | 5 | §2.7 | **poison / undef / freeze**、`select` 毒性屏障 | 手写 `src/poison_demo.ll` 过一遍 `-O2` |
@@ -86,6 +86,11 @@ IR 是整个体系的枢纽，这也正是 MLIR「多层 IR」思想的源头。
 
 > 场景为什么是 `src/kernel.c`？因为一个「axpy + ReLU 求和」的迷你算子，天然同时含有
 > **循环 / 结构体 / 数组下标 / 浮点乘加 / 三元表达式 / 指针别名**——上表大半要点都能从它一份 IR 里看到。
+>
+> 更进一步：它不是随便挑的一个 C 文件，而是全仓库**图级主角 `tiny_mlp`（Gemm → Relu → Add）里那个 Gemm
+> 降到 C 层之后的样子**——`axpy` 就是 Gemm 的最内层乘加，`relu_sum` 里的 `v > 0 ? v : 0` 就是 Relu。
+> 所以本项目讨论的别名 / FMA / 向量化 / 寄存器分配，讨论的都是那张图里的那一个算子。
+> 完整链路见 [`../docs/learning-guides/00-end-to-end-pipeline.md`](../docs/learning-guides/00-end-to-end-pipeline.md)。
 
 ---
 
@@ -97,7 +102,7 @@ llvm-hello-compile/
 ├── .gitignore           # 忽略 out/ 和 build/
 ├── src/
 │   ├── sum.c            # 【run.sh 的场景】平方和：小函数 + 循环 + printf
-│   ├── kernel.c         # 【tour.sh 的场景】迷你 AI 算子：axpy + ReLU 求和
+│   ├── kernel.c         # 【tour.sh 的场景】迷你 AI 算子：axpy + ReLU 求和 + clamp0
 │   ├── poison_demo.ll   # 手写 IR：poison / freeze / select 屏障 / 何时变成 UB
 │   └── mini.td          # 30 行 TableGen：class / def / multiclass / let
 ├── passes/              # 【自定义 Pass 源码】编译成插件 MyPasses.so
@@ -275,7 +280,7 @@ sum_of_squares(5) = 55
 
 | # | 对比 | 你应该看到什么 |
 |---|------|--------------|
-| 1 | `00_O0.ll` → `03_mem2reg.ll` | `alloca` 归零、`phi` 出现——**进入 SSA 的那一刻** |
+| 1 | `@clamp0` 在 `00_O0.ll` → `03_mem2reg.ll` → `01_O2.ll` | `alloca`/`store` → `phi` → `select`：前一跳是**进入 SSA**，后一跳是**消除分支**，两件事别混 |
 | 2 | `04_contract_off.ll` → `05_contract_fast.ll` | `fmul`+`fadd` 两条 → 一条 `llvm.fmuladd`：**一次舍入的 FMA 是被「许可」出来的** |
 | 3 | `06_poison_O2.ll` | `and poison, 0` 仍折叠成 `poison`；`select` 未选中的臂不传染 |
 | 4 | `01_O2.ll` 里 `@axpy` vs `@axpy_may_alias` | 有无 `restrict`（→`noalias`）导致向量化结果完全不同 |
@@ -322,7 +327,7 @@ sum_of_squares(5) = 55
 
 | 主题 | 链接 | 对应本项目 |
 |------|------|-----------|
-| **本仓库 LLVM 学习文档（优先）** | [`../docs/llvm-learning-guide.md`](../docs/llvm-learning-guide.md) | 跑完本项目后对照读：四层 IR、New PM、CodeGen |
+| **本仓库 LLVM 学习文档（优先）** | [`../docs/learning-guides/llvm-learning-guide.md`](../docs/learning-guides/llvm-learning-guide.md) | 跑完本项目后对照读：四层 IR、New PM、CodeGen |
 | **自学体系枢纽** | [`../docs/README.md`](../docs/README.md) | 本项目在整条学习路径中的位置 |
 | **LLVM LangRef** | https://llvm.org/docs/LangRef.html | 读懂 `02_*.ll` / `03_*.ll` 的语法 |
 | **Writing an LLVM Pass** | https://llvm.org/docs/WritingAnLLVMNewPMPass.html | 理解步骤 ③ 的 Pass 机制 |

@@ -1,7 +1,7 @@
 # Glow：用"少量线性代数原语 + 渐进式 Graph Lowering"降低新硬件后端接入成本的神经网络编译器
 
-> **导航**：[笔记索引](README.md) · [自学枢纽](../README.md)（阶段 6） · [横切概念](../ai-compiler-foundations.md) §3（图与融合）、§5.3（量化）  
-> **配套阅读**：本篇与 [`05-tvm.md`](05-tvm.md) / [`tvm-learning-guide.md`](../tvm-learning-guide.md) **对比阅读**——「少量原语 + lowering」vs「TE + 搜索」是降低后端接入成本的两条路线。  
+> **导航**：[笔记索引](README.md) · [自学枢纽](../README.md)（阶段 6） · [横切概念](../learning-guides/ai-compiler-foundations-learning-guide.md) §3（图与融合）、§5.3（量化）  
+> **配套阅读**：本篇与 [`05-tvm.md`](05-tvm.md) / [`tvm-learning-guide.md`](../learning-guides/tvm-learning-guide.md) **对比阅读**——「少量原语 + lowering」vs「TE + 搜索」是降低后端接入成本的两条路线。  
 > **本篇章号提示**：多一节「与 TVM 对比」，因此**最小必要集在 §8**。
 
 > 论文元信息

@@ -1,6 +1,6 @@
 # 检验体系 05｜ONNX + ONNX Runtime
 
-> **对应学习文档**：[`../onnx-learning-guide.md`](../onnx-learning-guide.md)  
+> **对应学习文档**：[`../learning-guides/onnx-learning-guide.md`](../learning-guides/onnx-learning-guide.md)  
 > **对应动手项目**：[`onnx-delegate-lab/`](../../onnx-delegate-lab/) 的 ONNX 轨（`onnx_lab/01~03`）  
 > **分级与资源标签定义**：[`./README.md`](./README.md)
 
@@ -407,7 +407,7 @@ PY
 - **资源**：本地+工具链
 - **预计耗时**：1.5h
 
-**任务**：写一个脚本（可放 `onnx_lab/` 下，或直接一次性脚本），对 `out/onnx/03_partition_demo.onnx`（Gemm→Relu→Softmax→ReduceSum）用 `SessionOptions.graph_optimization_level` 的四档分别建会话，各自导出 `optimized_model_filepath`：
+**任务**：写一个脚本（可放 `onnx_lab/` 下，或直接一次性脚本），对 `out/onnx/03_partition_demo.onnx`（Gemm→Relu→Add→Softmax→ReduceSum，前三个就是主角 `tiny_mlp`）用 `SessionOptions.graph_optimization_level` 的四档分别建会话，各自导出 `optimized_model_filepath`：
 
 - `ORT_DISABLE_ALL` / `ORT_ENABLE_BASIC` / `ORT_ENABLE_EXTENDED` / `ORT_ENABLE_ALL`（枚举成员名以本地 `onnxruntime` 版本为准，先 `print([x for x in dir(ort.GraphOptimizationLevel) if not x.startswith('_')])`）
 
@@ -466,7 +466,7 @@ PY
 - **资源**：本地+工具链（有第二 EP 更直观，无卡也能完成）
 - **预计耗时**：2h
 
-**任务**：改 `onnx_lab/03_ort_ep_partition.py` 的 `build_partition_demo_model`，把当前的 `Gemm → Relu → Softmax → ReduceSum` 改成**故意制造边界**的结构。两种做法任选（都做更好）：
+**任务**：改 `onnx_lab/03_ort_ep_partition.py` 的 `build_partition_demo_model`，把当前的 `Gemm → Relu → Add → Softmax → ReduceSum`（前三个是主角 `tiny_mlp`，后两个是为制造边界加的尾巴）改成**制造更多边界**的结构。两种做法任选（都做更好）：
 
 1. **插入一个冷门算子**到链路中间（例如 `NonZero`、`Unique`、`StringNormalizer` 这类实现覆盖少的算子，或用一个非默认 domain 的算子），让它落在 EP 能力之外；
 2. **交错排列**：把容易被加速 EP 吃掉的算子（`Gemm` / `MatMul` / `Conv` / `Relu`）与常留 CPU 的算子（归约、`Softmax`、形状类算子）**交替**排布，例如 `Gemm → Softmax → Gemm → Softmax`，制造多个来回。

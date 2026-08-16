@@ -1,7 +1,7 @@
 # LLVM：面向"终身"程序分析与变换的编译框架，用一份低层但保留类型/数据流信息的 IR 统一编译时/链接时/运行时/空闲时优化
 
-> **导航**：[笔记索引](README.md) · [自学枢纽](../README.md)（阶段 0） · [横切概念](../ai-compiler-foundations.md) §6  
-> **配套阅读**：本篇是 2004 年论文，讲**当年为什么这样设计**；**今天 LLVM 的实际结构**（四层 IR、New Pass Manager、后端 CodeGen 七阶段）见 [`llvm-learning-guide.md`](../llvm-learning-guide.md)；动手在 [`llvm-hello-compile/`](../../llvm-hello-compile/)。
+> **导航**：[笔记索引](README.md) · [自学枢纽](../README.md)（阶段 0） · [横切概念](../learning-guides/ai-compiler-foundations-learning-guide.md) §6  
+> **配套阅读**：本篇是 2004 年论文，讲**当年为什么这样设计**；**今天 LLVM 的实际结构**（四层 IR、New Pass Manager、后端 CodeGen 七阶段）见 [`llvm-learning-guide.md`](../learning-guides/llvm-learning-guide.md)；动手在 [`llvm-hello-compile/`](../../llvm-hello-compile/)。
 
 > 论文元信息
 > - 标题：*LLVM: A Compilation Framework for Lifelong Program Analysis & Transformation*

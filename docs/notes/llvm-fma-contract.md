@@ -1,6 +1,6 @@
 # FMA 与 `contract` 标志
 
-> 来源：[`llvm-learning-guide.md`](../llvm-learning-guide.md) §2.6（指令标志 / 浮点 fast-math）
+> 来源：[`llvm-learning-guide.md`](../learning-guides/llvm-learning-guide.md) §2.6（指令标志 / 浮点 fast-math）
 
 ## FMA 是什么
 

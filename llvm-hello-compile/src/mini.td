@@ -1,5 +1,5 @@
 // =============================================================================
-// mini.td —— 30 行体会 TableGen（对应 docs/llvm-learning-guide.md 第 6 章）
+// mini.td —— 30 行体会 TableGen（对应 docs/learning-guides/llvm-learning-guide.md 第 6 章）
 //
 // 要点：LLVM 后端描述（寄存器/指令/Pattern）和 MLIR 的 ODS 用的是【同一套语言】，
 //       只是交给不同的 backend 生成不同的代码。

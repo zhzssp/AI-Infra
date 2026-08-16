@@ -1,6 +1,6 @@
 # New PM：层级、默认 pipeline、以及「PM 也是 pass」
 
-> 来源：[`llvm-learning-guide.md`](../llvm-learning-guide.md) 第 3 章 · §4.4
+> 来源：[`llvm-learning-guide.md`](../learning-guides/llvm-learning-guide.md) 第 3 章 · §4.4
 
 ## 两套引擎（别和层级搞混）
 

@@ -1,6 +1,6 @@
 # Block argument、phi 与到达定值
 
-> 来源：[`mlir-learning-guide.md`](../mlir-learning-guide.md) §2.3 · [`llvm-learning-guide.md`](../llvm-learning-guide.md) §2.3  
+> 来源：[`mlir-learning-guide.md`](../learning-guides/mlir-learning-guide.md) §2.3 · [`llvm-learning-guide.md`](../learning-guides/llvm-learning-guide.md) §2.3  
 > 相关：[llvm-phi.md](./llvm-phi.md)
 
 ## 分工：控制流 vs 数据流

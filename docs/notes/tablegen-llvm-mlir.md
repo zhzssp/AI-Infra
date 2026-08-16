@@ -1,6 +1,6 @@
 # TableGen：LLVM 目标描述与 MLIR ODS 的共同语言
 
-> 来源：[`llvm-learning-guide.md`](../llvm-learning-guide.md) §6
+> 来源：[`llvm-learning-guide.md`](../learning-guides/llvm-learning-guide.md) §6
 
 ## 是什么
 

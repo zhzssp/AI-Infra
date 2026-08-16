@@ -1,7 +1,7 @@
 # 检验体系 03｜IREE
 
 > 分级定义、资源标签、条目写法见总纲 [`./README.md`](./README.md)。
-> 知识本体见 [`../iree-learning-guide.md`](../iree-learning-guide.md)（本册每条都标了对应章节）。
+> 知识本体见 [`../learning-guides/iree-learning-guide.md`](../learning-guides/iree-learning-guide.md)（本册每条都标了对应章节）。
 
 ---
 
@@ -31,12 +31,21 @@ L2-IREE-07 的做法 B 需要从源码构建 IREE，L3-IREE-10 需要 GPU，两�
 
 ### 环境与工作目录
 
-本册没有配套 lab 目录，**所有文件都写在仓库外的一个临时目录**（例如 `~/iree-lab/`），不要提交进仓库。
+本册是**动手改东西**的，产物一律**写在仓库外的临时目录**（`~/iree-check/`），不要提交进仓库。
 
 ```bash
-mkdir -p ~/iree-lab && cd ~/iree-lab
+mkdir -p ~/iree-check && cd ~/iree-check
 pip install iree-base-compiler iree-base-runtime   # 较老版本的包名是 iree-compiler / iree-runtime
 ```
+
+> **和仓库里的 [`iree-lab/`](../../iree-lab/) 是什么关系**：
+> `iree-lab/` 是**只读的教学产物** —— 跑完 `bash scripts/run.sh` 就能看到各相位 IR、
+> 数值校验、三组对照实验，用来配合指南**建立认知**。
+> 本册要你**改模型、加 pass、换后端**，那些改动不该污染 lab，所以另开 `~/iree-check/`。
+>
+> 建议顺序：**先跑一遍 `iree-lab/`，再做本册**。本册很多条目要求"先预测再动手"，
+> 而 `iree-lab/out/PHASES.md` 里已经有对照答案。
+> 模型也可以直接拷过去改：`cp <repo>/iree-lab/models/tiny_mlp.mlir ~/iree-check/`。
 
 **命令一律按 bash 写**。Windows 下建议用 Git Bash 或 WSL；若坚持用 PowerShell，把 `grep -c "X" f.mlir` 换成 `(Select-String -Pattern "X" f.mlir | Measure-Object).Count`。
 
@@ -74,7 +83,7 @@ iree-run-module --help | grep -iE "input|expected_output|device"
 - **资源**：本地+工具链
 - **预计耗时**：0.5h
 
-**任务**：在 `~/iree-lab/` 下建一个 `env.md`，把下面四样东西记进去：
+**任务**：在 `~/iree-check/` 下建一个 `env.md`，把下面四样东西记进去：
 
 1. 五个工具各自是否存在、版本号（`command -v iree-compile iree-run-module iree-opt iree-dump-module iree-benchmark-module`）。缺哪个记下来，后面用到时才知道要换方案。
 2. 本地 `--compile-to` 接受的**全部相位名**（从 `--help` 抄下来，不要抄本文档的）。
@@ -84,13 +93,13 @@ iree-run-module --help | grep -iE "input|expected_output|device"
 **先预测再动手**：先写下你的答案再去查。
 
 - `llvm-cpu` 是编译后端还是运行时 driver？`local-sync` 呢？两张表为什么长度不一样？
-- 一个编译后端能对应几个运行时 driver？（指南 [4.1.1](../iree-learning-guide.md#411-三条设计取向理解-hal-的钥匙) 的 N:M 那张表）
+- 一个编译后端能对应几个运行时 driver？（指南 [4.1.1](../learning-guides/iree-learning-guide.md#411-三条设计取向理解-hal-的钥匙) 的 N:M 那张表）
 - 如果 `iree-dump-module` 不存在，本册哪些条目会受影响？
 
 **验收命令**：
 
 ```bash
-cd ~/iree-lab
+cd ~/iree-check
 command -v iree-compile iree-run-module iree-opt iree-dump-module iree-benchmark-module
 iree-compile --version
 iree-compile --help | grep -A 30 -i "compile-to"
@@ -114,7 +123,7 @@ iree-run-module --list_devices
 ### L0-IREE-02｜最小 linalg 模型：编到 CPU 并做数值验证
 
 - **检验什么**：这条通过 = 你真的掌握了「`.mlir` → `.vmfb` → 在 HAL device 上 invoke」这条最短闭环，以及 `--input` / `--function` 分别对应产物里的什么
-- **前置**：L0-IREE-01；会读 `linalg.generic`（不会就先补 [`./02-mlir.md`](./02-mlir.md) 与指南 [2.2](../iree-learning-guide.md#22-三个最需要理解的转折点)）
+- **前置**：L0-IREE-01；会读 `linalg.generic`（不会就先补 [`./02-mlir.md`](./02-mlir.md) 与指南 [2.2](../learning-guides/iree-learning-guide.md#22-三个最需要理解的转折点)）
 - **资源**：本地+工具链
 - **预计耗时**：0.5h
 
@@ -139,14 +148,14 @@ func.func @abs(%arg0: tensor<4xf32>) -> tensor<4xf32> {
 
 **先预测再动手**：
 
-- `--function=abs` 这个名字，运行时是从 `.vmfb` 的哪一部分查出来的？（指南 [第 1 章](../iree-learning-guide.md#第-1-章-iree-是什么一分钟建立坐标系)的产物结构图）
+- `--function=abs` 这个名字，运行时是从 `.vmfb` 的哪一部分查出来的？（指南 [第 1 章](../learning-guides/iree-learning-guide.md#第-1-章-iree-是什么一分钟建立坐标系)的产物结构图）
 - 编译时指定的是 `llvm-cpu`，运行时指定的是 `local-sync`，为什么两个名字对不上也能跑通？
 - 如果把 `--expected_output` 故意写错一个数，你预期进程退出码是 0 还是非 0？
 
 **验收命令**：
 
 ```bash
-cd ~/iree-lab
+cd ~/iree-check
 iree-compile abs.mlir \
   --iree-hal-target-device=local \
   --iree-hal-local-target-device-backends=llvm-cpu \
@@ -208,7 +217,7 @@ dump 完之后，逐个文件回答「这一相位比上一相位多了什么」
 **验收命令**：
 
 ```bash
-cd ~/iree-lab
+cd ~/iree-check
 for phase in input abi global-optimization dispatch-creation \
              flow stream executable-sources executable-targets hal vm; do
   iree-compile abs.mlir \
@@ -238,8 +247,8 @@ check abs.vm.mlir                  "vm.call @hal"
 | 现象 | 你哪里没懂 |
 |------|-----------|
 | `--compile-to=xxx` 报错 | 没照 L0-IREE-01 抄本地相位名 |
-| `abs.stream.mlir` 里找不到 `stream.resource.alloca` | 这个程序可能没有需要临时分配的中间结果——想清楚 `transient` 是什么才会出现（指南 [3.4](../iree-learning-guide.md#34-stream-ordered-allocation峰值内存的关键)） |
-| 说不出 hal 相位比 stream 相位多了什么 | 只在「看到了 op 名」层面通过，没建立「每层固化一个决定」的模型；回看指南 [2.1](../iree-learning-guide.md#第-2-章-编译侧dialect-流水线) 的职责表 |
+| `abs.stream.mlir` 里找不到 `stream.resource.alloca` | 这个程序可能没有需要临时分配的中间结果——想清楚 `transient` 是什么才会出现（指南 [3.4](../learning-guides/iree-learning-guide.md#34-stream-ordered-allocation峰值内存的关键)） |
+| 说不出 hal 相位比 stream 相位多了什么 | 只在「看到了 op 名」层面通过，没建立「每层固化一个决定」的模型；回看指南 [2.1](../learning-guides/iree-learning-guide.md#第-2-章-编译侧dialect-流水线) 的职责表 |
 | 认为 `--compile-to` 输出的是产物 | 它输出的是**该相位结束时的完整 IR**，不是 `.vmfb` |
 
 ---
@@ -290,7 +299,7 @@ dump 到 `flow` 相位，数 `flow.executable` 与 `flow.dispatch` 的个数，�
 **验收命令**：
 
 ```bash
-cd ~/iree-lab
+cd ~/iree-check
 iree-compile chain.mlir \
   --iree-hal-target-device=local \
   --iree-hal-local-target-device-backends=llvm-cpu \
@@ -308,7 +317,7 @@ grep -c "arith.mulf" chain.flow.mlir
 
 | 现象 | 你哪里没懂 |
 |------|-----------|
-| 计数是 2 | 两个 op 的 shape / iterator_types / indexing_maps 没写成可融合的形态；回看指南 [2.2 转折点 1](../iree-learning-guide.md#22-三个最需要理解的转折点)——融合只看这两组元信息 |
+| 计数是 2 | 两个 op 的 shape / iterator_types / indexing_maps 没写成可融合的形态；回看指南 [2.2 转折点 1](../learning-guides/iree-learning-guide.md#22-三个最需要理解的转折点)——融合只看这两组元信息 |
 | `flow.executable` 数与 `flow.dispatch` 数不相等 | 正常：同一个 executable 可以被派发多次。想清楚「编译单元」与「调用点」的区别 |
 | 只数数字、没打开 executable 看 payload | 计数是代理指标，真正的判据是「两个算子在同一个 kernel 体内」 |
 
@@ -399,7 +408,7 @@ func.func @chain_reduce(%arg0: tensor<64xf32>) -> tensor<64xf32> {
 **验收命令**：
 
 ```bash
-cd ~/iree-lab
+cd ~/iree-check
 for m in chain chain_reshape chain_transpose chain_reduce; do
   iree-compile $m.mlir \
     --iree-hal-target-device=local \
@@ -448,12 +457,12 @@ grep -n "collapse_shape" chain_reshape.flow.mlir
 
 - dispatch 数量会变吗？动态 shape 影响的是「怎么分组」还是「每组算多大」？
 - `flow.dispatch` 的调用点会多出什么操作数？`!flow.dispatch.tensor<readonly:tensor<?xf32>>` 后面那个 `{%dim}` 是给谁用的？
-- kernel 侧原来 `memref<64xf32>` 的 `64` 是编译期常量。改成动态后，这个长度从哪里来——运行时读 `buffer_view` 的 dim，还是 host 侧作为 constant 推给 kernel？（指南 [4.7.4](../iree-learning-guide.md#474-pipeline-layouthost-与-device-的-abi-契约)）
+- kernel 侧原来 `memref<64xf32>` 的 `64` 是编译期常量。改成动态后，这个长度从哪里来——运行时读 `buffer_view` 的 dim，还是 host 侧作为 constant 推给 kernel？（指南 [4.7.4](../learning-guides/iree-learning-guide.md#474-pipeline-layouthost-与-device-的-abi-契约)）
 
 **验收命令**：
 
 ```bash
-cd ~/iree-lab
+cd ~/iree-check
 iree-compile chain_dyn.mlir \
   --iree-hal-target-device=local \
   --iree-hal-local-target-device-backends=llvm-cpu \
@@ -538,7 +547,7 @@ iree-compile chain.mlir \
 **验收命令**：
 
 ```bash
-cd ~/iree-lab
+cd ~/iree-check
 # ① pass 确实改了 IR
 grep -c "linalg.generic" chain.mlir chain_fused.mlir
 
@@ -589,7 +598,7 @@ printf "%-14s executables=%s\n" "chain_pp" "$(grep -c 'flow.executable ' chain_p
 | 挑不到会怎样 | 加载失败 | executable 加载失败 |
 | 代价 | 产物膨胀（架构数 × 体积） | 产物膨胀（variant 数 × 体积） |
 
-详见 [`./07-cuda-fatbin.md`](./07-cuda-fatbin.md) 与指南 [4.7](../iree-learning-guide.md#47-设备代码executable--variant--export)、[4.7.2](../iree-learning-guide.md#472-variant-是怎么选中的)。
+详见 [`./07-cuda-fatbin.md`](./07-cuda-fatbin.md) 与指南 [4.7](../learning-guides/iree-learning-guide.md#47-设备代码executable--variant--export)、[4.7.2](../learning-guides/iree-learning-guide.md#472-variant-是怎么选中的)。
 
 **先预测再动手**：
 
@@ -600,7 +609,7 @@ printf "%-14s executables=%s\n" "chain_pp" "$(grep -c 'flow.executable ' chain_p
 **验收命令**：
 
 ```bash
-cd ~/iree-lab
+cd ~/iree-check
 # 单后端
 iree-compile chain.mlir --iree-hal-target-device=local \
   --iree-hal-local-target-device-backends=llvm-cpu \
@@ -662,7 +671,7 @@ iree-run-module --device=local-sync --module=chain.duo.vmfb --function=chain \
 **验收命令**：
 
 ```bash
-cd ~/iree-lab
+cd ~/iree-check
 iree-compile chain.mlir --iree-hal-target-device=local \
   --iree-hal-local-target-device-backends=llvm-cpu -o chain.vmfb
 
@@ -714,7 +723,7 @@ grep -n "assert" chain.abi.mlir chain.hal.mlir 2>/dev/null
 **验收命令（有卡）**：
 
 ```bash
-cd ~/iree-lab
+cd ~/iree-check
 iree-run-module --list_devices          # 先确认 cuda 这个 driver 真的在
 iree-compile chain.mlir --iree-hal-target-device=cuda --iree-cuda-target=sm_80 \
   --compile-to=hal -o chain.cuda.hal.mlir
@@ -736,7 +745,7 @@ iree-benchmark-module --device=cuda --module=chain.cuda.vmfb --function=chain --
 **降级方案（无卡，仍可完成本条的编译期部分）**：CUDA target 的**编译**不需要真卡，把上面命令里所有 `iree-run-module` / `iree-benchmark-module` 步骤去掉，只保留 `iree-compile` 与两份 hal dump 的对比。
 
 - **降级下的通过标准**：`chain.cuda.vmfb` 生成成功；`#hal.executable.target<"cuda">` 存在；CPU 与 GPU 两份 hal dump 的差异清单写出来（至少三处）；`flow` 计数相同。
-- **降级下拿不到的结论（必须在记录里写明）**：① 生成的 PTX 能否被真实 driver 加载；② GPU 上的数值是否真的与 CPU 一致；③ 任何性能与占用率结论；④ runtime 侧 CUDA HAL 的 semaphore / pending action 行为（指南 [4.6.2](../iree-learning-guide.md#462-为什么这个抽象是难的cuda-上的落地)）——这一条只能在真卡上观察。
+- **降级下拿不到的结论（必须在记录里写明）**：① 生成的 PTX 能否被真实 driver 加载；② GPU 上的数值是否真的与 CPU 一致；③ 任何性能与占用率结论；④ runtime 侧 CUDA HAL 的 semaphore / pending action 行为（指南 [4.6.2](../learning-guides/iree-learning-guide.md#462-为什么这个抽象是难的cuda-上的落地)）——这一条只能在真卡上观察。
 
 **常见失败 → 说明你哪里没懂**：
 
@@ -760,7 +769,7 @@ iree-benchmark-module --device=cuda --module=chain.cuda.vmfb --function=chain --
 
 加分项（都以 `--help` 为准，不确定就跳过，不影响通过）：
 
-- `--iree-stream-partitioning-favor=min-peak-memory` 与默认的 `max-concurrency` 各编一份，`diff` 两份 stream IR，看并发结构与 `stream.resource.alloca` 的位置有没有变化（指南 [3.4](../iree-learning-guide.md#34-stream-ordered-allocation峰值内存的关键)）。
+- `--iree-stream-partitioning-favor=min-peak-memory` 与默认的 `max-concurrency` 各编一份，`diff` 两份 stream IR，看并发结构与 `stream.resource.alloca` 的位置有没有变化（指南 [3.4](../learning-guides/iree-learning-guide.md#34-stream-ordered-allocation峰值内存的关键)）。
 - 若本地支持 `--iree-execution-model=async-external` 一类的 flag，对比函数签名：同步 ABI 与异步 ABI 的入口参数差在哪（异步版把 fence 直接暴露给调用方）。
 
 **先预测再动手**：
@@ -772,7 +781,7 @@ iree-benchmark-module --device=cuda --module=chain.cuda.vmfb --function=chain --
 **验收命令**：
 
 ```bash
-cd ~/iree-lab
+cd ~/iree-check
 for p in stream hal vm; do
   iree-compile chain_reduce.mlir --iree-hal-target-device=local \
     --iree-hal-local-target-device-backends=llvm-cpu \
@@ -797,9 +806,9 @@ diff chain_reduce.stream.mlir chain_reduce.minmem.stream.mlir | head -40
 
 | 现象 | 你哪里没懂 |
 |------|-----------|
-| 认为两个 dispatch 之间一定要各自 signal 一个 fence | 同一个 command buffer 内部用 barrier 就够；fence 是**提交批次之间**的定序原语。混淆这两级 = 没读懂 [4.4](../iree-learning-guide.md#44-工作表达command_buffer)/[4.5](../iree-learning-guide.md#45-工作提交device-queue-api) |
+| 认为两个 dispatch 之间一定要各自 signal 一个 fence | 同一个 command buffer 内部用 barrier 就够；fence 是**提交批次之间**的定序原语。混淆这两级 = 没读懂 [4.4](../learning-guides/iree-learning-guide.md#44-工作表达command_buffer)/[4.5](../learning-guides/iree-learning-guide.md#45-工作提交device-queue-api) |
 | 找不到 `hal.fence.await` | 可能你的程序用的是同步 ABI 且 await 被内联/改名。往下 dump 到 vm 相位再找 `vm.call @hal.fence.await` |
-| 把 semaphore 当二值信号量 | 它是 64 位单调时间线，同一个值可被多次等待、wait 可以先于 signal 提交。这是 HAL 最硬的知识点（[4.6](../iree-learning-guide.md#46-同步timeline-semaphore-与-fencehal-的灵魂)） |
+| 把 semaphore 当二值信号量 | 它是 64 位单调时间线，同一个值可被多次等待、wait 可以先于 signal 提交。这是 HAL 最硬的知识点（[4.6](../learning-guides/iree-learning-guide.md#46-同步timeline-semaphore-与-fencehal-的灵魂)） |
 | `diff` 两份分区结果为空就认为 flag 没用 | 小程序对分区策略不敏感很正常。要么换一个含两条独立分支的模型再试，要么在记录里论证为什么这个程序不可能不同 |
 
 ---

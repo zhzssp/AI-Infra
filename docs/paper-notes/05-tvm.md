@@ -1,6 +1,6 @@
 # TVM：面向异构硬件后端的自动化端到端深度学习编译器
 
-> **导航**：[笔记索引](README.md) · [自学枢纽](../README.md)（阶段 4） · [横切概念](../ai-compiler-foundations.md) §3（融合）、§4（调度）
+> **导航**：[笔记索引](README.md) · [自学枢纽](../README.md)（阶段 4） · [横切概念](../learning-guides/ai-compiler-foundations-learning-guide.md) §3（融合）、§4（调度）
 
 > **论文元信息**
 > - 标题：*TVM: An Automated End-to-End Optimizing Compiler for Deep Learning*
@@ -9,7 +9,7 @@
 > - arXiv：<https://arxiv.org/abs/1802.04799>
 > - 开源项目：<https://github.com/apache/tvm>（现为 Apache TVM）
 >
-> **与工程学习文档的分工**：本文是 OSDI 2018 论文笔记（动机 / 历史框架）。今天的 Apache TVM 作为工程系统（流水线、融合细则、schedule 原语前后对比、MetaSchedule、动手清单）见 [`../tvm-learning-guide.md`](../tvm-learning-guide.md)。
+> **与工程学习文档的分工**：本文是 OSDI 2018 论文笔记（动机 / 历史框架）。今天的 Apache TVM 作为工程系统（流水线、融合细则、schedule 原语前后对比、MetaSchedule、动手清单）见 [`../learning-guides/tvm-learning-guide.md`](../learning-guides/tvm-learning-guide.md)。
 
 ## 1. 它解决什么问题
 
@@ -123,7 +123,7 @@ fused_conv2d_bias_relu   读 X, W, b  →  逐点算完 conv、加 bias、做 re
 
 反例：若把 `relu` 换成 `sort`（opaque），链条在那里断开——因为 `sort` 需要看到**整个张量**，无法在「算出一个点就立刻处理一个点」的循环里完成。
 
-> 规则的实质是：**能不能在同一个输出点上把后续计算就地做完**。这与 MLIR/Linalg 用 `indexing_maps` 判融合是同一个问题的两种表述（见 [`../mlir-learning-guide.md`](../mlir-learning-guide.md) §8.2）。
+> 规则的实质是：**能不能在同一个输出点上把后续计算就地做完**。这与 MLIR/Linalg 用 `indexing_maps` 判融合是同一个问题的两种表述（见 [`../learning-guides/mlir-learning-guide.md`](../learning-guides/mlir-learning-guide.md) §8.2）。
 
 > **自测**：`conv2d → conv2d` 为什么一般不能直接融合成一个 kernel？（提示：第二个 conv 的一个输出点需要第一个 conv 的多少个输出点？）
 

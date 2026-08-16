@@ -14,7 +14,7 @@
 2. 只记录用户**认可**的解释（通常是刚问完、用户满意后要求沉淀的那次回答）
 3. 产物固定为两步：
    - 在 `docs/notes/` 写一篇简短笔记（**问答里的说明性示例必须一并写入**，见 skill）
-   - 在对应知识文档（如 `docs/llvm-learning-guide.md`）的适当位置加一条「速记」引用
+   - 在对应知识文档（如 `docs/learning-guides/llvm-learning-guide.md`）的适当位置加一条「速记」引用
 
 未要求写笔记时，不要主动创建 `docs/notes/` 文件。
 
@@ -22,7 +22,7 @@
 
 | | 职责 |
 |--|------|
-| `docs/*-learning-guide.md`、`docs/ai-compiler-foundations.md`、`docs/paper-notes/` | 主知识库：路线、框架、过关标准 |
+| `docs/learning-guides/*-learning-guide.md`、`docs/paper-notes/` | 主知识库：路线、框架、过关标准 |
 | `docs/notes/` | 对话沉淀的短注：某个概念的认可版解释 |
 
 主文档保持可扫读；深挖细节进 `notes/`，再用引用挂回去。

@@ -1,7 +1,7 @@
 # Efficient Training over Distributed Infra：大模型分布式训练系统的全景地图
 
-> **导航**：[笔记索引](README.md) · [自学枢纽](../README.md)（阶段 1） · [横切概念](../ai-compiler-foundations.md) · [总规划 §3.1](../../README.md)  
-> **配套阅读**：本篇讲「分布式要表达什么」；这些要求如何变成编译器里的 IR 属性，见 [`ai-compiler-foundations.md` §9](../ai-compiler-foundations.md#第-9-章-分布式与编译的接缝分片如何变成-ir)；落到设备与集合通信见 [`iree-learning-guide.md`](../iree-learning-guide.md) §4.8。  
+> **导航**：[笔记索引](README.md) · [自学枢纽](../README.md)（阶段 1） · [横切概念](../learning-guides/ai-compiler-foundations-learning-guide.md) · [总规划 §3.1](../../README.md)  
+> **配套阅读**：本篇讲「分布式要表达什么」；这些要求如何变成编译器里的 IR 属性，见 [`ai-compiler-foundations.md` §9](../learning-guides/ai-compiler-foundations-learning-guide.md#第-9-章-分布式与编译的接缝分片如何变成-ir)；落到设备与集合通信见 [`iree-learning-guide.md`](../learning-guides/iree-learning-guide.md) §4.8。  
 > **本篇章号提示**：这是综述体例，§3–§9 对应论文各章；**框架在 §2，最小必要集在 §12**。
 
 > **论文元信息**

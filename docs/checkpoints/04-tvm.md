@@ -1,6 +1,6 @@
 # 检验体系 04｜TVM
 
-> **对应学习文档**：[`../tvm-learning-guide.md`](../tvm-learning-guide.md)  
+> **对应学习文档**：[`../learning-guides/tvm-learning-guide.md`](../learning-guides/tvm-learning-guide.md)  
 > **对应动手项目**：[`tvm-fatbin-lab/`](../../tvm-fatbin-lab/) 的 **TVM 轨**（`scripts/run_tvm.sh`）；CUDA fatbin 轨在 [`./07-cuda-fatbin.md`](./07-cuda-fatbin.md)  
 > **分级与资源标签定义**：[`./README.md`](./README.md)
 

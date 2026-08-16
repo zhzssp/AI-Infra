@@ -1,6 +1,6 @@
 # LLVM IR 中的 Phi
 
-> 来源：[`llvm-learning-guide.md`](../llvm-learning-guide.md) §2.3
+> 来源：[`llvm-learning-guide.md`](../learning-guides/llvm-learning-guide.md) §2.3
 
 ## 是什么
 

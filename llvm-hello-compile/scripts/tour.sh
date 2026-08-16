@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =============================================================================
-# tour.sh —— 核心要点巡礼：一条命令走完 docs/llvm-learning-guide.md 的所有必学点
+# tour.sh —— 核心要点巡礼：一条命令走完 docs/learning-guides/llvm-learning-guide.md 的所有必学点
 # -----------------------------------------------------------------------------
 #   run.sh  回答「一份源码怎么变成可执行文件」（链路）
 #   tour.sh 回答「学习指南 §9.1 那 11 条，分别长什么样」（要点）
@@ -80,6 +80,15 @@ point "每个基本块必须且只能以一条 terminator 结尾（ret/br/switch
 grepshow "${T}/03_mem2reg.ll" '^\s+(br |ret |switch )' 6
 point "汇合点用 phi 表达：[值, 前驱块] 成对出现，且每个前驱恰好一个入口"
 grepshow "${T}/03_mem2reg.ll" ' phi ' 4
+echo
+point "最小样本 clamp0：同一个函数在三份 IR 里三个形态 —— 这是 SSA 最省事的一次观察"
+echo "  ── ① -O0：r 是一块 alloca，两条分支各 store 一次（还不是 SSA）"
+awk '/define.*@clamp0\(/,/^}/' "${T}/00_O0.ll" | grep -E 'alloca |store |br ' | head -6 | show
+echo "  ── ② mem2reg 之后：alloca 归零，汇合块出现 phi —— 进入 SSA 的那一刻"
+awk '/define.*@clamp0\(/,/^}/' "${T}/03_mem2reg.ll" | head -20 | show
+echo "  ── ③ -O2 之后：CFG 被 if-conversion 抹平，phi 变成 select（§2.7 毒性屏障的主角）"
+awk '/define.*@clamp0\(/,/^}/' "${T}/01_O2.ll" | show
+look "三份并排看：alloca→phi 是「进入 SSA」，phi→select 是「消除分支」，两件事别混"
 
 # =============================================================================
 stop 3 "§2.5 getelementptr：只算地址不访存；第一个索引是「跳几个整对象」"
@@ -287,7 +296,7 @@ cat <<'MD'
 |----|---------|------|------|
 | 0 | §2.1 | IR 三态（.ll / .bc 等价互转） | `00_O0.ll` `00_O0.bc` `00_roundtrip.ll` |
 | 1 | §2.2 | 类型系统：iN / float / opaque ptr / 向量 / 结构体 | `01_O2.ll` |
-| 2 | §2.3 | SSA、基本块、terminator、phi | `03_mem2reg.ll` |
+| 2 | §2.3 | SSA、基本块、terminator、phi（最小样本 `clamp0` 的三份形态） | `00_O0.ll` `03_mem2reg.ll` `01_O2.ll` |
 | 3 | §2.5 | getelementptr 与 inbounds 承诺 | `00_O0.ll` |
 | 4 | §2.6 | noalias/align/dereferenceable、contract → FMA | `04_contract_off.ll` `05_contract_fast.ll` |
 | 5 | §2.7 | poison / undef / freeze / select 屏障 | `06_poison_O2.ll` |
@@ -305,7 +314,8 @@ cat <<'MD'
 
 ## 建议的精读顺序
 
-1. `00_O0.ll` → `03_mem2reg.ll`：看 alloca/load/store 如何变成 phi（SSA 的门票）。
+1. `@clamp0` 在 `00_O0.ll` → `03_mem2reg.ll` → `01_O2.ll` 三份里的形态：
+   alloca/store → phi → select。前一跳是「进入 SSA」，后一跳是「消除分支」。
 2. `04_contract_off.ll` vs `05_contract_fast.ll`：一次舍入的 FMA 是怎么被"许可"出来的。
 3. `06_poison_O2.ll`：`and poison, 0` 仍是 poison；select 不传染。
 4. `01_O2.ll` 里的 `@axpy` vs `@axpy_may_alias`：restrict 带来的 noalias 值多少钱。

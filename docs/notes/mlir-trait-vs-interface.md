@@ -1,6 +1,6 @@
 # Trait vs Interface：能力边界、候选与正确性
 
-> 来源：[`mlir-learning-guide.md`](../mlir-learning-guide.md) §3.4 · 第 4 章  
+> 来源：[`mlir-learning-guide.md`](../learning-guides/mlir-learning-guide.md) §3.4 · 第 4 章  
 > 相关：[mlir-type-attr-interface.md](./mlir-type-attr-interface.md)
 
 ## 内置与自定义

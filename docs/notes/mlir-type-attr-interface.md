@@ -1,6 +1,6 @@
 # Type、Attribute、Interface
 
-> 来源：[`mlir-learning-guide.md`](../mlir-learning-guide.md) §2.2 · 第 4 章
+> 来源：[`mlir-learning-guide.md`](../learning-guides/mlir-learning-guide.md) §2.2 · 第 4 章
 
 同一行里三个概念：
 

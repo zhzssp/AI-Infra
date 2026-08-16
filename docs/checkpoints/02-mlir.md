@@ -1,6 +1,6 @@
 # 检验体系 02｜MLIR
 
-> **对应学习文档**：[`../mlir-learning-guide.md`](../mlir-learning-guide.md)、[`../paper-notes/03-mlir.md`](../paper-notes/03-mlir.md)、[`../notes/llvm-mlir-pass-ir-unit.md`](../notes/llvm-mlir-pass-ir-unit.md)  
+> **对应学习文档**：[`../learning-guides/mlir-learning-guide.md`](../learning-guides/mlir-learning-guide.md)、[`../paper-notes/03-mlir.md`](../paper-notes/03-mlir.md)、[`../notes/llvm-mlir-pass-ir-unit.md`](../notes/llvm-mlir-pass-ir-unit.md)  
 > **对应动手项目**：[`mlir-toy-dialect/`](../../mlir-toy-dialect/)  
 > **分级与资源标签定义**：[`./README.md`](./README.md)
 

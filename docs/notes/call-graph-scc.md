@@ -1,6 +1,6 @@
 # 调用图与强连通分量
 
-> 来源：[`llvm-learning-guide.md`](../llvm-learning-guide.md) §3.2
+> 来源：[`llvm-learning-guide.md`](../learning-guides/llvm-learning-guide.md) §3.2
 
 ## 是什么
 

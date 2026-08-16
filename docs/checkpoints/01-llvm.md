@@ -1,6 +1,6 @@
 # 检验体系 01｜LLVM
 
-> **对应学习文档**：[`../llvm-learning-guide.md`](../llvm-learning-guide.md)、[`../notes/llvm-mlir-pass-ir-unit.md`](../notes/llvm-mlir-pass-ir-unit.md)  
+> **对应学习文档**：[`../learning-guides/llvm-learning-guide.md`](../learning-guides/llvm-learning-guide.md)、[`../notes/llvm-mlir-pass-ir-unit.md`](../notes/llvm-mlir-pass-ir-unit.md)  
 > **对应动手项目**：[`llvm-hello-compile/`](../../llvm-hello-compile/)  
 > **分级与资源标签定义**：[`./README.md`](./README.md)
 

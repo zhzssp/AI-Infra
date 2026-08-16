@@ -1,6 +1,6 @@
 # Conversion：LLVM 指令类 vs MLIR Dialect Conversion
 
-> 来源：[`llvm-learning-guide.md`](../llvm-learning-guide.md) §2.4 · [`mlir-learning-guide.md`](../mlir-learning-guide.md) 第 6 章
+> 来源：[`llvm-learning-guide.md`](../learning-guides/llvm-learning-guide.md) §2.4 · [`mlir-learning-guide.md`](../learning-guides/mlir-learning-guide.md) 第 6 章
 
 英文都叫 Conversion，层级完全不同。
 

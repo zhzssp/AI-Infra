@@ -2,20 +2,50 @@
 
 > **本文档的定位**
 > - 基于 **Apache TVM 官方文档**（https://tvm.apache.org/docs/）与社区策略讨论整理，讲的是**今天的 Apache TVM 作为工程系统长什么样**。
-> - 与 [`paper-notes/05-tvm.md`](./paper-notes/05-tvm.md) 分工明确：那篇是 **OSDI 2018 论文**笔记，讲"当年为什么要这样设计"（N×M 组合爆炸、图级/算子级联合优化、AutoTVM 动机）。本文讲**结构与机制**，把仍在用的论文概念落到可动手的 API 与流水线上。
-> - 算法/调度分离的思想源头见 [`paper-notes/04-halide.md`](./paper-notes/04-halide.md)；与 IREE/MLIR 路线对照见 [`iree-learning-guide.md`](./iree-learning-guide.md) 与本文第 7 章。
+> - 与 [`paper-notes/05-tvm.md`](../paper-notes/05-tvm.md) 分工明确：那篇是 **OSDI 2018 论文**笔记，讲"当年为什么要这样设计"（N×M 组合爆炸、图级/算子级联合优化、AutoTVM 动机）。本文讲**结构与机制**，把仍在用的论文概念落到可动手的 API 与流水线上。
+> - 算法/调度分离的思想源头见 [`paper-notes/04-halide.md`](../paper-notes/04-halide.md)；与 IREE/MLIR 路线对照见 [`iree-learning-guide.md`](./iree-learning-guide.md) 与本文第 7 章。
 > - 服务目标：根 README §4.1 的必学点——融合规则、layout 传播、TE+schedule、tensorize、调优闭环、PackedFunc——以及研究问题①（子图划分）、②（跨后端 layout）、⑥（配置组合爆炸）。
-> - **先修**：[`ai-compiler-foundations.md`](./ai-compiler-foundations.md) §3（图与融合）、§4（算法/调度、tiling、Roofline）、§5.2（layout）。
-> - **动手项目**：[`../tvm-fatbin-lab/`](../tvm-fatbin-lab/) —— `bash scripts/run.sh`，先读 `out/ANALYSIS.md`。
-> - **正交对照（多后端划分）**：[`../onnx-delegate-lab/`](../onnx-delegate-lab/) —— 融合≈单后端划分；EP/Partitioner≈多后端划分。
+> - **先修**：[`ai-compiler-foundations.md`](./ai-compiler-foundations-learning-guide.md) §3（图与融合）、§4（算法/调度、tiling、Roofline）、§5.2（layout）。
+> - **动手项目**：[`../../tvm-fatbin-lab/`](../../tvm-fatbin-lab/) —— `bash scripts/run.sh`，先读 `out/ANALYSIS.md`。
+> - **正交对照（多后端划分）**：[`../../onnx-delegate-lab/`](../../onnx-delegate-lab/) —— 融合≈单后端划分；EP/Partitioner≈多后端划分。
 >
 > **主要信息源**
 > - 官方文档：https://tvm.apache.org/docs/（TE / TIR / AutoTVM / AutoScheduler / MetaSchedule / Runtime）
-> - OSDI'18 论文仍在用的概念：四类融合、layout 传播、TE+schedule、tensorize、PackedFunc（见 [`05-tvm.md`](./paper-notes/05-tvm.md)）
+> - OSDI'18 论文仍在用的概念：四类融合、layout 传播、TE+schedule、tensorize、PackedFunc（见 [`05-tvm.md`](../paper-notes/05-tvm.md)）
 > - MetaSchedule RFC / 社区策略（discuss.tvm.apache.org）：**TE-compute 保留；TE-schedule 对新技术工作弃用，改走 TensorIR + MetaSchedule；调优统一进 MetaSchedule**
 > - 学习优先级说明：经典 TE+schedule 原语仍是**必学心智模型**；动手时用它们对照 `tvm.lower`，新项目再切 TensorIR/MetaSchedule
 >
 > **一句话读法**：如果只有两小时，读[第 1 章总图](#第-1-章-一张总图今天的-tvm-流水线)、[第 2.2 四类融合](#22-算子融合四类规则重点)、[第 3 章每个 schedule 原语的前后对比](#第-3-章-te--schedule-原语每个都看懂循环变化)、[第 5 章调优闭环](#第-5-章-autotvm--ansor--metaschedule搜索闭环)、[附录速查](#附录一页速查)。
+
+---
+
+### 本篇在链路中的位置
+
+> 全局链路见 [`00-end-to-end-pipeline.md`](./00-end-to-end-pipeline.md)。本篇覆盖**第 ③ 站（融合）与第 ④ 站（调度）**，是链路中间最关键的两站——上面决定"算几次"，下面决定"算得多快"。
+
+```text
+① 表示 ──▶ ② 划分 ──▶ 【③ 融合 ← 本篇 2.2】──▶ 【④ 调度 ← 本篇 3–5】──▶ ⑤ 降低 ──▶ ⑥ 指令 ──▶ ⑦ 打包
+                        中间张量落不落 DRAM        循环序/tile/向量宽度
+```
+
+| | |
+|--|--|
+| **上游交给我** | 一张已经定好边界的子图（哪些 op 归我算） |
+| **我固化** | ③ 哪几个 op 合成一个 kernel（中间张量落不落 DRAM）<br>④ 这一个 kernel 内部的循环序、tile、并行度、向量宽度 |
+| **我交给下游** | 一个具体的循环嵌套，交给 LLVM/NVCC 变机器码 |
+| **本篇的主角** | [`../../tvm-fatbin-lab/tvm_lab/02_fusion_relay.py`](../../tvm-fatbin-lab/tvm_lab/02_fusion_relay.py) 里的 `tiny_mlp`（图级）<br>[`../../tvm-fatbin-lab/tvm_lab/01_te_matmul_schedules.py`](../../tvm-fatbin-lab/tvm_lab/01_te_matmul_schedules.py) 的 matmul（算子级） |
+
+**站 ③ 与站 ④ 的依赖是单向的**：融合决定了 schedule 能覆盖多大范围。没融合时 Relu 是独立 kernel，
+你**根本没有"把 Relu 塞进 Gemm 输出循环"这个选项**——所以第 2.2 节必须在第 3 章之前读。
+
+| 章节 | 示例来自 | 怎么跑 |
+|------|---------|--------|
+| 2.2 融合 | `tvm_lab/02_fusion_relay.py` | `bash scripts/run_tvm.sh` → `out/tvm/02_relay_*fuse*.txt` |
+| 2.3 layout | `tvm_lab/03_layout_transform.py` | 同上 → `out/tvm/03_*` |
+| 第 3 章 schedule | `tvm_lab/01_te_matmul_schedules.py` | 同上 → `out/tvm/01_matmul_*.lower.txt` |
+| 第 4 章 tensorize | `tvm_lab/04_tensorize_demo.py` | 同上 → `out/tvm/04_*` |
+| 第 5 章 调优 | `tvm_lab/05_autotvm_tune.py` | 同上 → `out/tvm/05_*` |
+| 第 6 章 runtime | `tvm_lab/06_packedfunc_run.py` | 同上 → `out/tvm/06_*` |
 
 ---
 
@@ -139,7 +169,7 @@ IREE（见 iree-learning-guide.md）
 | 适用 | CNN、固定输入尺寸推理 | LLM、变长 seq/batch |
 | 你要掌握的深度 | 会 import → `relay.build` → 跑通 | **知道它解决动态 shape 即可（先跳过深挖）** |
 
-论文时代的图 IR 是 NNVM；随后社区用 **Relay** 替换并增强；再往后 **Relax** 把"每个具体 shape 特化一份"的假设拆掉。对 AI-Infra 而言：研究问题③（动态 shape）在 TVM 侧的答案就是这条演进线——细节见 [`05-tvm.md`](./paper-notes/05-tvm.md) §6。
+论文时代的图 IR 是 NNVM；随后社区用 **Relay** 替换并增强；再往后 **Relax** 把"每个具体 shape 特化一份"的假设拆掉。对 AI-Infra 而言：研究问题③（动态 shape）在 TVM 侧的答案就是这条演进线——细节见 [`05-tvm.md`](../paper-notes/05-tvm.md) §6。
 
 ```
 ONNX / PyTorch  ──frontend──►  Relay IRModule          ──relay.build──►  GraphModule
@@ -150,6 +180,11 @@ ONNX / …       ──frontend──►  Relax IRModule           ──relax.b
 ```
 
 #### 示例精讲：同一个模型的静态 shape 与符号 shape
+
+**无 lab 对应（Relax 需要另一套 TVM 版本）**——但「静态 vs 动态 batch」这件事
+在 [`iree-lab`](../../iree-lab/) 里是可跑的：`models/tiny_mlp.mlir` 与 `models/tiny_mlp_dynamic.mlir`
+就是同一张图的两个 shape 版本，`bash scripts/run_variants.sh` 会把两者的编译产物并排 diff。
+下面换成 conv 骨架，是因为 batch 维的影响在带空间维的模型上对比度更高。
 
 最小具体输入：一个「conv2d → relu → global_avg_pool → dense」的分类骨架，输入是一张或多张 224×224 RGB 图。唯一变量是 **batch 维**。
 
@@ -202,6 +237,13 @@ def main(x: R.Tensor(("n", 3, 224, 224), "float32"),
 | batch 从 1 变 8 | 重新编译，或预编译多份产物 | 同一份产物直接跑 |
 | 执行器 | `graph_executor` 按拓扑序调用即可 | 需要 VM：**shape 计算本身也是要执行的指令** |
 | 影响的图级优化 | 常量折叠、静态内存规划全部可用 | 静态内存规划被削弱（§2.4 末尾那句的具体所指） |
+
+> **无 lab 对应**：Relax 的符号 shape 需要较新的 TVM 且 API 仍在变，写进"一键跑完"的脚本里
+> 会经常挂掉。但**静态 vs 动态 shape 的代价差别可以在别处亲手量**：
+> [`iree-lab/scripts/run_variants.sh`](../../iree-lab/scripts/run_variants.sh) 实验 A 用
+> `tiny_mlp.mlir` 与 `tiny_mlp_dynamic.mlir`（只差 batch 维写不写 `?`）编出两份 IR，
+> 数动态版本多出来多少条运行期尺寸计算指令。**结论是通用的**，不限于 IREE：
+> 上表"内存规划被削弱"那一行，在那份 diff 里是看得见的具体行数。
 
 > **自测**：把上面 B 里的 `lv2` 换成 `R.reshape(lv1, (n * 64,))`，运行时要用到哪个符号变量的值，为什么这件事 graph executor 做不了？
 
@@ -269,52 +311,72 @@ def main(x: R.Tensor(("n", 3, 224, 224), "float32"),
          （累加寄存器/共享内存里做完 bias、relu 再写 Y）
 ```
 
-论文实测融合单独贡献约 **1.2×–2×**（见 [`05-tvm.md`](./paper-notes/05-tvm.md)）；在带宽受限的 GPU/加速器上，省掉的是中间张量的全局内存往返。
+论文实测融合单独贡献约 **1.2×–2×**（见 [`05-tvm.md`](../paper-notes/05-tvm.md)）；在带宽受限的 GPU/加速器上，省掉的是中间张量的全局内存往返。
 
-#### 示例精讲：`conv2d → bias_add → relu` 的融合前后
+#### 示例精讲：主角模型 `Gemm → Relu → Add` 的融合前后
 
-最小具体输入：单张 56×56、64 通道特征图，3×3 卷积保持尺寸。
+**可跑** · 源码 [`tvm-fatbin-lab/tvm_lab/02_fusion_relay.py`](../../tvm-fatbin-lab/tvm_lab/02_fusion_relay.py) · 产物 `out/tvm/02_relay_{before,after}_fuse.ir.txt`
 
-- `%x`：`(1, 64, 56, 56)` float32
-- `%w`：`(64, 64, 3, 3)` float32
-- `%b`：`(64,)` float32
-- 输出与中间张量同形：`(1, 64, 56, 56)` = 200704 元素 = **784 KiB**（下面所有数字都以这个「一张中间张量 = 784 KiB」为单位）
-
-**融合前的 Relay 文本 IR**（`FuseOps` 之前，三个独立算子调用）：
-
-```text
-#[version = "0.0.5"]
-def @main(%x: Tensor[(1, 64, 56, 56), float32],
-          %w: Tensor[(64, 64, 3, 3), float32],
-          %b: Tensor[(64), float32]) -> Tensor[(1, 64, 56, 56), float32] {
-  %0 = nn.conv2d(%x, %w, padding=[1, 1, 1, 1], channels=64, kernel_size=[3, 3]);
-                              /* T1: Tensor[(1, 64, 56, 56), float32]，要落 DRAM */
-  %1 = nn.bias_add(%0, %b);   /* T2: Tensor[(1, 64, 56, 56), float32]，要落 DRAM */
-  nn.relu(%1)                 /* Y */
-}
+```bash
+cd tvm-fatbin-lab && pip install -r requirements.txt && bash scripts/run_tvm.sh
+diff out/tvm/02_relay_before_fuse.ir.txt out/tvm/02_relay_after_fuse.ir.txt
 ```
 
-**融合后**：`FuseOps` 把三个节点包进一个带 `Primitive=1` 标记的内联函数，这一整个函数才是后面 codegen 的**一个 kernel**（打印细节示意）：
+lab 里建的是全仓库统一的主角模型（同一个模型在 ONNX、linalg、IREE 里的样子见
+[链路总图](./00-end-to-end-pipeline.md)）：
+
+```python
+x = relay.var("x", shape=(2, 3), dtype="float32")
+y = relay.nn.dense(x, w)      # complex-out-fusable —— 循环骨架由它决定
+y = relay.add(y, b)           # injective —— 这就是 Gemm 的 C
+y = relay.nn.relu(y)          # injective
+y = relay.add(y, bias2)       # injective
+y = relay.annotation.stop_fusion(y)   # ← 人为的 opaque 屏障，用来看切开点
+y = relay.nn.relu(y)                  # ← 屏障之后，另起一组
+```
+
+> `nn.dense` 的权重是 `[units, in_dim] = [4, 3]`，即**转置过的**。
+> ONNX 里这件事叫 `Gemm(transB=1)`，linalg 里叫 `#mapW = (m,n,k)->(n,k)`。
+> **三套系统选了同一个布局**，因为它让每个输出通道的权重在内存里连续。
+
+**融合前**：四个独立算子调用，每条边上的张量都是图上的一等公民，都得落 DRAM。
+
+**融合后**：`FuseOps` 把前四个节点包进一个带 `Primitive=1` 的内联函数，这**一整个函数**才是后面 codegen 的一个 kernel：
 
 ```text
-def @main(%x: Tensor[(1, 64, 56, 56), float32], %w, %b) {
-  %2 = fn (%p0, %p1, %p2, Primitive=1) -> Tensor[(1, 64, 56, 56), float32] {
-         %0 = nn.conv2d(%p0, %p1, padding=[1, 1, 1, 1], channels=64, kernel_size=[3, 3]);
-         %1 = nn.bias_add(%0, %p2);
-         nn.relu(%1)          /* T1/T2 只存在于这个函数内部，不再是图上的张量 */
+def @main(%x: Tensor[(2, 3), float32]) {
+  %4 = fn (%p0, Primitive=1) -> Tensor[(2, 4), float32] {
+         %0 = nn.dense(%p0, meta[relay.Constant][0]);
+         %1 = add(%0, meta[relay.Constant][1]);
+         %2 = nn.relu(%1);
+         add(%2, meta[relay.Constant][2])   /* 三张中间张量只活在函数内部 */
        };
-  %2(%x, %w, %b)              /* 一次 kernel 调用 */
+  %5 = %4(%x);
+  %6 = annotation.stop_fusion(%5);          /* 屏障：下面另起一组 */
+  fn (%p1, Primitive=1) { nn.relu(%p1) }(%6)
 }
 ```
 
-**数一下访存次数**（只数中间/输出张量；`%x`/`%w`/`%b` 两边都要读，可约掉）：
+脚本会直接把组数打出来（`fn (` 的出现次数），不用自己数。
 
-| | kernel 数 | 中间张量落地 | 全局访存（× 784 KiB） | 合计 |
+**融合省了多少**——主角模型只有 `2×4` 太小，看不出量级，所以把**同一个模型**放大到真实尺寸再算：
+batch = 1024、hidden = 4096，则每张中间张量 = 1024×4096×4B = **16 MiB**。
+
+| | kernel 数 | 中间张量落地 | 全局访存（× 16 MiB） | 合计 |
 |--|----------|-------------|---------------------|------|
-| 融合前 | 3 | T1、T2 各一次 | 写 T1 + 读 T1 + 写 T2 + 读 T2 + 写 Y = 5 | ≈ 3.83 MiB |
-| 融合后 | 1 | 无（累加器/寄存器里就地做完 bias、relu） | 写 Y = 1 | ≈ 784 KiB |
+| 融合前 | 4 | T1、T2、T3 各一次 | 写读 T1 + 写读 T2 + 写读 T3 + 写 Y = 7 | ≈ 112 MiB |
+| 融合后 | 1 | 无（累加器/寄存器里就地做完 bias、relu、add） | 写 Y = 1 | ≈ 16 MiB |
 
-省掉的正是 **4 次 784 KiB 往返 ≈ 3.06 MiB**（等于输出张量体积的 4 倍），外加 2 次 kernel launch。卷积本身的算力没变——所以这类融合在**带宽受限**时收益最明显，在完全算力受限的大卷积上收益就小。
+省掉的是 **6 次 16 MiB 往返 ≈ 96 MiB**，外加 3 次 kernel launch。
+**矩阵乘本身的算力一点没变**——所以这类融合在**带宽受限**时收益最明显，
+在完全算力受限的大 Gemm 上收益就小。这条判断的依据是 Roofline，见
+[foundations §4.3](./ai-compiler-foundations-learning-guide.md)。
+
+> **同一个决定，别人怎么做的**：IREE 不看算子类别，只看 `linalg` 的
+> `iterator_types` 与 `indexing_maps`——Relu/Add 两维全 `parallel` 且是恒等映射，
+> 于是可以并进 Gemm 的输出循环。代价是要先把模型降到 linalg；好处是**遇到新算子不用改融合规则**。
+> 亲手对比：`iree-lab` 里 `grep -c '= flow.dispatch ' out/phases/tiny_mlp.flow.mlir`，
+> 数出来的就是 IREE 版本的"融合组数"。
 
 **对照表：算子类别 → 能否作为融合起点 / 能否被吸收**
 
@@ -327,7 +389,8 @@ def @main(%x: Tensor[(1, 64, 56, 56), float32], %w, %b) {
 | **complex-out-fusable** | 可，最典型的主节点：循环骨架由 conv/dense 决定 | 不被吸收（不会退化成别人的附属） | 组的核心 |
 | **opaque** | 只能自成单节点组 | 不可 | 组边界本身 |
 
-> **自测**：如果把上例改成 `conv2d → relu → conv2d`，`FuseOps` 会切出几个 group，中间张量落地几次？
+> **自测**：如果把 lab 里的模型改成 `dense → relu → dense`（两个 complex-out-fusable 中间夹一个 injective），
+> `FuseOps` 会切出几个 group，中间张量落地几次？改 `02_fusion_relay.py` 跑一遍验证你的答案。
 
 #### 2.2.4 为什么这是"子图划分"的经典解
 
@@ -370,7 +433,18 @@ def @main(%x: Tensor[(1, 64, 56, 56), float32], %w, %b) {
 
 #### 示例精讲：两节点图 `conv2d → relu` 的 transform 插入与外推
 
-最小具体输入：模型从 TensorFlow 侧导入，全图是 `NHWC`；目标是 CPU，`nn.conv2d` 的高效实现偏好 `NCHW`（再往下常是 `NCHWc`）。图只有两个节点。
+**可跑** · 源码 [`tvm-fatbin-lab/tvm_lab/03_layout_transform.py`](../../tvm-fatbin-lab/tvm_lab/03_layout_transform.py) B 部分 · 产物 `out/tvm/03b_convertlayout_{before,after}.ir.txt`
+
+```bash
+cd tvm-fatbin-lab && bash scripts/run_tvm.sh
+diff out/tvm/03b_convertlayout_before.ir.txt out/tvm/03b_convertlayout_after.ir.txt
+grep -c layout_transform out/tvm/03b_convertlayout_after.ir.txt
+```
+
+lab 用的是 `(1,8,8,4)` 的小图（跑得快、IR 短）；下面按 `(1,56,56,64)` 讲，
+**结构完全一样**，只是数字够大才好算搬运代价。
+
+场景：模型从 TensorFlow 侧导入，全图是 `NHWC`；目标是 CPU，`nn.conv2d` 的高效实现偏好 `NCHW`（再往下常是 `NCHWc`）。图只有两个节点。
 
 **阶段 0：原样导入，全图 NHWC**
 
@@ -415,11 +489,17 @@ def @main(%x: Tensor[(1, 56, 56, 64), float32]) {
 ```
 
 ```python
-# Relay 侧入口（示意）
-mod = relay.transform.ConvertLayout({"nn.conv2d": ["NCHW", "default"]})(mod)
+# lab 里实际跑的就是这两个 pass 的组合
+seq = tvm.transform.Sequential([
+    relay.transform.ConvertLayout({"nn.conv2d": ["NCHW", "default"]}),
+    relay.transform.FoldConstant(),   # 权重侧的 transform 输入全是常量，应被吃掉
+])
+mod_after = seq(mod)
 ```
 
 > API 形态随版本变化（Relax 侧是另一套 layout/布局重写 pass，算子名与参数键都不同），跑之前用本地 tvm 版本核对。
+> lab 会直接把 `layout_transform` 的节点数打出来，**不用自己数**——
+> 数出来是 2（都在边界）还是 3（conv 两侧 + 权重），就是阶段 2 与阶段 1 的分界。
 
 **对照表**
 
@@ -438,6 +518,8 @@ mod = relay.transform.ConvertLayout({"nn.conv2d": ["NCHW", "default"]})(mod)
 | layout-fixed（带轴参数） | `concatenate(axis=1)`、`softmax(axis=-1)`、`squeeze(axis=[2,3])` | 能跟，但**必须同步改写 axis**；改不动就在此处停下、插 transform |
 
 > **自测**：若把 relu 换成 `concatenate(axis=3)`（NHWC 下的通道拼接），阶段 2 里那 2 个 transform 还能都留在边界吗？要改什么才行？
+> 直接改 `03_layout_transform.py` 的 `part_b`，把 `relay.nn.relu(y)` 换成
+> `relay.concatenate([y, y], axis=3)`，跑一遍看节点数变成几个。
 
 #### 2.3.2 与研究问题②的关系
 
@@ -461,6 +543,10 @@ mod = relay.transform.ConvertLayout({"nn.conv2d": ["NCHW", "default"]})(mod)
 这两项不是本文重点，但要知道它们和图融合、layout 一起，构成"图级四件套"。动态 shape（Relax）会削弱"完全静态规划"的假设——这又是 Relay→Relax 的动机之一。
 
 #### 示例精讲：常量折叠的小图 + 3 节点链的 buffer 复用
+
+**部分可跑** · 第一半（常量折叠）**无 lab 对应**：主角 `tiny_mlp` 的权重是 `relay.const`，
+`FoldConstant` 无事可做，看不出前后差别，所以借 BatchNorm 展开链来放大；
+第二半（内存规划）**可跑**，见本节末尾的 `storage_id` 命令。
 
 **一、常量折叠：判据是「本节点所有输入都是常量」**
 
@@ -507,9 +593,25 @@ S0        [ %t1 写 ][ %t1 读 ]······[ %t3 写 ]     ← 同一块内存�
 S1                  [ %t2 写 ][ %t2 读 ]
 ```
 
-这份结果会直接落到 graph JSON 的 `storage_id` 字段（见 §6.2 的示例精讲）：**storage_id 相同 = 共享同一块内存**，`GraphModule` 初始化时按去重后的 id 申请存储池。
+这份结果会直接落到 graph JSON 的 `storage_id` 字段：**storage_id 相同 = 共享同一块内存**，`GraphModule` 初始化时按去重后的 id 申请存储池。
 
-注意两件事：一是相邻算子不默认 in-place（`%t2` 不能直接盖 `%t1`，除非算子明确支持原地写），所以最少也要两块；二是把 `conv+relu` 融成一个 kernel 后，`%t1` 连图上张量都不是了——**融合和内存规划是叠加收益**。
+**可跑** · 源码 [`tvm-fatbin-lab/tvm_lab/06_packedfunc_run.py`](../../tvm-fatbin-lab/tvm_lab/06_packedfunc_run.py) · 产物 `out/tvm/06_graph.json`、`out/tvm/06_READING.md`
+
+```bash
+cd tvm-fatbin-lab && bash scripts/run_tvm.sh
+python -c "import json;g=json.load(open('out/tvm/06_graph.json'));print(g['attrs']['storage_id'][1])"
+```
+
+脚本会把主角模型的 storage_id 表直接打进 `06_READING.md`，并给出两个数字：
+**张量条目数**与**去重后的 id 数**。两者之差就是内存规划省下的东西。
+
+注意两件事：一是相邻算子不默认 in-place（`%t2` 不能直接盖 `%t1`，除非算子明确支持原地写），所以最少也要两块；二是把 `conv+relu` 融成一个 kernel 后，`%t1` 连图上张量都不是了——**融合和内存规划是叠加收益**。主角模型上尤其明显：`FuseOps` 融完之后，中间张量根本没进 graph JSON，也就轮不到内存规划操心。
+
+> **同一个问题在 IREE 里**：这里的 `storage_id` 复用，对应 IREE stream 相位给资源打的
+> `!stream.resource<transient>` 标签——都是"这块内存用完能不能给别人"。
+> 差别在于 TVM 在 build 时算死并写进 JSON，IREE 把分配/释放本身编成了排在时间线上的队列操作
+> （见 [iree §3.4](./iree-learning-guide.md#34-stream-ordered-allocation峰值内存的关键)），
+> 于是能做到"内存不足时自动串行化而不是 OOM"。
 
 > **自测**：如果第 3 个节点改成 `add(%t1, %t2)`（残差），上表的 storage_id 分配会变成什么，峰值是多少？
 
@@ -518,7 +620,7 @@ S1                  [ %t2 写 ][ %t2 读 ]
 ## 第 3 章 TE + schedule 原语：每个都看懂循环变化
 
 > 对应根 README：对着 `tvm.lower(..., simple_mode=True)` 说清每个原语对循环做了什么。  
-> 思想源头：[`paper-notes/04-halide.md`](./paper-notes/04-halide.md) 的 algorithm/schedule 分离。
+> 思想源头：[`paper-notes/04-halide.md`](../paper-notes/04-halide.md) 的 algorithm/schedule 分离。
 
 ### 3.1 TE compute：只描述"算什么"
 
@@ -759,35 +861,42 @@ s[CL].compute_at(s[C], jo)
 
 ### 3.14 综合例：matmul naive vs tiled + cache_write + vectorize
 
-与根 README 动手验收一致；论文笔记 [`05-tvm.md`](./paper-notes/05-tvm.md) §4.1 有同构代码。
+**可跑** · 源码 [`tvm-fatbin-lab/tvm_lab/01_te_matmul_schedules.py`](../../tvm-fatbin-lab/tvm_lab/01_te_matmul_schedules.py) · 产物 `out/tvm/01_matmul_{naive,tiled}.lower.txt`
 
-```python
-import tvm
-from tvm import te
-
-M = N = K = 1024
-A = te.placeholder((M, K), name="A")
-B = te.placeholder((K, N), name="B")
-k = te.reduce_axis((0, K), name="k")
-C = te.compute((M, N), lambda i, j: te.sum(A[i, k] * B[k, j], axis=k), name="C")
-
-# ----- schedule A：naive -----
-s0 = te.create_schedule(C.op)
-print("=== NAIVE ===")
-print(tvm.lower(s0, [A, B, C], simple_mode=True))
-
-# ----- schedule B：tile + cache_write + compute_at + split + vectorize -----
-s = te.create_schedule(C.op)
-CL = s.cache_write(C, "local")
-io, jo, ii, ji = s[C].tile(C.op.axis[0], C.op.axis[1], 32, 32)
-s[CL].compute_at(s[C], jo)
-ko, ki = s[CL].split(s[CL].op.reduce_axis[0], factor=8)
-s[CL].vectorize(ki)   # 示例：对拆出的内层标记向量化；实际轴选择以 lower 结果为准
-print("=== TILED ===")
-print(tvm.lower(s, [A, B, C], simple_mode=True))
+```bash
+cd tvm-fatbin-lab && bash scripts/run_tvm.sh
+diff out/tvm/01_matmul_naive.lower.txt out/tvm/01_matmul_tiled.lower.txt
 ```
 
-**TIR 风格结构对比（示意）：**
+**算子级主角**：这里的 matmul 就是主角模型 `tiny_mlp` 里那个 Gemm 的放大版
+（lab 取 `N=64` 是为了 `lower` 输出短到能整篇读完；下面的示意按 1024 写，好算数量级）。
+`llvm-hello-compile/src/kernel.c` 里的 `axpy` 则是**同一个 Gemm 的最内层循环**——
+本章讲"这个循环怎么排"，LLVM 指南讲"排好的循环怎么变成指令"。
+
+lab 里两份 schedule 的差别只有这几行（**算法部分一个字没改**）：
+
+```python
+# 算法：只说「每个输出元素怎么算」——两份 schedule 共用
+C = te.compute((N, N), lambda i, j: te.sum(A[i, k] * B[k, j], axis=k), name="C")
+
+# schedule A：naive
+s = te.create_schedule(C.op)
+
+# schedule B：tiled + cache_write + compute_at + vectorize
+s = te.create_schedule(C.op)
+CL = s.cache_write(C, "global")
+xo, yo, xi, yi = s[C].tile(C.op.axis[0], C.op.axis[1], 16, 16)
+s[CL].compute_at(s[C], yo)
+_, yi_inner = s[CL].split(s[CL].op.axis[1], factor=8)
+s[CL].vectorize(yi_inner)
+```
+
+**这就是"算法/调度分离"的全部含义**：`te.compute` 那一行是算法，
+下面五行是调度，**换调度不换结果**。这个分离最早来自 Halide（见
+[`paper-notes/04-halide.md`](../paper-notes/04-halide.md)），TVM 把它接到了自动搜索上——
+正因为调度是一组可枚举的选择，第 5 章的搜索才有东西可搜。
+
+**TIR 风格结构对比（示意，按 1024 写；lab 的 64 结构相同、数字更小）：**
 
 ```text
 ======================== NAIVE ========================
@@ -822,6 +931,11 @@ for io in 0..31:
 | `vectorize` | 最内层变 SIMD |
 
 跑通后请自己用 `tvm.lower` 的**真实输出**核对轴名字与嵌套——不同 TVM 小版本打印细节可能不同，**结构差异**才是验收点。
+
+> **这一站向上依赖站 ③**：上面那个 `vectorize(yi_inner)` 之所以有意义，
+> 前提是 Relu/Add 已经被融进了这个循环。**没融合的话，Relu 是一个独立 kernel，
+> 你根本没有"把 Relu 塞进 Gemm 输出循环"这个选项**——调度再精细也只是给一个空壳打包。
+> 断链表（[链路总图第 5 章](./00-end-to-end-pipeline.md)）里 ③ 标的是"不能补救"，就是这个意思。
 
 ### 3.15 原语速查表
 
@@ -885,7 +999,7 @@ for yo: for xo:
 | 做法 | 代价 |
 |------|------|
 | 为每种张量指令改编译器核心 | 不可扩展 |
-| **新增一份 `tensor_intrin` 声明 + 在 schedule/MetaSchedule 规则里 `tensorize`** | 论文称接入一类新 FPGA 加速器可低至 ~2k LoC 量级（见 [`05-tvm.md`](./paper-notes/05-tvm.md)） |
+| **新增一份 `tensor_intrin` 声明 + 在 schedule/MetaSchedule 规则里 `tensorize`** | 论文称接入一类新 FPGA 加速器可低至 ~2k LoC 量级（见 [`05-tvm.md`](../paper-notes/05-tvm.md)） |
 
 厂商或系统集成方需要提供的，往往是：
 
@@ -909,9 +1023,24 @@ tensorize 才能匹配成功
 
 layout 决策与 tensorize **不独立**——这又回到第 2.3 节：图级 layout 在塑造算子级搜索空间。
 
-#### 示例精讲：1024³ matmul 用 16×16×16 intrinsic 做 tensorize
+#### 示例精讲：matmul 用 16×16×16 intrinsic 做 tensorize
 
-最小具体输入：`C[1024,1024] = A[1024,1024] × B[1024,1024]`，硬件提供一条 `gemm_16x16x16` 指令（语义 = 两个 16×16 小块相乘累加到 16×16 累加块）。
+**可跑** · 源码 [`tvm-fatbin-lab/tvm_lab/04_tensorize_demo.py`](../../tvm-fatbin-lab/tvm_lab/04_tensorize_demo.py) · 产物 `out/tvm/04_tensorize.lower.txt`
+
+```bash
+cd tvm-fatbin-lab && bash scripts/run_tvm.sh
+```
+
+lab 取 `64³` 和 `16×4×16` 的 intrinsic（跑得快、`lower` 输出短），
+下面按 `1024³` 与 `16×16×16` 讲——**两者结构完全一样**，只是整数好算。
+lab 里的 intrinsic 用 `ir_builder` 手写了一段循环冒充"硬件指令"，
+因为真的 Tensor Core intrinsic 需要 GPU；**要学的是那个绑定动作，不是那条指令本身**。
+
+> lab 对 buffer bind 的严格程度随 TE 版本变化，匹配失败时会回退成只打 tiled IR
+> 并在 `04_READING.md` 里标 `tensorize skipped`。**回退也不影响结论**：
+> 你仍能看到"内三层被切成了恰好 16×4×16"这个前提条件。
+
+场景：`C[1024,1024] = A[1024,1024] × B[1024,1024]`，硬件提供一条 `gemm_16x16x16` 指令（语义 = 两个 16×16 小块相乘累加到 16×16 累加块）。
 
 **第一步：把循环切成「外层 + 恰好 16×16×16 的内三层」**
 
@@ -1084,7 +1213,21 @@ sch, args = task.apply_best("matmul.json")
 
 #### 示例精讲：同一个 matmul 的三套「定义 → 调优 → apply best」
 
-最小具体输入：`C = A × B`，`M = N = K = 1024`，float32，target `llvm`。三段代码做的是同一件事，差别只在**谁定义搜索空间**。
+**可跑（A 段）** · 源码 [`tvm-fatbin-lab/tvm_lab/05_autotvm_tune.py`](../../tvm-fatbin-lab/tvm_lab/05_autotvm_tune.py) · 产物 `out/tvm/05_autotvm.log`、`out/tvm/05_READING.md`
+
+```bash
+cd tvm-fatbin-lab && bash scripts/run_tvm.sh
+AUTOTVM_TRIALS=32 python tvm_lab/05_autotvm_tune.py   # 想多搜几轮
+```
+
+lab 跑的是 A 段（AutoTVM），取 `N=64`、默认只搜 12 轮，为的是**几十秒内跑完**。
+它会打出三个数：搜索空间大小、搜索耗时、**复用 log 再 build 的耗时**。
+最后那个数远小于第二个，就是 §5.6「log 复用」的实证——研究问题⑥的缓存策略。
+
+B、C 两段（Ansor / MetaSchedule）**没有 lab 代码**：它们的一轮搜索动辄几十分钟到几小时，
+放进"一键跑完"的脚本里不合适。这里给出的是可照抄的骨架，结构与 A 段一一对应。
+
+下面三段做的是同一件事（`C = A × B`，float32，target `llvm`），差别只在**谁定义搜索空间**。
 
 **A. AutoTVM：人写 template，knob 显式**
 
@@ -1240,46 +1383,53 @@ func = tvm.build(sch.mod, target=target)
 
 特点：简单、开销可预测、极适合静态图推理。动态控制流弱 → 复杂模型可走 **VM**。
 
-#### 示例精讲：2 节点模型从 build 到 `get_output` 的全链路
+#### 示例精讲：主角模型从 build 到 `get_output` 的全链路
 
-最小具体输入：`y = relu(dense(x, w))`，`x: (1, 128)`，`w: (64, 128)`，输出 `(1, 64)`。
+**可跑** · 源码 [`tvm-fatbin-lab/tvm_lab/06_packedfunc_run.py`](../../tvm-fatbin-lab/tvm_lab/06_packedfunc_run.py) · 产物 `out/tvm/06_graph.json`、`out/tvm/06_READING.md`
 
-```python
-import numpy as np, tvm
-from tvm import relay
-from tvm.contrib import graph_executor
-
-x = relay.var("x", shape=(1, 128), dtype="float32")
-w = relay.var("w", shape=(64, 128), dtype="float32")
-f = relay.Function([x, w], relay.nn.relu(relay.nn.dense(x, w)))
-mod = tvm.IRModule.from_expr(f)
-params = {"w": tvm.nd.array(np.random.rand(64, 128).astype("float32"))}
-
-lib = relay.build(mod, target="llvm", params=params)   # → graph + lib + params 三合一
+```bash
+cd tvm-fatbin-lab && bash scripts/run_tvm.sh
 ```
 
-**build 产物里 graph JSON 的关键字段**（字段值为示意，以本地 `lib.get_graph_json()` 为准；`dense + relu` 已被 §2.2 的规则融成**一个** `tvm_op`）：
+模型仍是主角 `tiny_mlp`，与 §2.2 是**同一个图**——那里停在 IR 上看融合，这里一路 build 到能跑：
+
+```python
+x = relay.var("x", shape=(2, 3), dtype="float32")
+y = relay.nn.dense(x, relay.const(W))     # Gemm
+y = relay.add(y, relay.const(B))          # Gemm 的 C
+y = relay.nn.relu(y)                      # Relu
+y = relay.add(y, relay.const(BIAS2))      # Add
+lib = relay.build(tvm.IRModule.from_expr(relay.Function([x], y)), target="llvm")
+```
+
+跑出来必须是 `[[2.5, 3.5, 4.5, 7.5], [1, 1, 1, 1]]`——**和 `iree-lab` 的手算、
+`onnx_lab/01` 的 ORT 输出三方一致**。三套编译器对同一个模型给出同一个答案，
+说明融合、相位变换、EP 划分都没改语义。脚本会自动比对。
+
+**build 产物里 graph JSON 的关键字段**（字段值为示意，以本地 `out/tvm/06_graph.json` 为准；四个 op 已被 §2.2 的规则融成**一个** `tvm_op`）：
 
 ```json
 {
   "nodes": [
     {"op": "null",   "name": "x", "inputs": []},
-    {"op": "null",   "name": "w", "inputs": []},
-    {"op": "tvm_op", "name": "tvmgen_default_fused_nn_dense_nn_relu",
-     "inputs": [[0, 0, 0], [1, 0, 0]],
-     "attrs": {"func_name": "tvmgen_default_fused_nn_dense_nn_relu",
-               "num_inputs": "2", "num_outputs": "1", "flatten_data": "0"}}
+    {"op": "tvm_op", "name": "tvmgen_default_fused_nn_dense_add_nn_relu_add",
+     "inputs": [[0, 0, 0]],
+     "attrs": {"func_name": "tvmgen_default_fused_nn_dense_add_nn_relu_add",
+               "num_inputs": "1", "num_outputs": "1", "flatten_data": "0"}}
   ],
-  "arg_nodes": [0, 1],
-  "heads": [[2, 0, 0]],
-  "node_row_ptr": [0, 1, 2, 3],
+  "arg_nodes": [0],
+  "heads": [[1, 0, 0]],
   "attrs": {
-    "dltype":     ["list_str",   ["float32", "float32", "float32"]],
-    "shape":      ["list_shape", [[1, 128], [64, 128], [1, 64]]],
-    "storage_id": ["list_int",   [0, 1, 2]]
+    "dltype":     ["list_str",   ["float32", "float32"]],
+    "shape":      ["list_shape", [[2, 3], [2, 4]]],
+    "storage_id": ["list_int",   [0, 1]]
   }
 }
 ```
+
+**`func_name` 里那串 `fused_nn_dense_add_nn_relu_add` 就是融合的直接证据**：
+四个算子名连在一起，说明它们最终只生成了一个 kernel。
+脚本会把实际的 `func_name` 列表打出来，不用自己翻 JSON。
 
 字段怎么读：`op: "null"` = 占位输入（含权重），`arg_nodes` 列出它们；`inputs` 里的 `[节点号, 输出号, 版本号]` 就是数据依赖边；`func_name` 是去 `lib` 里查 PackedFunc 的**键**；`heads` 指出哪个输出是图输出；`storage_id` 就是 §2.4 那份内存规划的结果。
 
@@ -1288,9 +1438,9 @@ lib = relay.build(mod, target="llvm", params=params)   # → graph + lib + param
 ```python
 dev = tvm.cpu(0)
 gmod = graph_executor.GraphModule(lib["default"](dev))
-gmod.set_input("x", tvm.nd.array(np.zeros((1, 128), "float32")))   # 权重已随 build 预置
+gmod.set_input("x", X)      # 权重是 const，已随 build 预置
 gmod.run()
-out = gmod.get_output(0).numpy()        # (1, 64)
+out = gmod.get_output(0).numpy()        # (2, 4)
 ```
 
 **对象关系树**
@@ -1299,8 +1449,8 @@ out = gmod.get_output(0).numpy()        # (1, 64)
 relay.build(...) → ExecutorFactoryModule            （即上面的 lib）
 ├─ graph_json : str                 ← 上面那段 JSON：拓扑、dtype/shape、storage_id
 ├─ lib        : runtime.Module       ← 编译产物；按名字取出 PackedFunc
-│    └─ "tvmgen_default_fused_nn_dense_nn_relu"   ← 正是 JSON 里的 func_name
-└─ params     : Dict[str, NDArray]   ← {"w": ...}
+│    └─ "tvmgen_default_fused_nn_dense_add_nn_relu_add"   ← 正是 JSON 里的 func_name
+└─ params     : Dict[str, NDArray]   ← 本例权重是 const，已被折进 lib
 
 lib["default"](dev) → runtime.Module  （已绑定设备的 graph executor 实例）
 └─ GraphModule 包一层 Python 便捷接口
@@ -1314,7 +1464,13 @@ lib["default"](dev) → runtime.Module  （已绑定设备的 graph executor 实
 
 一句话串起来：**JSON 给顺序和内存，lib 给函数体，PackedFunc 给统一调用约定**——executor 本身不认识 dense 也不认识 CUDA，它只会「按序、按名字、拿着 DLTensor 指针调函数」。这就是为什么换后端不用改 executor。
 
-> **自测**：`storage_id` 里三个值若变成 `[0, 1, 0]`，说明什么被复用了？在这个 2 节点模型里为什么不会发生？
+> **和 IREE 的根本分歧就在这一段**：TVM 把"按什么顺序调哪个函数"留成了运行期读的 JSON，
+> 由 graph executor 解释；IREE 把同样的调度逻辑**编译成了 VM 字节码**塞进 `.vmfb`
+> （见 [iree 第 1 章](./iree-learning-guide.md#示例精讲一个-abs-模型穿过三层)）。
+> 前者改图不用重编运行时、调试直观；后者能把分配/同步一起优化掉、部署是单文件。
+> 两边都能亲手看：`out/tvm/06_graph.json` 对 `iree-lab/out/phases/tiny_mlp.vm.mlir`。
+
+> **自测**：`storage_id` 里的值若出现重复，说明什么被复用了？在这个已经融成一个 kernel 的模型里为什么看不到复用？
 
 ### 6.3 VM 路径（Relay VM / Relax VM）
 
@@ -1352,7 +1508,7 @@ lib["default"](dev) → runtime.Module  （已绑定设备的 graph executor 实
 
 ## 第 7 章 与 AI-Infra 目标的对接（含 vs IREE/MLIR）
 
-自学枢纽见 [`docs/README.md`](./README.md)；项目总目标见根 [`README.md`](../README.md)。
+自学枢纽见 [`docs/README.md`](../README.md)；项目总目标见根 [`README.md`](../../README.md)。
 
 ### 7.1 三个研究问题在 TVM 里的位置
 
@@ -1390,8 +1546,8 @@ lib["default"](dev) → runtime.Module  （已绑定设备的 graph executor 实
 
 ### 7.3 和 Glow / Halide 的阅读顺序
 
-1. Halide 笔记：只建立 **algorithm ≠ schedule**（[`04-halide.md`](./paper-notes/04-halide.md)）。  
-2. 本文 + [`05-tvm.md`](./paper-notes/05-tvm.md)：完整图编译 + 搜索。  
+1. Halide 笔记：只建立 **algorithm ≠ schedule**（[`04-halide.md`](../paper-notes/04-halide.md)）。  
+2. 本文 + [`05-tvm.md`](../paper-notes/05-tvm.md)：完整图编译 + 搜索。  
 3. Glow：对照「少量原语 + 厂商实现」vs「TE + 搜索 + tensorize」。
 
 ---
@@ -1425,7 +1581,7 @@ lib["default"](dev) → runtime.Module  （已绑定设备的 graph executor 实
 
 **环境**：按官方文档安装 Apache TVM（带 LLVM 的构建或官方 pip 轮子，视平台而定）。
 
-**推荐入口（仓库动手项目）**：[`../tvm-fatbin-lab/`](../tvm-fatbin-lab/)
+**推荐入口（仓库动手项目）**：[`../../tvm-fatbin-lab/`](../../tvm-fatbin-lab/)
 
 ```bash
 cd tvm-fatbin-lab && pip install -r requirements.txt && bash scripts/run_tvm.sh
@@ -1518,8 +1674,8 @@ cd tvm-fatbin-lab && pip install -r requirements.txt && bash scripts/run_tvm.sh
 ## 维护约定
 
 - 官方 TE / TIR / MetaSchedule 策略变更时，优先同步第 3、5 章与附录速查。  
-- 融合分类与「分区边界代价」的表述以 [`ai-compiler-foundations.md`](./ai-compiler-foundations.md) §3 为准，改动时同步 [`onnx-learning-guide.md`](./onnx-learning-guide.md) §7.3 与 [`executorch-learning-guide.md`](./executorch-learning-guide.md) §5。  
-- 新增动手脚本入口补到 [`docs/README.md`](./README.md) 阶段 4 与根 [`README.md`](../README.md) §4.1。
+- 融合分类与「分区边界代价」的表述以 [`ai-compiler-foundations.md`](./ai-compiler-foundations-learning-guide.md) §3 为准，改动时同步 [`onnx-learning-guide.md`](./onnx-learning-guide.md) §7.3 与 [`executorch-learning-guide.md`](./executorch-learning-guide.md) §5。  
+- 新增动手脚本入口补到 [`docs/README.md`](../README.md) 阶段 4 与根 [`README.md`](../../README.md) §4.1。
 
 ---
 

@@ -1,8 +1,8 @@
 # PagedAttention / vLLM：用操作系统的分页思想管理 LLM 推理的 KV Cache
 
-> **导航**：[笔记索引](README.md) · [自学枢纽](../README.md)（阶段 5，自选补充；建议穿插进阶段 6 收束） · [横切概念](../ai-compiler-foundations.md) §9.5（分页状态 / 块化迁移）  
+> **导航**：[笔记索引](README.md) · [自学枢纽](../README.md)（阶段 5，自选补充；建议穿插进阶段 6 收束） · [横切概念](../learning-guides/ai-compiler-foundations-learning-guide.md) §9.5（分页状态 / 块化迁移）  
 > **在学习路线中的定位（自选补充）**：本篇**不在主链上**，也没有配套动手项目。它以一个身份融入——**根 README §6 研究问题③④的样本**：问题③「哪些决策必须留到运行时」（§8 的「与编译器视角的关系」一段是全篇最值钱的部分），问题④「块化的状态才搬得动」。  
-> 结论已蒸馏进 [`../ai-compiler-foundations.md`](../ai-compiler-foundations.md) §9.5，**跳过本篇不断链**；建议放到收束阶段与六个研究问题一起读。  
+> 结论已蒸馏进 [`../learning-guides/ai-compiler-foundations-learning-guide.md`](../learning-guides/ai-compiler-foundations-learning-guide.md) §9.5，**跳过本篇不断链**；建议放到收束阶段与六个研究问题一起读。  
 > **配套阅读**：训练侧的访存优化对照见 [`08-flash-attention.md`](08-flash-attention.md)。
 
 > 论文元信息：*Efficient Memory Management for Large Language Model Serving with PagedAttention*

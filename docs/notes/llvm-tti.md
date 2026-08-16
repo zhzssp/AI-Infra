@@ -1,6 +1,6 @@
 # LLVM 的 TTI：目标代价与能力查询接口
 
-> 来源：[`llvm-learning-guide.md`](../llvm-learning-guide.md) §4.6
+> 来源：[`llvm-learning-guide.md`](../learning-guides/llvm-learning-guide.md) §4.6
 
 ## 是什么
 

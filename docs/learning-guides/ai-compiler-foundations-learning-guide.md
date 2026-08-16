@@ -2,7 +2,7 @@
 
 > **本文档的定位**
 > - 这不是又一个项目说明书，而是**把仓库里所有学习文档与动手项目粘在一起的「公共词汇表」**。
-> - 根目录 [`../README.md`](../README.md) 的目标是「算力网上大模型分布式运行基础设施」——需要同时会**分布式怎么切**、**异构后端怎么统一**、**运行时怎么决策**。LLVM / MLIR / IREE / TVM / ONNX / ExecuTorch / CUDA fatbin 各自讲透一块，但中间有一批**跨项目反复出现的概念**；缺了它们，你会觉得每本书都读懂了，却画不出一张总图。
+> - 根目录 [`../README.md`](../../README.md) 的目标是「算力网上大模型分布式运行基础设施」——需要同时会**分布式怎么切**、**异构后端怎么统一**、**运行时怎么决策**。LLVM / MLIR / IREE / TVM / ONNX / ExecuTorch / CUDA fatbin 各自讲透一块，但中间有一批**跨项目反复出现的概念**；缺了它们，你会觉得每本书都读懂了，却画不出一张总图。
 > - 本文只讲这些**前置 / 横切**概念：是什么、为什么需要、在哪些项目里以什么名字出现。细节仍回各自学习文档。
 >
 > **怎么用**
@@ -13,6 +13,36 @@
 > - 不要试图在这里替代 MLIR Dialect Conversion 或 IREE HAL 的精读——那是各专题文档的事。
 >
 > **一句话读法**：如果只有一小时，读[第 1 章总图](#第-1-章-一张总图从模型到异构设备)、[§2.4 同步路线表](#24-与工具路线同步的概念学习路线)，然后**只**读该表 W0 行点到的那几节。
+
+---
+
+### 本篇在链路中的位置
+
+> 全局链路见 [`00-end-to-end-pipeline.md`](./00-end-to-end-pipeline.md)。
+> **本篇不占任何一站——它是七站共用的那本词典。**
+> 链路总图讲「一次优化怎么走完七站」，本篇讲「走的时候会反复用到哪些词，它们在各站叫什么名字」。
+
+两篇的分工，一句话：
+
+| | 回答 |
+|--|------|
+| [`00-end-to-end-pipeline.md`](./00-end-to-end-pipeline.md) | **顺序**：先做什么、后做什么、哪一步做砸了后面补不回来 |
+| 本篇 | **词汇**：同一个概念在 ONNX / MLIR / TVM / IREE / LLVM 里各叫什么，为什么它们是同一件事 |
+
+各章对应链路上的哪一站：
+
+| 本篇章节 | 链路站点 | 对应动手项目 |
+|---------|---------|------------|
+| 第 3 章（计算图、融合、划分） | ① 表示 · ② 划分 · ③ 融合 | `onnx-delegate-lab` · `tvm-fatbin-lab` |
+| 第 4 章（算法/调度分离、tiling、Roofline） | ④ 调度 | `tvm-fatbin-lab/tvm_lab/01` |
+| 第 5 章（tensor/buffer、layout、量化） | ⑤ 降低（bufferization 那一刀） | `mlir-toy-dialect/examples/upstream/` |
+| 第 6 章（SSA、多层 IR、Pass、渐进 lowering） | 贯穿 ①–⑥ | `llvm-hello-compile` · `mlir-toy-dialect` |
+| 第 7 章（kernel、ISA 层级、多变体打包） | ⑥ 指令 · ⑦ 打包 | `tvm-fatbin-lab` CUDA 轨 · `iree-lab` |
+| 第 8 章（设备、队列、同步、AOT/JIT） | ⑦ 打包之后的执行 | `iree-lab/scripts/run_execute.sh` |
+| 第 9 章（分布式接缝） | 尚未落成 lab，见 `docs/paper-notes/01` | — |
+
+**建议的读法**：不要顺读本篇。先按链路总图跑一遍主角模型，
+在某一站卡住时回来查对应章节——**这本词典是索引，不是教程**。
 
 ---
 
@@ -39,7 +69,7 @@
 把仓库里所有材料压成**一张栈图**：最上面的「应用 / 框架」是**输入**（模型和并行策略从这里来），它下面才是**五层编译与执行栈**。每一层有自己的问题、自己的代表项目；**同一概念在不同层换名字，语义往往同构**。
 
 > 后文说「五层栈」，指的就是下图中框架层以下的五层：**交换图 IR → 中端 → 执行规划 → 后端 IR/机器码 → 运行时**。  
-> （不要和 [`paper-notes/01`](./paper-notes/01-efficient-training-distributed-infra.md) 里分布式训练的「六层结构」混淆——那是另一张图，讲的是集群侧分层。）
+> （不要和 [`paper-notes/01`](../paper-notes/01-efficient-training-distributed-infra.md) 里分布式训练的「六层结构」混淆——那是另一张图，讲的是集群侧分层。）
 
 ```
 ┌─ 应用 / 框架 ─────────────────────────────────────────────────┐
@@ -118,7 +148,7 @@
 
 ### 2.1 几乎所有编译栈共用
 
-> 「轮次」列 = 第一次补它的时机，对应根 [`README.md`](../README.md) §7.2 的 W0～W8；`Wx→Wy` 表示 Wx 先建立直觉、Wy 再坐实。完整安排见 [§2.4](#24-与工具路线同步的概念学习路线)。
+> 「轮次」列 = 第一次补它的时机，对应根 [`README.md`](../../README.md) §7.2 的 W0～W8；`Wx→Wy` 表示 Wx 先建立直觉、Wy 再坐实。完整安排见 [§2.4](#24-与工具路线同步的概念学习路线)。
 
 | # | 概念 | 优先级 | 轮次 | 直接服务于（老师指定内容） | 一句话 | 深入见 |
 |---|------|--------|------|---------------------------|--------|--------|
@@ -151,7 +181,7 @@
 
 ### 2.3 对接分布式与大模型负载
 
-> **提醒**：这一组容易被当成「宏观 AI-Infra」而推迟，但 [01 分布式综述](./paper-notes/01-efficient-training-distributed-infra.md) 本身就是老师指定的 **P0 正题**，所以 §9.1–9.3 属于必补；只有 §9.4–9.5（来自自选补充的两篇论文）可以推迟。
+> **提醒**：这一组容易被当成「宏观 AI-Infra」而推迟，但 [01 分布式综述](../paper-notes/01-efficient-training-distributed-infra.md) 本身就是老师指定的 **P0 正题**，所以 §9.1–9.3 属于必补；只有 §9.4–9.5（来自自选补充的两篇论文）可以推迟。
 
 | # | 概念 | 优先级 | 轮次 | 直接服务于（老师指定内容） | 一句话 | 深入见 |
 |---|------|--------|------|---------------------------|--------|--------|
@@ -163,7 +193,7 @@
 
 ### 2.4 与工具路线同步的概念学习路线
 
-**这是本文最重要的一张表。** 上面 26 条概念**不是一次学完的**——它们按批次挂在根 [`README.md`](../README.md) §7.2 的周次表上，每一轮只补「下一个工具真正要用到的那几条」。
+**这是本文最重要的一张表。** 上面 26 条概念**不是一次学完的**——它们按批次挂在根 [`README.md`](../../README.md) §7.2 的周次表上，每一轮只补「下一个工具真正要用到的那几条」。
 
 > **一句话原则**：**概念永远比工具早半步，不早一整轮。** 每轮开头花半天到一天补概念，然后立刻进工具/动手项目验证；下一轮再补下一批。
 >
@@ -245,6 +275,12 @@ W7–W8 研究问题收束      ◄─ §3.4 选型 · §9.5 ·（回看 §3.3 �
 
 #### 示例精讲：conv → bias_add → relu 融合前后的访存账
 
+**无 lab 对应（算账用的放大版）**——结构与主角模型 `tiny_mlp`（`Gemm→Relu→Add`）完全一致：
+一个 complex-out-fusable 的主算子后面挂两个 injective。
+这里换成 conv 只是因为**主角的 `[2,3]@[4,3]` 太小，算出来的字节数说明不了问题**。
+想看同一笔账在真实 lab 上怎么数，去 [`tvm_lab/02_fusion_relay.py`](../../tvm-fatbin-lab/tvm_lab/02_fusion_relay.py)
+数融合前后的函数个数，或去 `iree-lab` 数 `flow.dispatch` 的个数。
+
 **最小具体输入**：`y = relu(bias_add(conv2d(x, w), b))`。输入 `x`：`1×64×56×56` f32；卷积核 `w`：`64×64×3×3`，pad 1、stride 1，故输出仍是 `1×64×56×56`；`b`：长度 64。
 
 先把一份激活张量的大小算出来，后面全部以它为单位：
@@ -315,53 +351,65 @@ for each (n, f, oh, ow):
 
 #### 示例精讲：5 节点链切一刀，四类代价各落在哪条边
 
-**最小具体输入**：一条 5 节点链。后端 X（某加速器）声明只支持 `conv2d` 与 `relu`；`topk` / `add` / `softmax` 留给默认 CPU 运行时。
+**可跑** · 这条链就是 [`onnx_lab/03_ort_ep_partition.py`](../../onnx-delegate-lab/onnx_lab/03_ort_ep_partition.py) 建的图 · 产物 `out/onnx/03_partition_report.json`
+
+后端 X（某加速器）声明支持 `Gemm` / `Relu` / `Add`；`Softmax` / `ReduceSum` 留给默认 CPU 运行时。
 
 ```text
 // 划分前的伪 IR（括号里是能力归属）
-%t1 = conv2d(%x, %w)      // A —— 后端 X 支持
-%t2 = relu(%t1)           // B —— 后端 X 支持
-%t3 = topk(%t2)           // C —— X 不支持   ← 切口只能落在 B|C 之间
-%t4 = add(%t3, %bias)     // D —— CPU
-%y  = softmax(%t4)        // E —— CPU
+%h       = Gemm(%x, %W, %b)       // A —— 后端 X 支持
+%h_act   = Relu(%h)               // B —— 后端 X 支持
+%mlp_out = Add(%h_act, %bias2)    // C —— 后端 X 支持
+%prob    = Softmax(%mlp_out)      // D —— X 不支持   ← 切口只能落在 C|D 之间
+%y       = ReduceSum(%prob)       // E —— CPU
 ```
+
+前三个节点正是全仓库的主角模型 `tiny_mlp`；后两个是 lab **刻意加上去制造边界**的尾巴。
 
 给每条边编号，方便下面指认：
 
 ```text
- %x ──e0──▶ A(conv2d) ──e1──▶ B(relu) ──e2──▶ C(topk) ──e3──▶ D(add) ──e4──▶ E(softmax) ──▶ %y
-            └────────── 后端 X 的子图 ─────────┘  ▲  └──────── 默认 CPU 运行时 ────────┘
-                                                  │
-                                          e2 = 唯一的边界边
+ %x ─e0─▶ A(Gemm) ─e1─▶ B(Relu) ─e2─▶ C(Add) ─e3─▶ D(Softmax) ─e4─▶ E(ReduceSum) ─▶ %y
+          └────────── 后端 X 的子图 ──────────┘  ▲  └────── 默认 CPU 运行时 ──────┘
+                                                 │
+                                         e3 = 唯一的边界边
 ```
 
 **划分后的伪 IR**
 
 ```text
-%t2 = call @subgraph_X(%x, %w)   // 一次委托调用；内部是 conv2d → relu（还可再融合）
-// ══════════════ 切口：所有边界代价都压在 e2 这一条边上 ══════════════
-%t3 = topk(%t2)                  // 以下留在默认运行时
-%t4 = add(%t3, %bias)
-%y  = softmax(%t4)
+%mlp_out = call @subgraph_X(%x, %W, %b, %bias2)   // 一次委托；内部 Gemm→Relu→Add（还可再融合）
+// ══════════════ 切口：所有边界代价都压在 e3 这一条边上 ══════════════
+%prob = Softmax(%mlp_out)         // 以下留在默认运行时
+%y    = ReduceSum(%prob)
 ```
 
-注意 `e1` 被**吞进子图内部**了：它不再是边界，反而成了可融合的候选（对照 [§3.2](#32-算子语义分类与融合fusion)）。这就是「边界越少越好」的机械含义——**每条被吞进去的边省掉一整套下面四项代价**。
+注意 `e1` 与 `e2` 被**吞进子图内部**了：它们不再是边界，反而成了可融合的候选（对照 [§3.2](#32-算子语义分类与融合fusion)）。这就是「边界越少越好」的机械含义——**每条被吞进去的边省掉一整套下面四项代价**。
 
 **四类代价 ↔ 图上的位置**
 
 | 代价 | 落在哪 | 在这个例子里具体是什么 | 各系统里的名字 |
 |------|--------|------------------------|----------------|
-| ① 数据拷贝 | **e2 这条边上** | `%t2`（子图输出）从 X 的显存拷回 CPU 可读内存；不共享地址空间时无法避免 | ORT 的 EP 边界 copy、ET 的 delegate 输入/输出搬运 |
-| ② Layout / dtype 转换 | **e2 上，表现为新增算子** | X 内部按 NHWC+fp16 算，CPU 的 `topk` 期待 NCHW+fp32 → e2 实际展开成 `relu → cast → layout_transform → topk` | `layout_transform`、`QuantizeLinear`/`Dequantize` 对 |
-| ③ 内存空间切换 | **e2 两端 buffer 的归属** | 左端由 X 的分配器管（device global），右端要在 host 分配器里另拿一块；跨界的是「谁管这块内存」，不是数据内容 | 地址空间（[§5.4](#54-地址空间与内存层次)）、HAL allocator |
-| ④ 同步点 | **e2 上的一条时间边** | `topk` 读 `%t2` 之前必须等整个 `@subgraph_X` 完成并 signal——这条依赖不产生数据，只产生等待 | fence / event / timeline semaphore（[§8.2](#82-异步与同步)） |
+| ① 数据拷贝 | **e3 这条边上** | `%mlp_out`（子图输出）从 X 的显存拷回 CPU 可读内存；不共享地址空间时无法避免 | ORT 的 EP 边界 copy、ET 的 delegate 输入/输出搬运 |
+| ② Layout / dtype 转换 | **e3 上，表现为新增算子** | X 内部按 fp16 算，CPU 的 `Softmax` 期待 fp32 → e3 实际展开成 `Add → cast → Softmax` | `layout_transform`、`QuantizeLinear`/`Dequantize` 对 |
+| ③ 内存空间切换 | **e3 两端 buffer 的归属** | 左端由 X 的分配器管（device global），右端要在 host 分配器里另拿一块；跨界的是「谁管这块内存」，不是数据内容 | 地址空间（[§5.4](#54-地址空间与内存层次)）、HAL allocator |
+| ④ 同步点 | **e3 上的一条时间边** | `Softmax` 读 `%mlp_out` 之前必须等整个 `@subgraph_X` 完成并 signal——这条依赖不产生数据，只产生等待 | fence / event / timeline semaphore（[§8.2](#82-异步与同步)） |
+
+**同一条链，三个系统各切一次**（跑完这三个 lab，你手上就有三组数字）：
+
+| 系统 | 决策时刻 | 怎么观察 |
+|------|---------|---------|
+| ORT EP | Session 构建期 | `onnx_lab/03` 的 profile 里 provider 命中统计 |
+| ExecuTorch | 导出期 | `executorch_lab/01` 的 `delegate_subgraph_count`（用的是同一手法：主角 + portable 尾巴） |
+| IREE | 编译相位 | `iree-lab/scripts/run_phases.sh` 里 `flow.dispatch` 的个数 |
 
 **要记住的两点**
 
 1. 前三项是**空间**代价（多一次搬、多一个算子、多一次分配），第四项是**时间**代价（流水线被截断，无法与相邻工作重叠）。前三项能靠 layout 协商压小，第四项只能靠**减少边界数量**或让边界两侧异步化。
 2. 代价是按**边界数**收费，不是按节点数。所以「把 X 能吃的节点尽量连成一片」通常比「把每个 X 能吃的节点都交给 X」更划算——后者会切出一堆碎片，每片都要付一遍 ①②③④。
 
-> **自测**：如果后端 X 其实也支持 `add` 与 `softmax`（只有 `topk` 不支持），边界会变成几条？四类代价各要付几遍？
+> **自测**：如果后端 X 其实也支持 `Softmax`（只有 `ReduceSum` 不支持），边界移到哪里？四类代价各要付几遍？
+> 想真跑一遍：在 `executorch_lab/01_partitioner_lab.py` 里把 `PORTABLE_HINTS` 改成别的算子名，再看子图数怎么变。
 
 ### 3.4 四条工业栈怎么选（学完各专题后回看这张表）
 
@@ -369,14 +417,14 @@ for each (n, f, oh, ow):
 
 | 栈 | 划分/优化的决策者 | 产物与运行时 | 适合的场景 | 对算力网目标缺什么 |
 |----|------------------|--------------|-----------|-------------------|
-| **ONNX Runtime EP**<br>[`onnx`](./onnx-learning-guide.md) · 动手 [`../onnx-delegate-lab/`](../onnx-delegate-lab/) | 各 EP 自己声明能吃什么（`GetCapability`），运行时按贪心优先级派发 | 单一 `.onnx` + 多 EP 插件，进程内派发 | 已有 ONNX 模型、要快速接一个新加速器 | 划分是贪心的，不做「算得快 vs 边界贵」的全局折中 |
+| **ONNX Runtime EP**<br>[`onnx`](./onnx-learning-guide.md) · 动手 [`../../onnx-delegate-lab/`](../../onnx-delegate-lab/) | 各 EP 自己声明能吃什么（`GetCapability`），运行时按贪心优先级派发 | 单一 `.onnx` + 多 EP 插件，进程内派发 | 已有 ONNX 模型、要快速接一个新加速器 | 划分是贪心的，不做「算得快 vs 边界贵」的全局折中 |
 | **ExecuTorch 委托**<br>[`executorch`](./executorch-learning-guide.md) · 同上 lab | 你写的 `Partitioner`（编译期打 tag） | `.pte` + delegate blob，极薄运行时 | 端侧 / 受限设备，要求确定性与小体积 | 不提供分布式调度，也不管跨节点 |
 | **IREE**<br>[`iree`](./iree-learning-guide.md) | 编译流水线自己形成 `flow.dispatch`，并把时序与设备归属固化进 stream/hal | `.vmfb`（内嵌多 variant）+ HAL 运行时 | **多后端统一抽象**，要控制「何时搬、等谁、在哪跑」 | 单进程多设备为主；跨节点编排、容错、并行策略要自己补 |
-| **TVM**<br>[`tvm`](./tvm-learning-guide.md) · 动手 [`../tvm-fatbin-lab/`](../tvm-fatbin-lab/) | 融合规则 + 搜索（AutoTVM/MetaSchedule）决定单个 kernel 怎么算得快 | 编译好的算子库 + PackedFunc 运行时 | 单算子/子图**性能压榨**与自动调优 | 层次比前三者低一层，不解决设备抽象与执行规划 |
+| **TVM**<br>[`tvm`](./tvm-learning-guide.md) · 动手 [`../../tvm-fatbin-lab/`](../../tvm-fatbin-lab/) | 融合规则 + 搜索（AutoTVM/MetaSchedule）决定单个 kernel 怎么算得快 | 编译好的算子库 + PackedFunc 运行时 | 单算子/子图**性能压榨**与自动调优 | 层次比前三者低一层，不解决设备抽象与执行规划 |
 
 **读法**：前三行是**「谁来划分」**的三种答案（同一决策，不同归属）；第四行是**「划完之后怎么算得快」**，与前三者正交，可以叠加使用。
 
-**对本仓库的取舍**（与根 [`README.md`](../README.md) §0 优先级一致）：主线选 **IREE**，因为只有它把「执行规划」显式建成 IR 层；ONNX/ExecuTorch 提供**划分接口的工业对照**，用来理解研究问题①②；TVM 提供**代价模型与搜索**的方法论，用来回应研究问题⑥。
+**对本仓库的取舍**（与根 [`README.md`](../../README.md) §0 优先级一致）：主线选 **IREE**，因为只有它把「执行规划」显式建成 IR 层；ONNX/ExecuTorch 提供**划分接口的工业对照**，用来理解研究问题①②；TVM 提供**代价模型与搜索**的方法论，用来回应研究问题⑥。
 
 ---
 
@@ -393,11 +441,17 @@ for each (n, f, oh, ow):
 
 **在栈中的位置**：这是**算子级**优化的语言，不是图级融合。图级决定「这是一个 fused op」；调度决定「这个 fused op 内部循环长什么样」。
 
-详见 [`paper-notes/04-halide.md`](./paper-notes/04-halide.md)、[`tvm-learning-guide.md`](./tvm-learning-guide.md) §3。
+详见 [`paper-notes/04-halide.md`](../paper-notes/04-halide.md)、[`tvm-learning-guide.md`](./tvm-learning-guide.md) §3。
 
 #### 示例精讲：一个 matmul 算法 + 两个 schedule
 
-**最小具体输入**：方阵 matmul，`C[i,j] = Σ_k A[i,k] * B[k,j]`。下面**算法一个字都不改**，只换 schedule。（对应动手脚本 [`../tvm-fatbin-lab/tvm_lab/01_te_matmul_schedules.py`](../tvm-fatbin-lab/tvm_lab/01_te_matmul_schedules.py)，那里 `N=64`、`tile=16`。）
+**可跑** · 源码 [`../../tvm-fatbin-lab/tvm_lab/01_te_matmul_schedules.py`](../../tvm-fatbin-lab/tvm_lab/01_te_matmul_schedules.py)（`N=64`、`tile=16`）
+
+**最小具体输入**：方阵 matmul，`C[i,j] = Σ_k A[i,k] * B[k,j]`。下面**算法一个字都不改**，只换 schedule。
+
+> 这个 matmul 就是主角模型里那个 `Gemm` **放大到能看出差别的尺寸**。
+> `tiny_mlp` 的 `[2,3]@[4,3]` 整个塞得进一级缓存，tile 与不 tile 跑出来一样快——
+> 讲调度必须换个大的。两者的迭代空间结构完全相同（两个 parallel 维 + 一个 reduction 维）。
 
 **算法（只说「算什么」）**
 
@@ -477,6 +531,9 @@ for (i, 0, N)                             for (i.outer, 0, N/16)
 
 #### 示例精讲：`split` 与 `cache_read` 各改了什么
 
+**部分可跑** · `split` / `reorder` 见 [`tvm_lab/01_te_matmul_schedules.py`](../../tvm-fatbin-lab/tvm_lab/01_te_matmul_schedules.py)；
+`cache_read` + `compute_at` 这一段是**放大到 GPU 尺度的推演**，lab 的 CPU 轨不涉及 shared memory。
+
 沿用 [§4.1](#41-算法与调度分离algorithm--schedule) 的 matmul，但把规模放大到 `N = 1024`（f32），这样访存账才算得有意义。
 
 **第一步：`split` —— 一个循环变两层**
@@ -547,7 +604,7 @@ for (i.outer) for (j.outer) {
 
 **为什么 AI 编译必提**：现代 GPU 上 Transformer 注意力等内核经常是**访存墙**，不是算力墙。FlashAttention 的方法论本质就是：用 tiling + 融合 + 重计算，把 HBM 访问次数打下来。不建立 Roofline 直觉，会误把「多算一点 FLOPs」当成优化。
 
-想要实证再翻 [`paper-notes/08-flash-attention.md`](./paper-notes/08-flash-attention.md)（**自选补充**：本节结论已够用，原文只是把它坐实）。
+想要实证再翻 [`paper-notes/08-flash-attention.md`](../paper-notes/08-flash-attention.md)（**自选补充**：本节结论已够用，原文只是把它坐实）。
 
 ---
 
@@ -568,90 +625,81 @@ for (i.outer) for (j.outer) {
 
 详见 [`mlir-learning-guide.md`](./mlir-learning-guide.md) §8。
 
-#### 示例精讲：同一个 `c = a + b` 的 tensor 版与 memref 版
+#### 示例精讲：同一段 relu，能就地做 vs 必须拷一份
 
-**最小具体输入**：`c = a + b`，紧接着 `d = relu(c)`，长度 8 的 f32 向量。两段 IR 语义完全一样，唯一的区别是「`c` 是一个**值**，还是一块**内存**」。
+**可跑** · 源码 [`mlir-toy-dialect/examples/upstream/02-bufferize.mlir`](../../mlir-toy-dialect/examples/upstream/02-bufferize.mlir)（上游 dialect，`mlir-opt` 直接跑）
 
-**版本 A：tensor（值语义）**
+用的是主角模型里的 Relu 段。文件里三个函数，语义都一样，**区别只在「`%h` 之后还有没有人用」**。
+
+**版本 A：能就地做**——`%h` 用完即弃，`outs` 直接复用它
 
 ```mlir
-func.func @add_relu_tensor(%a: tensor<8xf32>, %b: tensor<8xf32>) -> tensor<8xf32> {
-  %z  = arith.constant 0.0 : f32
-  %e0 = tensor.empty() : tensor<8xf32>
-  %c  = linalg.add ins(%a, %b : tensor<8xf32>, tensor<8xf32>)
-                   outs(%e0 : tensor<8xf32>) -> tensor<8xf32>   // %c 是新的 SSA 值
-  %e1 = tensor.empty() : tensor<8xf32>
-  %d  = linalg.generic
-          {indexing_maps = [affine_map<(i) -> (i)>, affine_map<(i) -> (i)>],
-           iterator_types = ["parallel"]}
-          ins(%c : tensor<8xf32>) outs(%e1 : tensor<8xf32>) {
-  ^bb0(%x: f32, %o: f32):
-    %r = arith.maximumf %x, %z : f32
-    linalg.yield %r : f32
-  } -> tensor<8xf32>
-  return %d : tensor<8xf32>
+func.func @relu_can_inplace(%h: tensor<2x4xf32>) -> tensor<2x4xf32> {
+  %out = linalg.generic { ... }
+    ins(%h : tensor<2x4xf32>) outs(%h : tensor<2x4xf32>) {   // ← outs 就是 ins
+    ^bb0(%in: f32, %o: f32):
+      %p = arith.cmpf ogt, %in, %zero : f32
+      %r = arith.select %p, %in, %zero : f32
+      linalg.yield %r : f32
+  } -> tensor<2x4xf32>
+  return %out : tensor<2x4xf32>
 }
 ```
 
-**版本 B：memref（存储语义）** —— bufferize 之后的同一段计算
+**版本 B：必须拷贝**——`%h` 在 relu 之后**还要再被读一次**
 
 ```mlir
-func.func @add_relu_memref(%a: memref<8xf32>, %b: memref<8xf32>, %c: memref<8xf32>) {
-  %z  = arith.constant 0.0 : f32
-  %c0 = arith.constant 0 : index
-  %c1 = arith.constant 1 : index
-  %c8 = arith.constant 8 : index
-  scf.for %i = %c0 to %c8 step %c1 {                  // 循环 1：add
-    %x = memref.load %a[%i] : memref<8xf32>
-    %y = memref.load %b[%i] : memref<8xf32>
-    %s = arith.addf %x, %y : f32
-    memref.store %s, %c[%i] : memref<8xf32>           // 中间结果**落地**
-  }
-  scf.for %i = %c0 to %c8 step %c1 {                  // 循环 2：relu
-    %v = memref.load %c[%i] : memref<8xf32>
-    %r = arith.maximumf %v, %z : f32
-    memref.store %r, %c[%i] : memref<8xf32>           // 原地覆盖，旧值消失
-  }
-  return
+func.func @relu_must_copy(%h: tensor<2x4xf32>) -> (tensor<2x4xf32>, tensor<2x4xf32>) {
+  %relu  = linalg.generic { ... } ins(%h) outs(%h) { /* relu */ } -> tensor<2x4xf32>
+  %twice = linalg.generic { ... } ins(%h) outs(%h) { /* x+x */ } -> tensor<2x4xf32>
+  //                                    ▲ %h 在这里第二次被读，它必须还是原值
+  return %relu, %twice : tensor<2x4xf32>, tensor<2x4xf32>
 }
 ```
 
-**两版的依赖边**
+**两个版本 bufferize 之后差在哪**——自己跑一次数 `memref.alloc`：
+
+```bash
+cd mlir-toy-dialect
+mlir-opt examples/upstream/02-bufferize.mlir \
+  --one-shot-bufferize="bufferize-function-boundaries" | grep -c 'memref.alloc\|memref.copy'
+```
+
+A 不需要新分配（输入缓冲被原地改写），B 必须插一次 `alloc` + `copy`。
+
+**关键在于「谁看得见这个判断」**
 
 ```text
-版本 A：边 = SSA 依赖
-  %a ─┐
-      ├─ linalg.add ──▶ %c ──▶ linalg.generic(relu) ──▶ %d
-  %b ─┘                 ▲
-                        └── 单定义 + 单使用 → 这条边可融合
+tensor 世界：边 = SSA 依赖
+  %h ──▶ relu ──▶ %relu
+   └───▶ x+x  ──▶ %twice
+   ▲
+   └── 编译器数一下 %h 有几个 use，就知道能不能就地写 —— O(1) 的判断
 
-版本 B：边 = 「对同一块内存的读写顺序」
-  循环1 ──store──▶ [ %c 这块内存 ] ──load──▶ 循环2
-                        ▲
-                        └── 能否合并两个循环，取决于别名分析能否证明
-                            %a / %b / %c 互不重叠（调用方可以传同一块进来）
+memref 世界：边 = 「对同一块内存的读写顺序」
+  relu ──store──▶ [ %buf ] ◀──load── x+x
+                     ▲
+                     └── 能否就地，取决于别名分析能否证明 %buf 没被别人持有
 ```
 
-**逐条读**
-
-1. A 的 `%c` 只有一个定义、一个使用：融合就是把 relu 的计算体搬进 add 的循环体，整个 `%c` 张量根本不必存在（可退化成寄存器里的一个 `f32`）。
-2. A 的 `tensor.empty()` 不是分配，只是给 destination-passing style 一个形状占位；真分配推迟到 bufferization——这正是 One-Shot Bufferize 能「原地复用」的余地。
-3. B 的 `%c` 是函数参数里的一块内存：循环 2 从它读、又写回它。这里没有 SSA 边可看，只有 store/load 的先后。
-4. B 的 `memref.store %r, %c[%i]` 是原地覆盖：一旦执行，add 的结果永久消失——想再读它的 Pass 已经晚了。
+文件里的第三个函数 `@relu_memref` 就是**已经落到 memref 之后**的样子：
+`%buf` 被就地改写是你自己写下的事实，**没有值语义拦着你**。
 
 **并排对照**
 
-| | 版本 A（tensor） | 版本 B（memref） |
+| | tensor 版 | memref 版 |
 |--|------------------|------------------|
-| `%c` 是什么 | SSA 值，不可变 | 内存位置，可被 store 改写 |
-| 哪条边允许融合 | `linalg.add → %c → relu` 这条 SSA 边 | 无 SSA 边；只有「先写后读同一 memref」的顺序约束 |
-| 判定融合合法性要什么 | 看 use-def 就够 | 先做别名分析，证明不重叠 |
-| 中间结果能否消掉 | 能（融合后 `%c` 不落地） | 已落地，只能靠后续内存优化补救 |
+| `%h` 是什么 | SSA 值，不可变 | 内存位置，可被 store 改写 |
+| 哪条边允许融合 | `relu → %h` 这条 SSA 边 | 无 SSA 边；只有「先写后读同一 memref」的顺序约束 |
+| 判定就地/融合合法性要什么 | 数 use 就够 | 先做别名分析，证明不重叠 |
+| 中间结果能否消掉 | 能（融合后不落地） | 已落地，只能靠后续内存优化补救 |
 | 适合的优化 | 融合、tiling、shape 推导 | 内存复用、向量化 load/store、对接运行时 |
 
-> 一句话：**可融合的那条边是版本 A 里的 `%c`**。bufferize 之后它退化成「对同一块内存的读写顺序」，融合的门槛就从「看一眼 use-def」升级成「证明不别名」——这就是 §5.1 那条经验法则的机械原因。
+> 一句话：**可融合的那条边活在 tensor 世界里**。bufferize 之后它退化成「对同一块内存的读写顺序」，
+> 门槛就从「看一眼 use-def」升级成「证明不别名」——这就是 §5.1 那条经验法则的机械原因，
+> 也是[链路总图](./00-end-to-end-pipeline.md)把 bufferization 标成**第 ⑤ 站单向阀**的原因。
 
-> **自测**：要把版本 B 的两个 `scf.for` 合成一个，编译器必须先证明哪几个 memref 之间的什么性质？
+> **自测**：把版本 B 的第二个 `linalg.generic` 删掉，`memref.alloc` 会少几个？先预测再跑。
 
 ### 5.2 Layout（数据布局）
 
@@ -705,7 +753,7 @@ x_{float} \approx scale \times (x_{quant} - zero\_point)
 - **CFG**：基本块 + 终结符显式列出后继。  
 - **效果**：数据流分析变便宜；「寄存器无别名」成立。
 
-你已在 [`llvm-hello-compile`](../llvm-hello-compile/) 里用 mem2reg 亲眼见过；MLIR 把同一思想推广到可嵌套 Region。
+你已在 [`llvm-hello-compile`](../../llvm-hello-compile/) 里用 mem2reg 亲眼见过；MLIR 把同一思想推广到可嵌套 Region。
 
 ### 6.2 多层 IR 与渐进 Lowering
 
@@ -724,6 +772,12 @@ flow 固化「怎么切成 dispatch」；stream 固化「时序与资源寿命�
 详见 [`mlir-learning-guide.md`](./mlir-learning-guide.md) §1、[`iree-learning-guide.md`](./iree-learning-guide.md) §2。
 
 #### 示例精讲：conv + relu 在三层的形态，以及「conv」是在哪一刀之后消失的
+
+**无 lab 对应（用 conv 换取更强的对比度）**——主角模型的 `Gemm→Relu` 在 linalg 层的样子见
+[`mlir-toy-dialect/examples/upstream/01-linalg-generic.mlir`](../../mlir-toy-dialect/examples/upstream/01-linalg-generic.mlir)，
+可以直接 `mlir-opt` 跑，还能用 `--linalg-generalize-named-ops` 看 `linalg.matmul` 展成 `linalg.generic` 的真身。
+这里换成 conv，是因为**「具名 op 消失」这件事在 conv 上最刺眼**：
+`linalg.matmul` 摊成六层循环你还能认出是矩阵乘，`conv_2d_nhwc_hwcf` 摊开后基本无法反推。
 
 **最小具体输入**：`out = relu(conv2d(in, flt))`。NHWC 输入 `1×8×8×4`，HWCF 卷积核 `3×3×4×4`，stride 1、无 padding，因此输出 `1×6×6×4`。
 
@@ -918,6 +972,11 @@ Driver ──▶ Device ──▶ Allocator ──▶ Buffer (+ BufferView: shap
 
 #### 示例精讲：两条队列 + 一个 semaphore，重叠是怎么被「表达」出来的
 
+**无 lab 对应（分布式场景，仓库暂无多设备 lab）**——但这套机制的**单设备版本**是可跑的：
+`bash iree-lab/scripts/run_phases.sh` 之后打开 `out/phases/tiny_mlp.hal.mlir`，
+搜 `hal.fence` 与 `hal.semaphore`，你会看到同一套 wait/signal 结构，只是这里只有一条时间线。
+`tiny_mlp.abi.mlir` 里的 `hal.tensor.barrier` 则是这条时间线的入口。
+
 **最小具体输入**：一个梯度张量被切成 2 块；每块先在设备上算（`mm`），再跨设备 AllReduce（`ar`）。设 `mm` 一块耗 3 个单位时间，`ar` 一块耗 2 个单位。两条队列：`Q0` 计算、`Q1` 通信。
 
 **写法 (a)：只有「host 等全部完成」这一种同步**
@@ -1005,7 +1064,7 @@ host: fence.wait(%n >= 2)                                  // 只在最后等一
 3. **放在哪个带宽域**（NVLink 域内 vs 跨节点）  
 4. **主要代价**（算力气泡 / 通信体积 / 显存）
 
-详见 [`paper-notes/01-efficient-training-distributed-infra.md`](./paper-notes/01-efficient-training-distributed-infra.md)。
+详见 [`paper-notes/01-efficient-training-distributed-infra.md`](../paper-notes/01-efficient-training-distributed-infra.md)。
 
 ### 9.2 SPMD 与分片标注（Sharding Annotation）
 
@@ -1066,26 +1125,26 @@ PagedAttention 教的是：
 
 | 轮次 | 概念 | 优先级 | 先读本文 | 再深入 |
 |------|------|--------|----------|--------|
-| **W0** | SSA / Pass / CodeGen | ★ | §6.1 · §6.3 · §7 | [`llvm-learning-guide.md`](./llvm-learning-guide.md) · [`llvm-hello-compile`](../llvm-hello-compile/) |
+| **W0** | SSA / Pass / CodeGen | ★ | §6.1 · §6.3 · §7 | [`llvm-learning-guide.md`](./llvm-learning-guide.md) · [`llvm-hello-compile`](../../llvm-hello-compile/) |
 | **W0**→W5 | 计算图 / opset / shape | ★ | §3.1 | [`onnx-learning-guide.md`](./onnx-learning-guide.md) |
-| **W1** | 分片标注进 IR | **★★** | §9.2 | [`paper-notes/01-…`](./paper-notes/01-efficient-training-distributed-infra.md) |
+| **W1** | 分片标注进 IR | **★★** | §9.2 | [`paper-notes/01-…`](../paper-notes/01-efficient-training-distributed-infra.md) |
 | **W1** | 并行四要素 / 集合通信 | ◆ | §9.1 · §9.3 | 同上 · IREE `channel` §4.8 |
 | **W1** | 内存层次 / 地址空间 | ◆ | §5.4 | 同上（显存账本与带宽域） |
-| **W2** | 渐进 lowering / Conversion | **★★** | §6.2 | [`mlir-learning-guide.md`](./mlir-learning-guide.md) · [`mlir-toy-dialect`](../mlir-toy-dialect/) |
+| **W2** | 渐进 lowering / Conversion | **★★** | §6.2 | [`mlir-learning-guide.md`](./mlir-learning-guide.md) · [`mlir-toy-dialect`](../../mlir-toy-dialect/) |
 | **W2** | tensor/buffer | ★ | §5.1 | [`mlir-learning-guide.md`](./mlir-learning-guide.md) §8 |
 | **W3** | HAL / fence（设备抽象机 + 同步） | **★★** | §8.1–8.2 | [`iree-learning-guide.md`](./iree-learning-guide.md) 第 4 章 |
-| **W3**→W5 | 委托 / 分区边界 | **★★** | §3.3 | [`executorch-learning-guide.md`](./executorch-learning-guide.md) · onnx EP 章 · 动手 [`../onnx-delegate-lab/`](../onnx-delegate-lab/) |
+| **W3**→W5 | 委托 / 分区边界 | **★★** | §3.3 | [`executorch-learning-guide.md`](./executorch-learning-guide.md) · onnx EP 章 · 动手 [`../../onnx-delegate-lab/`](../../onnx-delegate-lab/) |
 | **W3**→W6 | kernel / variant | ◆ | §7.1 · §7.3 | [`iree-learning-guide.md`](./iree-learning-guide.md) §4.7 |
-| **W4** | Roofline | ◆ | §4.3 | 实证见 [`08-flash-attention.md`](./paper-notes/08-flash-attention.md)（自选补充） |
-| **W4** | 融合四类 | ★ | §3.2 | [`tvm-learning-guide.md`](./tvm-learning-guide.md) §2.2 · [`paper-notes/05-tvm.md`](./paper-notes/05-tvm.md) |
-| **W4** | 算法/调度、tiling | ★ | §4.1–4.2 | [`paper-notes/04-halide.md`](./paper-notes/04-halide.md) · tvm §3 |
+| **W4** | Roofline | ◆ | §4.3 | 实证见 [`08-flash-attention.md`](../paper-notes/08-flash-attention.md)（自选补充） |
+| **W4** | 融合四类 | ★ | §3.2 | [`tvm-learning-guide.md`](./tvm-learning-guide.md) §2.2 · [`paper-notes/05-tvm.md`](../paper-notes/05-tvm.md) |
+| **W4** | 算法/调度、tiling | ★ | §4.1–4.2 | [`paper-notes/04-halide.md`](../paper-notes/04-halide.md) · tvm §3 |
 | **W4** | layout | ◆ | §5.2 | tvm layout 节 · EP 边界代价 |
 | **W5** | AOT vs JIT（决策时刻） | ◆ | §8.3 | [`iree-learning-guide.md`](./iree-learning-guide.md) · ORT session / ET 导出期 |
-| **W5** | 量化 | ○ | §5.3（只看结论） | [`paper-notes/06-glow.md`](./paper-notes/06-glow.md) profile-guided 量化 |
+| **W5** | 量化 | ○ | §5.3（只看结论） | [`paper-notes/06-glow.md`](../paper-notes/06-glow.md) profile-guided 量化 |
 | **W6** | fatbin / compute vs sm | ◆ | §7.2–7.3 | [`cuda-fatbin-learning-guide.md`](./cuda-fatbin-learning-guide.md) |
-| **W6** | 少量原语多后端 | ○（对照） | — | [`paper-notes/06-glow.md`](./paper-notes/06-glow.md) vs TVM |
+| **W6** | 少量原语多后端 | ○（对照） | — | [`paper-notes/06-glow.md`](../paper-notes/06-glow.md) vs TVM |
 | **W7–W8** | 四条工业栈怎么选 | ◆（学完再看） | §3.4 | [`onnx`](./onnx-learning-guide.md) · [`executorch`](./executorch-learning-guide.md) · [`iree`](./iree-learning-guide.md) · [`tvm`](./tvm-learning-guide.md) |
-| **W7–W8** | KV 分页 / 迁移直觉 | ○ | §9.5 | [`paper-notes/09-paged-attention-vllm.md`](./paper-notes/09-paged-attention-vllm.md)（自选补充） |
+| **W7–W8** | KV 分页 / 迁移直觉 | ○ | §9.5 | [`paper-notes/09-paged-attention-vllm.md`](../paper-notes/09-paged-attention-vllm.md)（自选补充） |
 
 ---
 
@@ -1145,7 +1204,7 @@ PagedAttention 教的是：
 - [ ] fatbin 与 IREE ExecutableVariant 解决的是同一个什么问题？  
 - [ ] 同一个模型要在算力网上跑，ORT EP / ExecuTorch / IREE / TVM 四条栈各自把哪个决策权交给了谁？（§3.4）
 
-### 11.4 五个最小动作（把词汇变成手感）
+### 11.4 六个最小动作（把词汇变成手感）
 
 本文只讲概念，动手在各专题文档里。但下面几件事**任何阶段都能做，且直接验证本文的核心同构**：
 
@@ -1153,11 +1212,18 @@ PagedAttention 教的是：
 |------|-------------|------------------|
 | 看一次「同一段代码在不同层的样子」 | `cd llvm-hello-compile && bash scripts/run.sh`，对比 `02_sum_O0.ll` 与 `03a_sum_mem2reg.ll` | §6.1 SSA、§6.3 Pass |
 | 看一次「渐进 lowering 丢了什么」 | `cd mlir-toy-dialect && bash scripts/all.sh`，对比 `x*4` 在 toy 层与 low 层的命运 | §6.2 渐进 lowering |
+| 看一次「tensor 与 memref 的分界」 | `cd mlir-toy-dialect && bash scripts/run_upstream.sh`，数 `02-bufferize` 里的 `memref.alloc` | §5.1 tensor vs buffer |
 | 看一次「同一算法两种 schedule」 | `cd tvm-fatbin-lab && bash scripts/run_tvm.sh`，对比 `out/tvm/01_*.lower.txt` | §4 算法/调度 |
 | 看一次「谁来划分、边界在哪」 | `cd onnx-delegate-lab && bash scripts/run.sh`，读 `out/ANALYSIS.md` | §3.3–3.4 委托/选型 |
+| 看一次「一条工业流水线的七个相位」 | `cd iree-lab && bash scripts/run.sh`，读 `out/PHASES.md` | §6.2 渐进 lowering、§8 抽象机 |
 | 看一次「一份产物里有几个变体」 | `cd tvm-fatbin-lab && bash scripts/run_fatbin.sh`（或教材第 8 章手写 `cuobjdump`） | §7.3 多变体打包 |
 
-做完这些，本文 80% 的抽象都有了对应的实物。建议顺序：前两件随时做；后三件跟阶段 4→6（schedule → 划分 → fatbin）。
+**这些不是七个孤立的实验，是同一张图（`tiny_mlp`）在七个位置的切片。**
+按[链路总图](./00-end-to-end-pipeline.md)的顺序跑一遍，你会看到同一组权重、同一个 `[2,4]` 输出
+在 ONNX proto、Relay、linalg、memref、LLVM IR、`.vmfb` 里反复出现——
+本文所有「同构」的说法，到那时都会变成你自己数出来的数字。
+
+建议顺序：前三件随时做；后四件跟阶段 4→6（schedule → 划分 → 相位 → fatbin）。
 
 ---
 

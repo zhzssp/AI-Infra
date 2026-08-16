@@ -1,0 +1,14 @@
+# iree-lab 依赖：只需 CPU 后端，无需从源码编译 IREE，也不需要 GPU。
+#
+#   pip install -r requirements.txt
+#
+# 装完后这两个命令行工具会出现在 PATH 里：
+#   iree-compile      （来自 iree-base-compiler）
+#   iree-run-module   （来自 iree-base-runtime）
+#
+# 若 pip 源上找不到，说明该平台没有预编译 wheel；此时 scripts/ 会标记
+# missing-deps 并继续生成概念性报告，不阻塞其它 lab。
+
+iree-base-compiler
+iree-base-runtime
+numpy

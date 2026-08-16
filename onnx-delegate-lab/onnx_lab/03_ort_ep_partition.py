@@ -18,22 +18,38 @@ from lab_common import banner, out_dir, require_onnx, write_text
 
 
 def build_partition_demo_model(onnx):
-    """A slightly richer graph: Gemm+Relu may go to accel EP; Softmax often stays CPU."""
+    """主角模型 tiny_mlp 的加长版：后面接 Softmax + ReduceSum。
+
+    为什么要加这两个尾巴：主角模型的三个 op（Gemm/Relu/Add）在几乎所有 EP 上都被支持，
+    整图会被一个 EP 全吃掉——**没有边界就观察不到边界代价**。
+    Softmax 与 ReduceSum 是常见的「有些 EP 不接或实现较弱」的算子，
+    于是切开点大概率落在 Add 与 Softmax 之间，正好给研究问题① 一个最小实验室。
+
+    前四个节点与 onnx_lab/01_build_and_infer.py 逐位相同（含 transB=1 与形状）。
+    """
     from onnx import TensorProto, helper, numpy_helper
 
     rng = np.random.default_rng(1)
-    W = numpy_helper.from_array(rng.standard_normal((8, 4), dtype=np.float32), name="W")
-    b = numpy_helper.from_array(rng.standard_normal((8,), dtype=np.float32), name="b")
+    # 与 01 一致：W 是 [out, in]=[4,3]，所以 Gemm 必须带 transB=1
+    W = numpy_helper.from_array(rng.standard_normal((4, 3), dtype=np.float32), name="W")
+    b = numpy_helper.from_array(rng.standard_normal((4,), dtype=np.float32), name="b")
+    bias2 = numpy_helper.from_array(np.ones(4, dtype=np.float32), name="bias2")
 
     nodes = [
-        helper.make_node("Gemm", ["x", "W", "b"], ["h"], name="gemm"),
+        helper.make_node("Gemm", ["x", "W", "b"], ["h"], name="gemm", transB=1),
         helper.make_node("Relu", ["h"], ["h_act"], name="relu"),
-        helper.make_node("Softmax", ["h_act"], ["prob"], name="softmax", axis=1),
+        helper.make_node("Add", ["h_act", "bias2"], ["mlp_out"], name="add"),
+        # ↓ 以下两个只为制造 EP 边界而存在
+        helper.make_node("Softmax", ["mlp_out"], ["prob"], name="softmax", axis=1),
         helper.make_node("ReduceSum", ["prob"], ["y"], name="reducesum", keepdims=0),
     ]
-    X = helper.make_tensor_value_info("x", TensorProto.FLOAT, [2, 4])
+    # 这里 batch 写死成 2（不像 01 那样用 None）：分区决策常依赖静态 shape，
+    # 动态维过多时 EP 可能直接拒绝接管——那样就观察不到分区了。
+    X = helper.make_tensor_value_info("x", TensorProto.FLOAT, [2, 3])
     Y = helper.make_tensor_value_info("y", TensorProto.FLOAT, [])
-    graph = helper.make_graph(nodes, "partition_demo", [X], [Y], initializer=[W, b])
+    graph = helper.make_graph(
+        nodes, "partition_demo", [X], [Y], initializer=[W, b, bias2]
+    )
     model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 17)])
     model.ir_version = onnx.IR_VERSION
     return model
@@ -52,7 +68,7 @@ def run_with_providers(ort, model_path: Path, providers, tag: str, out: Path):
         return {"error": str(e), "requested": providers, "active": []}
 
     active = sess.get_providers()
-    x = np.random.randn(2, 4).astype(np.float32)
+    x = np.random.randn(2, 3).astype(np.float32)
     sess.run(None, {"x": x})
     prof = sess.end_profiling()
 
@@ -91,14 +107,26 @@ def conceptual_boundary_note(nodes):
         "| 节点 | 常见归属直觉 |",
         "|------|--------------|",
     ]
+    fast = ("Gemm", "MatMul", "Conv", "Relu", "Add")
     for n in nodes:
-        guess = "常被 CUDA/TRT 类 EP 优先吃掉" if n in ("Gemm", "MatMul", "Conv", "Relu") else "常留在 CPU 或单独成区（归约/特殊实现）"
+        guess = (
+            "常被 CUDA/TRT 类 EP 优先吃掉"
+            if n in fast
+            else "常留在 CPU 或单独成区（归约/特殊实现）"
+        )
         lines.append(f"| {n} | {guess} |")
     lines += [
         "",
         "打开双 EP（如 `CUDAExecutionProvider` + `CPUExecutionProvider`）后，",
         "用 profile / optimized graph **验证**边界是否落在 Softmax / ReduceSum 之前——",
         "那就是研究问题①的最小实验室。",
+        "",
+        "**关键在于边界落在哪，而不是有没有边界。**",
+        "前三个节点（Gemm→Relu→Add）就是主角模型 tiny_mlp：",
+        "它们如果归到同一个 EP，中间张量 `h` / `h_act` 才有机会不落 DRAM；",
+        "一旦有人把 Relu 判给另一个后端，**融合窗口就永久关闭了**——",
+        "下游的 TVM 融合、IREE dispatch 谁都补不回来。",
+        "这条对照见 docs/learning-guides/00-end-to-end-pipeline.md 第 5 章断链表第 ② 行。",
     ]
     return "\n".join(lines)
 

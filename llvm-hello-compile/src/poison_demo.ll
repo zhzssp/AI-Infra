@@ -1,6 +1,6 @@
 ; =============================================================================
 ; poison_demo.ll —— 手写 4 个小函数，专门观察 poison / undef / freeze
-;   对应 docs/llvm-learning-guide.md §2.7 与 docs/notes/llvm-poison-ub.md
+;   对应 docs/learning-guides/llvm-learning-guide.md §2.7 与 docs/notes/llvm-poison-ub.md
 ;
 ; 怎么玩：
 ;   opt -S -passes='instcombine' src/poison_demo.ll     ← 看优化器怎么利用 poison

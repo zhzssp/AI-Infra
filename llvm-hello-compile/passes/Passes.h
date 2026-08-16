@@ -1,7 +1,7 @@
 //===----------------------------------------------------------------------===//
 // Passes.h —— 自定义 Pass 声明（LLVM 17 New PassManager 风格）
 //
-// 五个 pass 刚好把 docs/llvm-learning-guide.md 第 3 章的要点占满：
+// 五个 pass 刚好把 docs/learning-guides/llvm-learning-guide.md 第 3 章的要点占满：
 //
 //   pass              层级      类型    PreservedAnalyses 返回值
 //   ---------------------------------------------------------------------

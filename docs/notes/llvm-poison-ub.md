@@ -1,6 +1,6 @@
 # poison、UB 与「坏路径不会被用到」
 
-> 来源：[`llvm-learning-guide.md`](../llvm-learning-guide.md) §2.7
+> 来源：[`llvm-learning-guide.md`](../learning-guides/llvm-learning-guide.md) §2.7
 
 ## poison 表达什么
 

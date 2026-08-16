@@ -5,8 +5,8 @@
 > - 目标读者是"要在算力网上做多后端委托 / 子图划分"的编译器/系统工程师。
 > - **前 5 章建立 ONNX IR 坐标系（约 45% 篇幅），第 7 章是重点：ORT EP 机制（约 30% 篇幅）**，第 6、8、9 章是工程手感、研究问题对接与学习路径。
 > - ExecuTorch 的 `Partitioner` / `to_backend` 是**另一篇文档**：[executorch-learning-guide.md](./executorch-learning-guide.md)。本文只点明「ORT EP 是工业界子图分区接口；PyTorch 侧委托见 ExecuTorch 文档」，不重复 Partitioner 全章。
-> - **先修**：[`ai-compiler-foundations.md`](./ai-compiler-foundations.md) §3（计算图、融合、子图划分与四类边界代价）。
-> - **动手项目**：[`../onnx-delegate-lab/`](../onnx-delegate-lab/) —— `bash scripts/run.sh`（ONNX 轨），先读 `out/ANALYSIS.md`。
+> - **先修**：[`ai-compiler-foundations.md`](./ai-compiler-foundations-learning-guide.md) §3（计算图、融合、子图划分与四类边界代价）。
+> - **动手项目**：[`../../onnx-delegate-lab/`](../../onnx-delegate-lab/) —— `bash scripts/run.sh`（ONNX 轨），先读 `out/ANALYSIS.md`。
 >
 > **一句话读法**：如果只有一小时，读[第 1 章坐标系](#第-1-章-onnx-是什么一分钟建立坐标系)、[2.1 结构总览](#21-总览从文件到节点)、第 7 章 ORT EP 机制、[附录速查](#附录一页速查)。
 >
@@ -16,8 +16,36 @@
 > - Shape 推断：https://github.com/onnx/onnx/blob/main/docs/ShapeInference.md
 > - ORT EP 总览：https://onnxruntime.ai/docs/execution-providers/
 > - 根 README §4.2（必学清单与动手验收）+ §6（六个研究问题）
-> - 融合对照：[paper-notes/05-tvm.md](./paper-notes/05-tvm.md) §3.1（四类算子融合）；动手对照 [`../tvm-fatbin-lab/`](../tvm-fatbin-lab/)
-> - 自学枢纽：[docs/README.md](./README.md) 阶段 4
+> - 融合对照：[paper-notes/05-tvm.md](../paper-notes/05-tvm.md) §3.1（四类算子融合）；动手对照 [`../../tvm-fatbin-lab/`](../../tvm-fatbin-lab/)
+> - 自学枢纽：[docs/README.md](../README.md) 阶段 4
+
+---
+
+### 本篇在链路中的位置
+
+> 全局链路见 [`00-end-to-end-pipeline.md`](./00-end-to-end-pipeline.md)。本篇覆盖**第 ① 站（表示）与第 ② 站（划分）**，是整条链路的**入口**——这里丢掉的信息，后面六站谁都补不回来。
+
+```text
+【① 表示 ← 本篇 2–6 章】──▶【② 划分 ← 本篇第 7 章】──▶ ③ 融合 ──▶ ④ 调度 ──▶ ⑤ 降低 ──▶ ⑥ 指令 ──▶ ⑦ 打包
+   模型怎么被写下来              谁来算哪一段
+```
+
+| | |
+|--|--|
+| **上游交给我** | 一个训练框架里的模型 |
+| **我固化** | ① shape 与 dtype 是常量还是动态、算子语义按哪个 opset 解释<br>② kernel 边界落在哪、边界上要付哪四类代价 |
+| **我交给下游** | 一张已经定好边界的子图 |
+| **本篇的主角** | [`../../onnx-delegate-lab/onnx_lab/01_build_and_infer.py`](../../onnx-delegate-lab/onnx_lab/01_build_and_infer.py) 建的 `tiny_mlp`：`Gemm(transB=1) → Relu → Add` |
+
+**为什么说这里是单向阀**：把 batch 写成动态维，下游的 tile 因子与向量宽度就只能保守取；
+把 Relu 判给另一个后端，中间张量就被强制物化、融合窗口永久关闭。
+断链表（[链路总图第 5 章](./00-end-to-end-pipeline.md)）里 ① 和 ② 都标着"不能补救"。
+
+| 章节 | 示例来自 | 怎么跑 |
+|------|---------|--------|
+| 第 2 章（三件套 proto）、3.3（属性 vs 输入）、5.3（shape 推断）、6.1（构图） | `onnx_lab/01_build_and_infer.py` | `bash scripts/run.sh` → `out/onnx/01_READING.md` |
+| 3.1（拓扑序）、第 6 章（改图） | `onnx_lab/02_mutate_graph.py` | 同上 → `out/onnx/02_*` |
+| 第 7 章（EP 划分与边界代价） | `onnx_lab/03_ort_ep_partition.py` | 同上 → `out/onnx/03_*` |
 
 ---
 
@@ -106,7 +134,7 @@
 
 ## 第 2 章 模型结构层次详解
 
-> **速记**：[notes/protobuf-grpc-explained.md](./notes/protobuf-grpc-explained.md) —— 为什么 ONNX 用 Protobuf？Protobuf 与 gRPC 什么关系？
+> **速记**：[../notes/protobuf-grpc-explained.md](../notes/protobuf-grpc-explained.md) —— 为什么 ONNX 用 Protobuf？Protobuf 与 gRPC 什么关系？
 
 ### 2.1 总览：从文件到节点
 
@@ -128,52 +156,64 @@
 
 **记忆口诀**：Model 装元数据与能力声明；Graph 装拓扑与常量；Node 装一次算子调用；边不是指针，而是**共享的字符串名字**。
 
-#### 示例精讲：`Gemm → Relu` 从构图到 `print(model)`
+#### 示例精讲：`tiny_mlp` 从构图到 `print(model)`
 
-最小具体输入：一层线性 + 一个激活，权重全部只走 `initializer`。
+**可跑** · 源码 [`onnx-delegate-lab/onnx_lab/01_build_and_infer.py`](../../onnx-delegate-lab/onnx_lab/01_build_and_infer.py) · 产物 `out/onnx/01_tiny_mlp.onnx`、`out/onnx/01_READING.md`
+
+```bash
+cd onnx-delegate-lab && pip install -r requirements.txt && bash scripts/run.sh
+python -c "import onnx;print(onnx.load('out/onnx/01_tiny_mlp.onnx'))"
+```
+
+这是**全仓库的图级主角**：同一个模型在 linalg、IREE、TVM 里的样子见[链路总图](./00-end-to-end-pipeline.md)。
 
 ```python
-import numpy as np
-import onnx
-from onnx import helper, numpy_helper, checker, TensorProto
+# W 用 [out, in] 布局：与 torch.nn.Linear(3,4).weight、TVM relay.nn.dense 的权重一致，
+# 所以同一份权重能在三个系统之间直接搬——代价是 Gemm 必须声明 transB=1。
+W = numpy_helper.from_array(rng.standard_normal((4, 3), dtype=np.float32), name="W")
+b = numpy_helper.from_array(rng.standard_normal((4,), dtype=np.float32), name="b")
+bias2 = numpy_helper.from_array(np.ones(4, dtype=np.float32), name="bias2")
 
-W = numpy_helper.from_array(np.zeros((3, 4), np.float32), name="W")   # Gemm 的 B
-b = numpy_helper.from_array(np.zeros((4,), np.float32), name="b")     # Gemm 的 C
+gemm = helper.make_node("Gemm", ["x", "W", "b"], ["h"], name="gemm", transB=1)
+relu = helper.make_node("Relu", ["h"], ["h_act"], name="relu")
+add  = helper.make_node("Add", ["h_act", "bias2"], ["y"], name="add")
 
-gemm = helper.make_node("Gemm", ["x", "W", "b"], ["h"], name="gemm0")
-relu = helper.make_node("Relu", ["h"], ["y"], name="relu0")
-
-X = helper.make_tensor_value_info("x", TensorProto.FLOAT, [1, 3])
-Y = helper.make_tensor_value_info("y", TensorProto.FLOAT, [1, 4])
-
-graph = helper.make_graph([gemm, relu], "gemm_relu", [X], [Y], initializer=[W, b])
-model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 17)],
-                          producer_name="ai-infra-demo")
-model.ir_version = onnx.IR_VERSION
-checker.check_model(model)
-print(model)          # protobuf 文本格式
+X = helper.make_tensor_value_info("x", TensorProto.FLOAT, [None, 3])   # batch 动态
+Y = helper.make_tensor_value_info("y", TensorProto.FLOAT, [None, 4])
+graph = helper.make_graph([gemm, relu, add], "tiny_mlp", [X], [Y],
+                          initializer=[W, b, bias2])
 ```
+
+**`transB=1` 是这段里最值得停一下的地方。** `W` 的形状是 `[4,3]` = `[out, in]`，
+而 `Gemm` 默认要求 `B` 是 `[in, out]`。这里不转置数据，而是**声明一个属性**让算子换个读法。
+同一件事在 linalg 里写成 `#mapW = affine_map<(m,n,k)->(n,k)>`，
+在 TVM 里由 `nn.dense` 的权重约定隐含——三套系统选了同一个布局，
+因为它让每个输出通道的权重在内存里连续。**属性决定权重怎么被读**，这是 layout 话题的最小样本。
 
 `print(model)` 的关键字段（省略 `raw_data` 与空字段）：
 
 ```protobuf
 ir_version: 10                      # = onnx.IR_VERSION，随本地 onnx 版本变化
-producer_name: "ai-infra-demo"
+producer_name: "onnx-delegate-lab"
 graph {
-  node { input: "x" input: "W" input: "b" output: "h" name: "gemm0" op_type: "Gemm" }
-  node { input: "h" output: "y" name: "relu0" op_type: "Relu" }
-  name: "gemm_relu"
-  initializer { dims: 3 dims: 4 data_type: 1 name: "W" raw_data: "..." }
+  node { input: "x" input: "W" input: "b" output: "h" name: "gemm" op_type: "Gemm"
+         attribute { name: "transB" i: 1 type: INT } }
+  node { input: "h" output: "h_act" name: "relu" op_type: "Relu" }
+  node { input: "h_act" input: "bias2" output: "y" name: "add" op_type: "Add" }
+  name: "tiny_mlp"
+  initializer { dims: 4 dims: 3 data_type: 1 name: "W" raw_data: "..." }
   initializer { dims: 4 data_type: 1 name: "b" raw_data: "..." }
+  initializer { dims: 4 data_type: 1 name: "bias2" raw_data: "..." }
   input  { name: "x" type { tensor_type { elem_type: 1
-           shape { dim { dim_value: 1 } dim { dim_value: 3 } } } } }
+           shape { dim { dim_param: "..." } dim { dim_value: 3 } } } } }
   output { name: "y" type { tensor_type { elem_type: 1
-           shape { dim { dim_value: 1 } dim { dim_value: 4 } } } } }
+           shape { dim { dim_param: "..." } dim { dim_value: 4 } } } } }
 }
 opset_import { version: 17 }        # 没有 domain 行 = 默认 domain 是空字符串
 ```
 
-（真实输出每个字段单独一行；这里把 `node` / `shape` 压成一行省篇幅。`data_type: 1` = `TensorProto.FLOAT`。）
+（真实输出每个字段单独一行；这里把 `node` / `shape` 压成一行省篇幅。`data_type: 1` = `TensorProto.FLOAT`。
+`dim_param` 是给动态维自动起的符号名，**不是 `dim_value: 0`**——这个区别在第 5 章要用。）
 
 内存里是同构的对象树：
 
@@ -181,13 +221,16 @@ opset_import { version: 17 }        # 没有 domain 行 = 默认 domain 是空�
 ModelProto                                   ← model
 ├─ ir_version = 10
 ├─ opset_import[0] = OperatorSetIdProto(domain="", version=17)
-├─ producer_name  = "ai-infra-demo"
+├─ producer_name  = "onnx-delegate-lab"
 └─ graph : GraphProto                        ← model.graph
-   ├─ name = "gemm_relu"
-   ├─ node[0] : NodeProto  op_type="Gemm"  input=["x","W","b"]  output=["h"]
-   ├─ node[1] : NodeProto  op_type="Relu"  input=["h"]          output=["y"]
-   ├─ initializer[0] : TensorProto  name="W"  dims=[3,4]
-   ├─ initializer[1] : TensorProto  name="b"  dims=[4]
+   ├─ name = "tiny_mlp"
+   ├─ node[0] : NodeProto  op_type="Gemm"  input=["x","W","b"]      output=["h"]
+   │              └─ attribute[0] : AttributeProto  name="transB" i=1
+   ├─ node[1] : NodeProto  op_type="Relu"  input=["h"]              output=["h_act"]
+   ├─ node[2] : NodeProto  op_type="Add"   input=["h_act","bias2"]  output=["y"]
+   ├─ initializer[0] : TensorProto  name="W"      dims=[4,3]
+   ├─ initializer[1] : TensorProto  name="b"      dims=[4]
+   ├─ initializer[2] : TensorProto  name="bias2"  dims=[4]
    ├─ input[0]  : ValueInfoProto  name="x"
    └─ output[0] : ValueInfoProto  name="y"
 ```
@@ -197,13 +240,15 @@ ModelProto                                   ← model
 | 文本里看到 | Python 访问 | 它是「节点」还是「边」 |
 |-----------|------------|--------------------|
 | `op_type: "Gemm"` | `model.graph.node[0].op_type` | 节点：一次算子调用 |
+| `attribute { name: "transB" }` | `node[0].attribute[0].i` | **都不是**：编译期常量，图上不占边 |
 | `output: "h"` / `input: "h"` | `node[0].output[0]` / `node[1].input[0]` | 边：同名字符串把两个节点接起来 |
 | `initializer { name: "W" }` | `model.graph.initializer[0]` | 常量定义；`W` 不出现在 `graph.input` |
 | `input { name: "x" }` | `model.graph.input[0]` | 唯一需要运行时喂的值 |
 
-中间值 `h` 在 `graph.value_info` 里**没有条目**——中间值的类型注解不是必须的，要靠[第 5 章](#第-5-章-shape-inference能推什么推不出什么)的 `infer_shapes` 补出来。
+中间值 `h` / `h_act` 在 `graph.value_info` 里**没有条目**——中间值的类型注解不是必须的，要靠[第 5 章](#第-5-章-shape-inference能推什么推不出什么)的 `infer_shapes` 补出来。lab 会把补出来的结果打进 `01_READING.md`。
 
 > **自测**：把 `W` 也加进 `graph.input` 之后，`sess.get_inputs()` 会多出什么，模型为什么仍然合法？
+> 改 `01_build_and_infer.py` 试一次——`checker` 不会拦你，这正是坑的所在。
 
 ### 2.2 ModelProto：元数据与能力声明
 
@@ -301,66 +346,60 @@ ValueInfoProto
 - `dims` + `data_type` + 数据字段（`float_data` / `raw_data` / …）；
 - 大权重可用 **external data**（另文件 + offset/length），避免把 GB 级权重塞进单个 protobuf。
 
-#### 示例精讲：一个 Conv 节点的三件套 proto
+#### 示例精讲：一个 Gemm 节点的三件套 proto
 
-最小具体输入：`img[N,3,32,32] → Conv(3×3, 8 输出通道, pad=1) → feat`。
+**可跑** · 主角模型的第一个节点 · 源码 [`onnx_lab/01_build_and_infer.py`](../../onnx-delegate-lab/onnx_lab/01_build_and_infer.py)
 
 ```python
-conv = helper.make_node(
-    "Conv", ["img", "conv_w", "conv_b"], ["feat"], name="conv0",
-    kernel_shape=[3, 3], strides=[1, 1], pads=[1, 1, 1, 1], dilations=[1, 1], group=1,
-)
+gemm = helper.make_node("Gemm", ["x", "W", "b"], ["h"], name="gemm", transB=1)
 ```
 
-**NodeProto**（`print(conv)`，属性按名字排序）：
+**NodeProto**（`print(gemm)`）：
 
 ```protobuf
-input: "img"
-input: "conv_w"
-input: "conv_b"
-output: "feat"
-name: "conv0"
-op_type: "Conv"
-attribute { name: "dilations"    ints: 1 ints: 1                 type: INTS }
-attribute { name: "group"        i: 1                            type: INT  }
-attribute { name: "kernel_shape" ints: 3 ints: 3                 type: INTS }
-attribute { name: "pads"         ints: 1 ints: 1 ints: 1 ints: 1 type: INTS }
-attribute { name: "strides"      ints: 1 ints: 1                 type: INTS }
+input: "x"
+input: "W"
+input: "b"
+output: "h"
+name: "gemm"
+op_type: "Gemm"
+attribute { name: "transB" i: 1 type: INT }
 ```
 
-**TensorProto**（`initializer` 里的权重，8×3×3×3）：
+`Gemm` 还有 `alpha` / `beta` / `transA` 三个属性没写——**省略等于取 opset 规定的默认值**
+（`alpha=1.0`、`beta=1.0`、`transA=0`），不是"没有"。读别人的模型时不要因为字段缺失就以为该行为不存在。
+
+**TensorProto**（`initializer` 里的权重，`[out,in] = [4,3]`）：
 
 ```protobuf
 initializer {
-  dims: 8  dims: 3  dims: 3  dims: 3
+  dims: 4  dims: 3
   data_type: 1                   # TensorProto.FLOAT
-  name: "conv_w"                 # ← 必须与 node.input[1] 同名
-  raw_data: "\000\000\200?..."   # 8*3*3*3*4 = 864 字节，小端裸内存
+  name: "W"                      # ← 必须与 node.input[1] 同名
+  raw_data: "\000\000\200?..."   # 4*3*4 = 48 字节，小端裸内存
 }
 ```
 
-权重大到不想塞进 protobuf 时换成 external data，数据字段整个消失：
+权重大到不想塞进 protobuf 时换成 external data，数据字段整个消失（真实模型里几百 MB 的权重都走这条路）：
 
 ```protobuf
   data_location: EXTERNAL
   external_data { key: "location" value: "weights.bin" }
   external_data { key: "offset"   value: "0" }
-  external_data { key: "length"   value: "864" }
+  external_data { key: "length"   value: "48" }
 ```
 
-**ValueInfoProto**（图输入 `img`，第 0 维是符号维）：
+**ValueInfoProto**（图输入 `x`，第 0 维是动态维）：
 
 ```protobuf
 input {
-  name: "img"                    # ← 必须与 node.input[0] 同名
+  name: "x"                      # ← 必须与 node.input[0] 同名
   type {
     tensor_type {
       elem_type: 1               # 与 TensorProto.data_type 共用同一套枚举
       shape {
-        dim { dim_param: "N" }   # 符号维
+        dim { dim_param: "..." } # 动态 batch：helper 会自动起一个符号名
         dim { dim_value: 3 }
-        dim { dim_value: 32 }
-        dim { dim_value: 32 }
       }
     }
   }
@@ -371,14 +410,15 @@ input {
 
 | 名字 | 定义在哪 | 使用在哪 | 谁描述它的类型/形状 |
 |------|---------|---------|------------------|
-| `img` | `graph.input[i]`（ValueInfoProto） | `conv0.input[0]` | 就是那个 ValueInfoProto |
-| `conv_w` | `graph.initializer[j]`（TensorProto） | `conv0.input[1]` | TensorProto 自带 `dims` + `data_type` |
-| `conv_b` | 同上 | `conv0.input[2]` | 同上 |
-| `feat` | `conv0.output[0]`（SSA 定义点） | 下游节点的 `input` | 跑过 shape inference 后才在 `graph.value_info` 里出现 |
+| `x` | `graph.input[0]`（ValueInfoProto） | `gemm.input[0]` | 就是那个 ValueInfoProto |
+| `W` | `graph.initializer[0]`（TensorProto） | `gemm.input[1]` | TensorProto 自带 `dims` + `data_type` |
+| `b` | 同上 | `gemm.input[2]` | 同上 |
+| `h` | `gemm.output[0]`（SSA 定义点） | `relu.input[0]` | 跑过 shape inference 后才在 `graph.value_info` 里出现 |
 
 一句话记住分工：**TensorProto 带数据、ValueInfoProto 只带类型、NodeProto 两个都不带，只带名字。**
 
-> **自测**：这段 proto 里能读出 `feat` 的形状吗？要拿到它得先调用什么？
+> **自测**：这段 proto 里能读出 `h` 的形状吗？要拿到它得先调用什么？
+> 跑 lab 后看 `out/onnx/01_READING.md` 的「infer_shapes 后可见」一行对答案。
 
 ### 2.5 Functions：模型本地函数
 
@@ -402,6 +442,43 @@ input {
 - 图是 **DAG**；节点依赖由数据名字引用建立。
 - `node` 列表 **MUST 拓扑有序**：若 K 在列表中位于 N 之后，则 N 的任何输入都不得引用 K 的输出。
 - 这让单次正向扫描即可调度，也让许多图改写（插入/删除节点）必须维护拓扑序。
+
+#### 示例精讲：插一个探针节点，为什么不能 `append`
+
+**可跑** · 源码 [`onnx_lab/02_mutate_graph.py`](../../onnx-delegate-lab/onnx_lab/02_mutate_graph.py) · 产物 `out/onnx/02_tiny_mlp_mutated.onnx`
+
+想在主角模型的 `relu` 之后插一个 `Identity` 探针（用来观测中间张量），要做两件事：
+
+```python
+# ① 把原来读 h_act 的下游（add）改接到新名字
+for node in graph.node:
+    for i, inp in enumerate(list(node.input)):
+        if inp == "h_act":
+            node.input[i] = "h_act_probe"
+
+# ② 探针必须插在【生产者紧后面】，不能 append 到末尾
+probe = helper.make_node("Identity", ["h_act"], ["h_act_probe"], name="probe_identity")
+graph.node.insert(producer_idx + 1, probe)
+```
+
+只做 ① 不做 ②（也就是写成 `graph.node.append(probe)`），节点顺序会变成：
+
+```text
+gemm → relu → add(读 h_act_probe) → probe_identity(定义 h_act_probe)
+                    ▲ 用在前                          ▲ 定义在后 —— 违反拓扑序
+```
+
+`checker.check_model` 当场拒绝：
+
+```text
+Node (add) input 'h_act_probe' is not output of any previous nodes.
+```
+
+**这条规则不是形式主义**：ORT 建 session 时是单次正向扫描建执行序，MLIR / IREE 导入时也假设 SSA 的 def 先于 use。
+拓扑序一破，下游所有「按顺序扫一遍」的算法都得先做一次排序才能继续——所以 IR 干脆把它列为硬约束。
+
+对照 [`mlir-learning-guide.md`](./mlir-learning-guide.md)：MLIR 里同一条约束叫 **Dominance**，
+而且更严（不仅要顺序在前，还要支配），由 verifier 统一检查。
 
 ### 3.2 值名字 ≈ SSA 字符串
 
@@ -438,50 +515,53 @@ graph.output:  "z"
 
 #### 示例精讲：合法 3 节点图 vs 把 attribute 误做 input
 
-合法版：`x → MatMul(W) → Add(b) → Softmax(axis=-1) → y`。
+**可跑（合法版）** · 就是主角模型 [`onnx_lab/01_build_and_infer.py`](../../onnx-delegate-lab/onnx_lab/01_build_and_infer.py)
 
 ```python
-W = numpy_helper.from_array(np.zeros((3, 4), np.float32), name="W")
-b = numpy_helper.from_array(np.zeros((4,), np.float32), name="b")
-
-nodes = [
-    helper.make_node("MatMul",  ["x", "W"],  ["h"],  name="mm0"),
-    helper.make_node("Add",     ["h", "b"],  ["h2"], name="add0"),
-    helper.make_node("Softmax", ["h2"],      ["y"],  name="sm0", axis=-1),  # axis 是属性
-]
+gemm = helper.make_node("Gemm", ["x", "W", "b"], ["h"], name="gemm", transB=1)  # transB 是属性
+relu = helper.make_node("Relu", ["h"], ["h_act"], name="relu")
+add  = helper.make_node("Add", ["h_act", "bias2"], ["y"], name="add")
 ```
 
 对应文本（只列关键行）：
 
 ```protobuf
-node { input: "x"  input: "W" output: "h"  name: "mm0"  op_type: "MatMul" }
-node { input: "h"  input: "b" output: "h2" name: "add0" op_type: "Add" }
-node { input: "h2"            output: "y"  name: "sm0"  op_type: "Softmax"
-       attribute { name: "axis" i: -1 type: INT } }
+node { input: "x" input: "W" input: "b" output: "h" name: "gemm" op_type: "Gemm"
+       attribute { name: "transB" i: 1 type: INT } }
+node { input: "h"                  output: "h_act" name: "relu" op_type: "Relu" }
+node { input: "h_act" input: "bias2" output: "y"   name: "add"  op_type: "Add" }
 ```
 
 逐条对上本章三条规则：
 
 | 规则 | 这张图怎么满足的 |
 |------|---------------|
-| 拓扑有序（3.1） | `mm0` 定义 `h` 排在 `add0` 使用 `h` 之前；把 `node` 列表倒过来写就非法 |
-| 输出 SSA（3.2） | `h` / `h2` / `y` 互不相同，也不与 `x` / `W` / `b` 撞名 |
-| 属性 vs 输入（3.3） | `axis` 走属性（构图时定死）；`W` / `b` 走 input + initializer（数据流上的常量） |
+| 拓扑有序（3.1） | `gemm` 定义 `h` 排在 `relu` 使用 `h` 之前；把 `node` 列表倒过来写就非法 |
+| 输出 SSA（3.2） | `h` / `h_act` / `y` 互不相同，也不与 `x` / `W` / `b` / `bias2` 撞名 |
+| 属性 vs 输入（3.3） | `transB` 走属性（构图时定死）；`W` / `b` / `bias2` 走 input + initializer |
 
-反例：把 `axis` 做成第 2 个输入。
+**`transB` 是理解"属性 vs 输入"最好的例子**：它不是数据，是**读数据的方式**。
+放进属性意味着编译期就知道权重该怎么读，`W` 的内存布局在图上是确定的；
+如果它是运行时输入，那么每次推理前都得先看一眼才知道怎么访存——
+**融合、tiling、向量化全部无从谈起**。这就是"属性 = 编译期常量"的实际分量。
+
+反例：把 `transB` 做成第 4 个输入。
 
 ```python
-axis = numpy_helper.from_array(np.array([-1], np.int64), name="axis")
-bad = helper.make_node("Softmax", ["h2", "axis"], ["y"], name="sm_bad")   # 多了一个 input
+t = numpy_helper.from_array(np.array([1], np.int64), name="transB_val")
+bad = helper.make_node("Gemm", ["x", "W", "b", "transB_val"], ["h"], name="gemm_bad")
 ```
 
 `checker.check_model` 直接拒绝（报错信息示意，措辞随版本变化）：
 
 ```text
-onnx.checker.ValidationError: Node (sm_bad) has input size 2 not in range [min=1, max=1]
+onnx.checker.ValidationError: Node (gemm_bad) has input size 4 not in range [min=2, max=3]
 ```
 
-因为 opset 17 的 `Softmax` 签名就是「1 输入 1 输出 + `axis` 属性」——**签名由 opset 钉死，不是可选风格**（见 [4.1](#41-算子身份三元组)）。
+因为 opset 17 的 `Gemm` 签名就是「2～3 输入 1 输出 + `alpha/beta/transA/transB` 属性」——**签名由 opset 钉死，不是可选风格**（见 [4.1](#41-算子身份三元组)）。
+
+> 想亲手看这条报错，把上面两行加进 `01_build_and_infer.py` 的 `checker.check_model` 之前即可。
+> 注意 §6.1 那个 `transB` **漏写**的坑 `checker` 反而不拦——**它查签名，不查维度**。
 
 就算换成本来就允许该参数走输入的算子（例如 opset≥5 的 `Reshape`，`shape` 确实是 input），把编译期常量塞进数据流仍然有代价：
 
@@ -614,7 +694,25 @@ onnx.save(inferred, "model.shaped.onnx")
 
 #### 示例精讲：`[None, 3]` 进来，`infer_shapes` 之后拿到什么
 
-最小具体输入：动态 batch 的 `x`，先与一个 `[5,3]` 常量沿 axis=0 拼接，再做 MatMul。
+**可跑（第一半）** · 主角模型 [`onnx_lab/01_build_and_infer.py`](../../onnx-delegate-lab/onnx_lab/01_build_and_infer.py) · 产物 `out/onnx/01_READING.md`
+
+主角模型的输入就写成 `[None, 3]`。`infer_shapes` 之后，lab 会把每个中间值推出来的 shape 打进
+`01_READING.md` 的「infer_shapes 后可见」一行。**先自己预测再看**：
+
+| 值 | 推断前 | 推断后你猜是什么 |
+|----|--------|----------------|
+| `h`（Gemm 输出） | 无条目 | ? |
+| `h_act`（Relu 输出） | 无条目 | ? |
+| `y`（图输出） | `[None, 4]` | ? |
+
+答案的规律是：**通道维（4）能推出来，batch 维推不出来**——因为它本来就不知道。
+`Gemm` 的输出列数由 `W` 的 shape 决定（编译期常量），行数跟着输入走（运行期才有）。
+这一行"推不出来"就是[链路总图](./00-end-to-end-pipeline.md)断链表里的第 ① 条：
+**tile 因子和向量宽度只能保守取，而且下游补不回来**。想看它在下游具体贵多少，
+跑 [`iree-lab/scripts/run_variants.sh`](../../iree-lab/scripts/run_variants.sh) 实验 A。
+
+**第二半（无 lab 对应）**：上面那个模型太"顺"了，看不出推断的**能力边界**。
+换一个会卡住的：动态 batch 的 `x`，先与一个 `[5,3]` 常量沿 axis=0 拼接，再做 MatMul。
 
 ```python
 import numpy as np, onnx
@@ -689,18 +787,21 @@ value_info {
 
 ### 6.1 手工构造三层小图（Linear → ReLU → Add）
 
+**可跑** · 这一节的代码就是 [`onnx_lab/01_build_and_infer.py`](../../onnx-delegate-lab/onnx_lab/01_build_and_infer.py) 本身，不用另抄。
+
 ```python
 import numpy as np
 import onnx
 from onnx import helper, TensorProto, numpy_helper, checker, shape_inference
 
-# 权重
+# 权重：W 用 [out, in] 布局，与 nn.Linear / relay.nn.dense 一致
 W = numpy_helper.from_array(np.random.randn(4, 3).astype(np.float32), name="W")
 b = numpy_helper.from_array(np.random.randn(4).astype(np.float32), name="b")
 bias2 = numpy_helper.from_array(np.ones(4, dtype=np.float32), name="bias2")
 
 # 节点：Gemm → Relu → Add
-gemm = helper.make_node("Gemm", ["x", "W", "b"], ["h"], name="gemm")
+# ★ transB=1 不能漏：W 是 [4,3]=[out,in]，而 Gemm 默认要求 B 是 [in,out]
+gemm = helper.make_node("Gemm", ["x", "W", "b"], ["h"], name="gemm", transB=1)
 relu = helper.make_node("Relu", ["h"], ["h_act"], name="relu")
 add  = helper.make_node("Add", ["h_act", "bias2"], ["y"], name="add")
 
@@ -717,7 +818,7 @@ graph = helper.make_graph(
 model = helper.make_model(
     graph,
     opset_imports=[helper.make_opsetid("", 17)],
-    producer_name="ai-infra-tutorial",
+    producer_name="onnx-delegate-lab",
 )
 model.ir_version = onnx.IR_VERSION
 checker.check_model(model)
@@ -726,6 +827,11 @@ onnx.save(model, "tiny_mlp.onnx")
 ```
 
 用 ORT 跑通：`InferenceSession(..., providers=["CPUExecutionProvider"]).run(None, {"x": x})`，期望 `y.shape == (2, 4)`。
+
+> **一个真实踩过的坑**：这个 lab 最初漏了 `transB=1`。
+> `checker.check_model` **没有报错**——它只查结构合法性，不做维度匹配；
+> 直到 `InferenceSession` 真的去跑，才在 `[None,3] @ [4,3]` 上炸掉。
+> 教训是：**`checker` 通过 ≠ 模型能跑**，`infer_shapes` + 真跑一次才是完整的验收。
 
 ### 6.2 加载真实模型：巡检清单
 
@@ -881,18 +987,37 @@ ONNX 逻辑图:   [Conv]→[BN]→[Relu]→[MatMul]→[Softmax]
 边界: MatMul 的输出要从 GPU 拷到 Host（或保持在统一内存），再进 Softmax
 ```
 
-#### 示例精讲：3 节点模型上，三拍各改变了图的什么
+#### 示例精讲：三拍各改变了图的什么
 
-最小具体输入：`x → Conv → Relu → Softmax → y`（3 个节点，Conv 权重在 initializer）。
+**可跑** · 源码 [`onnx-delegate-lab/onnx_lab/03_ort_ep_partition.py`](../../onnx-delegate-lab/onnx_lab/03_ort_ep_partition.py) · 产物 `out/onnx/03_optimized_*.onnx`、`03_partition_report.json`、`03_READING.md`
+
+lab 用的模型是**主角 `tiny_mlp` 的加长版**：
+
+```text
+x[2,3] ──Gemm(transB=1)──▶ ──Relu──▶ ──Add──▶ ──Softmax──▶ ──ReduceSum──▶ y
+        └────────── 主角模型 tiny_mlp ─────────┘  └─ 只为制造 EP 边界而加 ─┘
+```
+
+**为什么要加那两个尾巴**：主角模型的三个 op 在几乎所有 EP 上都被支持，
+整图会被一个 EP 全吃掉——**没有边界就观察不到边界代价**。
+`Softmax` 与 `ReduceSum` 是常见的"有些 EP 不接或实现较弱"的算子，
+于是切开点大概率落在 `Add` 与 `Softmax` 之间。
+
+也注意这里 batch 写死成 `[2,3]` 而不是 `[None,3]`：**分区决策常依赖静态 shape**，
+动态维过多时 EP 可能直接拒绝接管，那样连分区都观察不到（§5.4）。
 
 ```python
-import onnxruntime as ort
-
 so = ort.SessionOptions()
-so.optimized_model_filepath = "opt.onnx"        # 落盘「优化 + 分区之后」的图
-sess = ort.InferenceSession("tiny.onnx", so,
+so.enable_profiling = True
+so.optimized_model_filepath = "03_optimized_dual.onnx"   # 落盘「优化 + 分区之后」的图
+so.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+sess = ort.InferenceSession(model_path, so,
                             providers=["CUDAExecutionProvider", "CPUExecutionProvider"])
 ```
+
+脚本会自动探测本机有没有第二个 EP（CUDA / DirectML / CoreML）。
+**只有 CPU 也别跳过这一步**：它仍会落盘 CPU 轨的 optimized 图与 profile，
+并按算子语义给出"典型边界应该落在哪"的对照表，装上加速 EP 后重跑就能验证你的预测。
 
 > API 名称随 ORT 版本变化，跑之前核对本地版本；下面的融合节点名与 domain 同样是示意。
 
@@ -903,17 +1028,24 @@ sess = ort.InferenceSession("tiny.onnx", so,
 | kernel-based | CPU、CUDA | 一批**单节点** capability | 不走这条路（直接查 kernel registry） | 节点个数不变，只是各节点归属的 provider 变了 |
 | compiling | TensorRT、QNN、NNAPI… | 一个**子图** capability | 走：子图 → 引擎 / blob | 整块被换成**一个不透明的融合节点** |
 
-同一个模型，两种 provider 列表，`opt.onnx` 长得完全不同：
+同一个模型，两种 provider 列表，落盘的 optimized 图长得完全不同：
 
 ```text
 # A. providers=["CUDAExecutionProvider","CPUExecutionProvider"]（kernel-based）
-node { op_type: "FusedConv" domain: "com.microsoft" input: "x"  output: "h2" }  # Conv+Relu
-node { op_type: "Softmax"   domain: ""              input: "h2" output: "y"  }
+node { op_type: "FusedGemm" domain: "com.microsoft" ... }   # Gemm+Relu 被 L2 优化融了
+node { op_type: "Add"       domain: ""              ... }
+node { op_type: "Softmax"   domain: ""              ... }   # 归属变了，节点还在
+node { op_type: "ReduceSum" domain: ""              ... }
 
 # B. providers=["TensorrtExecutionProvider","CPUExecutionProvider"]（compiling）
-node { op_type: "TRTKernel_graph_tiny_0" domain: "com.microsoft"
-       input: "x" output: "y" }         # 三个节点整段被吃进一个引擎
+node { op_type: "TRTKernel_graph_partition_demo_0" domain: "com.microsoft"
+       input: "x" output: "mlp_out" }   # 前三个节点整段被吃进一个引擎，内部不可见
+node { op_type: "Softmax"   domain: "" ... }
+node { op_type: "ReduceSum" domain: "" ... }
 ```
+
+对着 `out/onnx/03_optimized_cpu.onnx` 数一下节点，再和源图的 5 个比较——
+**少了的那些就是 ORT 自己的图优化融掉的**，还没轮到 EP 出场。
 
 三拍分别落在哪一步：
 
@@ -925,13 +1057,14 @@ node { op_type: "TRTKernel_graph_tiny_0" domain: "com.microsoft"
 | 每个 capability | 调该 EP 的 `Compile`，产出引擎/blob，图上留一个占位节点 | **拍 2** |
 | `session.run()` | 按分区结果派发；跨 EP 的边补数据搬运 | **拍 3** |
 
-所以「优化后的图里出现融合节点」有两种来源，看 `opt.onnx` 时必须先分清：**ORT 自己的图优化**（`FusedConv`，仍是可读算子、仍能逐节点观测）与 **EP `Compile` 的产物**（`TRTKernel_*`，内部不可见）。
+所以「优化后的图里出现融合节点」有两种来源，看 optimized 图时必须先分清：**ORT 自己的图优化**（`FusedGemm`，仍是可读算子、仍能逐节点观测）与 **EP `Compile` 的产物**（`TRTKernel_*`，内部不可见）。
 
-> **自测**：只用 `providers=["CPUExecutionProvider"]` 落盘一次 `opt.onnx`，`FusedConv` 还在吗？为什么一定没有 `TRTKernel_*`？
+> **自测**：lab 已经落盘了 `03_optimized_cpu.onnx`。打开它数节点——融合节点还在吗？
+> 为什么一定没有 `TRTKernel_*`？（提示：拍 1 和拍 2 是两个不同的 EP 才会走的路径。）
 
 ### 7.3 分区边界代价
 
-**每个分区边界都可能引入四类开销**（与 [`ai-compiler-foundations.md` §3.3](./ai-compiler-foundations.md#33-子图划分与委托partition--delegate)、[`executorch-learning-guide.md`](./executorch-learning-guide.md) §5 用同一套分类）——这正是研究问题 ①② 的根源：
+**每个分区边界都可能引入四类开销**（与 [`ai-compiler-foundations.md` §3.3](./ai-compiler-foundations-learning-guide.md#33-子图划分与委托partition--delegate)、[`executorch-learning-guide.md`](./executorch-learning-guide.md) §5 用同一套分类）——这正是研究问题 ①② 的根源：
 
 | 代价类型 | 发生原因 | 典型症状 |
 |---------|---------|---------|
@@ -951,24 +1084,28 @@ node { op_type: "TRTKernel_graph_tiny_0" domain: "com.microsoft"
               stream sync / event?
 ```
 
-**设计直觉**（对照 [paper-notes/05-tvm.md](./paper-notes/05-tvm.md) 的融合）：
+**设计直觉**（对照 [paper-notes/05-tvm.md](../paper-notes/05-tvm.md) 的融合）：
 
 - TVM 的融合规则在**单后端内**消灭中间写回；
 - ORT EP 分区在**多后端之间**制造边界；
 - 好的划分 ≈ 在「后端算得快」与「边界次数/流量小」之间折中；
 - 贪心优先级**不会**自动做出这个折中——这就是研究空白。
 
-#### 示例精讲：`Conv`(GPU EP) → `Softmax`(CPU EP) 边界上到底多了什么
+#### 示例精讲：`Add`(GPU EP) → `Softmax`(CPU EP) 边界上到底多了什么
 
-构造方式：让 `Conv` 归 CUDA EP、`Softmax` 归 CPU EP（真实做法是给 `Softmax` 用该 EP 不支持的 dtype/属性，或用只注册了 `Conv` 的自定义 EP）。分区之后，ORT 的 memcpy 变换会在跨设备的边上插节点：
+**部分可跑** · 模型来自 [`onnx_lab/03_ort_ep_partition.py`](../../onnx-delegate-lab/onnx_lab/03_ort_ep_partition.py)；
+`Memcpy*` 节点只有**本机真有第二个 EP** 时才会出现，纯 CPU 机器上看不到这一段（脚本会说明并给出概念对照表）。
+
+构造方式：让主角模型那段（`Gemm→Relu→Add`）归 CUDA EP、`Softmax` 归 CPU EP。
+分区之后，ORT 的 memcpy 变换会在跨设备的边上插节点：
 
 ```text
 分区前（逻辑图）
-  x ──▶ Conv ──h──▶ Softmax ──▶ y
+  x ──▶ Gemm ──▶ Relu ──▶ Add ──mlp_out──▶ Softmax ──▶ ReduceSum ──▶ y
 
 分区后（示意，节点名随版本变化）
-  x ──▶ MemcpyFromHost ──▶ Conv[CUDA] ──▶ MemcpyToHost ──▶ Softmax[CPU] ──▶ y
-       └──── e1 ────┘                   └──── e2 ────┘
+  x ──▶ MemcpyFromHost ──▶ [Gemm→Relu→Add]@CUDA ──▶ MemcpyToHost ──▶ Softmax[CPU] ──▶ ...
+       └──── e1 ────┘                              └──── e2 ────┘
 ```
 
 `MemcpyFromHost` / `MemcpyToHost` 是 ORT 内部算子（不属于 `ai.onnx`），**只有图被切开且两侧不在同一设备时才出现**——它们是四类代价里最可见的那一类。
@@ -977,16 +1114,24 @@ node { op_type: "TRTKernel_graph_tiny_0" domain: "com.microsoft"
 
 | 代价 | 落在哪条边 | 图上的证据 | 什么条件下不出现 |
 |------|-----------|-----------|--------------|
-| **数据拷贝** | e1（H2D，喂 `x`）、e2（D2H，取 `h`） | 两个 `Memcpy*` 节点本身 | 用 IOBinding 把输入直接放到 device 上，e1 可消掉 |
+| **数据拷贝** | e1（H2D，喂 `x`）、e2（D2H，取 `mlp_out`） | 两个 `Memcpy*` 节点本身 | 用 IOBinding 把输入直接放到 device 上，e1 可消掉 |
 | **内存空间切换** | e1、e2 | `Memcpy*` 存在即说明两侧分配器不互认 | 统一内存；或两侧同为 CPU |
-| **同步点** | e2 | **图上看不见**；CPU 要读 `h` 就必须等 GPU 流跑完 | 下游仍在同一 stream 上 |
+| **同步点** | e2 | **图上看不见**；CPU 要读 `mlp_out` 就必须等 GPU 流跑完 | 下游仍在同一 stream 上 |
 | **Layout 转换** | 视 EP 偏好而定，通常也压在 e2 | 边上多出 `Transpose`（偏好 NHWC 的 EP 由 L3 layout 优化插入） | 两侧 layout 偏好一致 |
 
-e2 的代价与 `h` 的大小成正比：`Conv` 输出 `[1,64,56,56]` 的 FP32 ≈ 802 KB，一次 D2H 可能比在 CPU 上跑一次 `Softmax` 还贵——**这就是「多委托一个节点反而更慢」的最小复现**。
+e2 的代价与 `mlp_out` 的大小成正比。lab 里它只有 `[2,4]` = 32 字节，拷贝可以忽略；
+**但把 batch 和 hidden 放大到真实尺寸**（1024×4096 FP32 = 16 MiB），
+一次 D2H 就可能比在 CPU 上跑一次 `Softmax` 还贵——**这就是「多委托一个节点反而更慢」的最小复现**。
+把 lab 里 `X` 的形状改大，再看 profile 里两边的耗时占比，就能自己量出这个拐点。
 
-反过来看：若 `Softmax` 也能进 CUDA，e2 直接消失，两个节点并成一块，边界从「图中间」退到「图两端」。所以分区的目标不是「委托节点数最大」，而是 **计算收益 − 边界代价** 最大（对照 [`ai-compiler-foundations.md` §3.3](./ai-compiler-foundations.md#33-子图划分与委托partition--delegate)）。
+反过来看：若 `Softmax` 也能进 CUDA，e2 直接消失，边界从「图中间」退到「图两端」。所以分区的目标不是「委托节点数最大」，而是 **计算收益 − 边界代价** 最大（对照 [`ai-compiler-foundations.md` §3.3](./ai-compiler-foundations-learning-guide.md#33-子图划分与委托partition--delegate)）。
 
-> **自测**：把 Conv 输出通道从 64 降到 4，e2 的拷贝量变成多少？这时把 `Softmax` 也搬上 GPU 还划算吗？
+> **更要紧的一条**：如果边界不是落在 `Add` 之后，而是落在 `Gemm` 和 `Relu` 之间，
+> 那么代价不止一次拷贝——**下游的融合窗口被永久关闭了**。
+> Relu 再也不可能被并进 Gemm 的输出循环，TVM 的 `FuseOps`、IREE 的 `flow.dispatch`
+> 谁都补不回来。这是[链路总图](./00-end-to-end-pipeline.md)断链表里 ② 标"不能补救"的原因。
+
+> **自测**：把 lab 模型的 hidden 从 4 加到 4096，e2 的拷贝量变成多少？这时把 `Softmax` 也搬上 GPU 还划算吗？
 
 ### 7.4 与 ExecuTorch / IREE / TVM 的对照
 
@@ -1000,13 +1145,13 @@ e2 的代价与 `h` 的大小成正比：`Conv` 输出 `[1,64,56,56]` 的 FP32 �
 - **ORT EP** = 工业界最常见的「子图分区接口」——加载期协商、运行时派发。
 - **ExecuTorch** = PyTorch 侧对等故事；**完整 Partitioner 章节见** [executorch-learning-guide.md](./executorch-learning-guide.md)，本文不重复。
 - **IREE** 把划分决策**前移到编译期**（flow），运行时更「笨」——见 [iree-learning-guide.md](./iree-learning-guide.md)。
-- **TVM 融合**是同问题的**单设备经典解**；多设备分区是其粗粒度推广——见 [paper-notes/05-tvm.md](./paper-notes/05-tvm.md) §3.1 与文末「与子图划分」段。
+- **TVM 融合**是同问题的**单设备经典解**；多设备分区是其粗粒度推广——见 [paper-notes/05-tvm.md](../paper-notes/05-tvm.md) §3.1 与文末「与子图划分」段。
 
 ### 7.5 动手：打印真实 EP 分区
 
 根 README §4.2 验收第 2 条。目标：**看见**哪些节点去了哪个 EP，而不是只看延迟数字。
 
-**推荐入口**：仓库动手项目 [`../onnx-delegate-lab/`](../onnx-delegate-lab/)
+**推荐入口**：仓库动手项目 [`../../onnx-delegate-lab/`](../../onnx-delegate-lab/)
 
 ```bash
 cd onnx-delegate-lab && bash scripts/run_onnx.sh
@@ -1053,7 +1198,7 @@ print("profile:", sess.end_profiling())  # Chrome tracing / JSON 里看各 op �
 
 **与 TVM 融合的对照（问题 1 / 5）**：
 
-- TVM 四类算子规则（injective / reduction / complex-out-fusable / opaque）回答「**单设备内**哪些节点应合成一个 kernel」——见 [paper-notes/05-tvm.md](./paper-notes/05-tvm.md) §3.1。
+- TVM 四类算子规则（injective / reduction / complex-out-fusable / opaque）回答「**单设备内**哪些节点应合成一个 kernel」——见 [paper-notes/05-tvm.md](../paper-notes/05-tvm.md) §3.1。
 - ORT EP 回答「**多设备/多库之间**哪些节点合成一个委托子图」。
 - 两者同构：都是图分割；评价函数都离不开「下游能不能为这块子图生成高效实现」。差异在代价模型：TVM 偏内存层级与 schedule；ORT 偏 EP 能力表 + 拷贝/同步。
 
@@ -1115,7 +1260,7 @@ cd onnx-delegate-lab && pip install -r requirements.txt && bash scripts/run.sh
 **第四步：带着问题回看**
 
 1. 用 [第 8 章](#第-8-章-与-ai-infra-六个研究问题的对接) 表格，给问题 1 和 2 各写一段证据；
-2. 对照 [`../tvm-fatbin-lab/`](../tvm-fatbin-lab/) 融合步骤：同一段算子在 TVM 里融、在 EP 里是否被切开；
+2. 对照 [`../../tvm-fatbin-lab/`](../../tvm-fatbin-lab/) 融合步骤：同一段算子在 TVM 里融、在 EP 里是否被切开；
 3. ExecuTorch 侧：跑 lab ExecuTorch 轨或见 [executorch-learning-guide.md](./executorch-learning-guide.md)。
 
 ### 9.4 建议阅读顺序（官方原文）
@@ -1128,7 +1273,7 @@ cd onnx-delegate-lab && pip install -r requirements.txt && bash scripts/run.sh
 | 4 | [ORT EPs](https://onnxruntime.ai/docs/execution-providers/) | 架构段 + `set_providers` 优先级语义 |
 | 5 | 按需 | ExternalData.md、具体 EP 的 provider options |
 
-枢纽页阶段地图：[docs/README.md](./README.md) 「阶段 4｜图级编译与多后端委托」。
+枢纽页阶段地图：[docs/README.md](../README.md) 「阶段 4｜图级编译与多后端委托」。
 
 ---
 
@@ -1178,4 +1323,4 @@ cd onnx-delegate-lab && pip install -r requirements.txt && bash scripts/run.sh
 
 ## 维护约定
 
-官方 IR / Versioning / ShapeInference 或 ORT EP 注册方式变更时，优先同步第 2/4/5/7 章与附录。分区边界代价的分类以 [`ai-compiler-foundations.md`](./ai-compiler-foundations.md) §3.3 的四类为准，改动时同步 [`executorch-learning-guide.md`](./executorch-learning-guide.md) §5 与根 README §4.2。新动手脚本入口补到 [docs/README.md](./README.md) 阶段 4 与根 README §4.2。
+官方 IR / Versioning / ShapeInference 或 ORT EP 注册方式变更时，优先同步第 2/4/5/7 章与附录。分区边界代价的分类以 [`ai-compiler-foundations.md`](./ai-compiler-foundations-learning-guide.md) §3.3 的四类为准，改动时同步 [`executorch-learning-guide.md`](./executorch-learning-guide.md) §5 与根 README §4.2。新动手脚本入口补到 [docs/README.md](../README.md) 阶段 4 与根 README §4.2。

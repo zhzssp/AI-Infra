@@ -13,27 +13,30 @@ AI-Infra/
 ├── README.md                 ← ① 总规划：目标 / 优先级 / 必学·跳过 / 验收 / 时间表 / 研究问题
 ├── docs/                     ← ② 知识库（本目录）
 │   ├── README.md             ←    你正在读：自学体系枢纽
-│   ├── ai-compiler-foundations.md ← 横切前置概念（开局读总图+§2.4，其余随阶段分轮补）
 │   ├── checkpoints/          ←    知识落地检验体系：每个工具一册动手过关标准
 │   ├── paper-notes/          ←    论文精读笔记（为什么、框架、最小必要集）
-│   ├── mlir-learning-guide.md←    MLIR（Conversion / Interface / Linalg）
-│   ├── iree-learning-guide.md←    IREE（核心 + HAL）
-│   ├── tvm-learning-guide.md ←    TVM（图编译 + 调度搜索）
-│   ├── onnx-learning-guide.md←    ONNX IR + ORT EP
-│   ├── executorch-learning-guide.md← ExecuTorch（to_backend / Partitioner）
-│   ├── llvm-learning-guide.md←    LLVM（四层 IR / New PM / CodeGen）
-│   └── cuda-fatbin-learning-guide.md← CUDA fatbin（半天）
+│   └── learning-guides/      ←    专题学习文档（机制向教材）
+│       ├── 00-end-to-end-pipeline.md ← 链路总纲：七站怎么接力完成同一次优化
+│       ├── ai-compiler-foundations-learning-guide.md ← 横切前置概念
+│       ├── mlir-learning-guide.md
+│       ├── iree-learning-guide.md
+│       ├── tvm-learning-guide.md
+│       ├── onnx-learning-guide.md
+│       ├── executorch-learning-guide.md
+│       ├── llvm-learning-guide.md
+│       └── cuda-fatbin-learning-guide.md
 ├── llvm-hello-compile/       ← ③ 动手项目 A：LLVM 编译全链路 + 自定义 Pass
 ├── mlir-toy-dialect/         ← ③ 动手项目 B：MLIR Dialect / Conversion / Interface
 ├── tvm-fatbin-lab/           ← ③ 动手项目 C：TVM 调度/融合/AutoTVM + CUDA fatbin
 ├── onnx-delegate-lab/        ← ③ 动手项目 D：ONNX/ORT EP + ExecuTorch Partitioner
+├── iree-lab/                 ← ③ 动手项目 E：IREE 相位分解 + .vmfb 部署 + 对照实验
 └── paper/                    ← ④ 原文 PDF（遇到细节再翻）
 ```
 
 | 层 | 职责 | 怎么用 |
 |----|------|--------|
 | **总规划** | 决定学什么、不学什么、学到什么程度 | 每周回看优先级表与验收清单 |
-| **知识库** | 把论文/官方文档蒸馏成可读笔记 | 开局先扫 [foundations](./ai-compiler-foundations.md)；再按阶段读专题文档 |
+| **知识库** | 把论文/官方文档蒸馏成可读笔记 | 开局先扫 [foundations](./learning-guides/ai-compiler-foundations-learning-guide.md)；再按阶段读专题文档 |
 | **动手项目** | 把概念变成可执行产物 | 先跑通脚本，再对照产物读笔记 |
 | **检验体系** | 判定「真会」还是「看过」 | 按 [`checkpoints/`](./checkpoints/README.md) 逐条改代码、跑命令、比产物 |
 | **原文** | 权威出处 | 笔记说不清时再打开 PDF |
@@ -57,7 +60,7 @@ AI-Infra/
 
 > 阶段地图里的「验」是**口述题**（能不能讲清）。口述过了不等于会做——动手判定在 [`checkpoints/`](./checkpoints/README.md)：每个工具一册，把知识点绑到「加一个组件 + 跑出预期差异」上。
 
-四个动手项目在主线上的位置：
+五个动手项目在主线上的位置：
 
 | 项目 | 角色 | 何时做 |
 |------|------|--------|
@@ -65,10 +68,12 @@ AI-Infra/
 | [`mlir-toy-dialect/`](../mlir-toy-dialect/) | **MLIR 心智模型**：双 dialect、Region、Interface、Dialect Conversion | P0 第二阶段主战场；后续打通 Toy→linalg→llvm 端到端 |
 | [`tvm-fatbin-lab/`](../tvm-fatbin-lab/) | **TVM + fatbin**：调度/融合/AutoTVM + 多架构打包 | 阶段 4（TVM 轨）/ 阶段 6（CUDA 轨）；`bash scripts/run.sh` → `out/ANALYSIS.md` |
 | [`onnx-delegate-lab/`](../onnx-delegate-lab/) | **委托/分区**：ONNX 构图 + ORT EP + ExecuTorch Partitioner | 阶段 4；研究问题①② 的实验室 |
+| [`iree-lab/`](../iree-lab/) | **工业编译器全链路**：flow/stream/hal/vm 相位分解 + `.vmfb` 部署 + 三组对照实验 | 阶段 3 之后；`pip install -r requirements.txt && bash scripts/run.sh` |
 
 > LLVM 项目回答「单层 IR + Pass 怎么工作」；MLIR 项目回答「多层 dialect + 渐进 lowering 怎么工作」。  
 > 两者同构（ODS≈TableGen、lit/FileCheck、analysis 失效），对照着做会快很多。  
-> P1 两个 lab 正交：TVM 练「算得快」；ONNX/ET 练「谁来划分」。默认 TVM → ONNX；时间紧或冲研究问题则先 ONNX。
+> P1 两个 lab 正交：TVM 练「算得快」；ONNX/ET 练「谁来划分」。默认 TVM → ONNX；时间紧或冲研究问题则先 ONNX。  
+> **MLIR 项目与 IREE 项目是手工挡与自动挡的关系**：前者自己一个 pass 一个 pass 地降，后者看工业编译器把这套流程封装成了哪几相。先手工后自动，否则 flow/stream/hal 就只是三个名词。
 
 ---
 
@@ -80,19 +85,19 @@ AI-Infra/
 
 | | 内容 |
 |--|------|
-| **读** | [`ai-compiler-foundations.md`](./ai-compiler-foundations.md) 第 1 章总图 + **[§2.4 同步路线表](./ai-compiler-foundations.md#24-与工具路线同步的概念学习路线)** + 附录速查，**读完就停**。该文**不是开局读完的文档**：26 条概念按 W0～W8 分批挂在下面的阶段表上，每轮开头补下一个工具要用的那几节 |
+| **读** | [`ai-compiler-foundations.md`](./learning-guides/ai-compiler-foundations-learning-guide.md) 第 1 章总图 + **[§2.4 同步路线表](./learning-guides/ai-compiler-foundations-learning-guide.md#24-与工具路线同步的概念学习路线)** + 附录速查，**读完就停**。该文**不是开局读完的文档**：26 条概念按 W0～W8 分批挂在下面的阶段表上，每轮开头补下一个工具要用的那几节 |
 | **做** | 自己默画五层栈（框架模型是输入；五层 = 交换 IR → 中端 → 执行规划 → 后端 IR/机器码 → 运行时），在每层旁写上仓库里对应的文档名；再照 §2.4 抄一份「本轮该补哪几节」的清单贴在手边 |
 | **验** | ① 默画出五层栈并说出每层固化什么决定；② 说得出四根 ★★ 柱子各自**在第几轮**补（分片标注 W1／渐进 lowering W2／设备抽象机+同步 W3／划分与边界代价 W3 引入·W5 坐实）——**此刻不要求讲得清内容**，那是各轮的事 |
-| **何时回查** | 每轮开头按 foundations [§2.4 路线表](./ai-compiler-foundations.md#24-与工具路线同步的概念学习路线)取本轮概念；卡住时用 [§11.1 回查触发表](./ai-compiler-foundations.md#111-开局读什么--卡住时回查什么)（症状→章节）或 [第 10 章对照表](./ai-compiler-foundations.md#第-10-章-概念--深入材料对照) |
+| **何时回查** | 每轮开头按 foundations [§2.4 路线表](./learning-guides/ai-compiler-foundations-learning-guide.md#24-与工具路线同步的概念学习路线)取本轮概念；卡住时用 [§11.1 回查触发表](./learning-guides/ai-compiler-foundations-learning-guide.md#111-开局读什么--卡住时回查什么)（症状→章节）或 [第 10 章对照表](./learning-guides/ai-compiler-foundations-learning-guide.md#第-10-章-概念--深入材料对照) |
 
 ### 阶段 0｜编译器地基（半天～1 天，可与阶段 1 并行）
 
 | | 内容 |
 |--|------|
-| **读** | 先补 foundations **§6.1 SSA + §6.3 Pass**（§6.2 渐进 lowering 留到阶段 2）→ [`llvm-learning-guide.md`](./llvm-learning-guide.md) 第 1～3 章 + 附录；需要动机时扫 [`paper-notes/02-llvm.md`](./paper-notes/02-llvm.md) §1～2 |
+| **读** | 先补 foundations **§6.1 SSA + §6.3 Pass**（§6.2 渐进 lowering 留到阶段 2）→ [`llvm-learning-guide.md`](./learning-guides/llvm-learning-guide.md) 第 1～3 章 + 附录；需要动机时扫 [`paper-notes/02-llvm.md`](./paper-notes/02-llvm.md) §1～2 |
 | **做** | `cd llvm-hello-compile && bash scripts/run.sh` → 先读 `out/ANALYSIS.md` |
 | **验** | 能指着 `02_sum_O0.ll` vs `03a_sum_mem2reg.ll` 讲清 SSA/`phi`；能说出 CountIR（分析）与 InjectLogging（变换）的差别 |
-| **回查触发** | 写 MLIR→LLVM lowering 踩到 `poison`/`noalias`/向量化失败 → 回 [`llvm-learning-guide.md`](./llvm-learning-guide.md) 第 2.7、4.2、5 章 |
+| **回查触发** | 写 MLIR→LLVM lowering 踩到 `poison`/`noalias`/向量化失败 → 回 [`llvm-learning-guide.md`](./learning-guides/llvm-learning-guide.md) 第 2.7、4.2、5 章 |
 
 ### 阶段 1｜分布式训练基础（P0，约 1 周；对应周次表 W1）
 
@@ -107,7 +112,7 @@ AI-Infra/
 
 | | 内容 |
 |--|------|
-| **读** | 先补 foundations **§6.2 渐进 lowering + §5.1 tensor/buffer + §6.4 代价模型（浅）** → 扫 [`paper-notes/03-mlir.md`](./paper-notes/03-mlir.md) → [`mlir-learning-guide.md`](./mlir-learning-guide.md)（Conversion / Interface / Linalg 三章最重）+ [`mlir-toy-dialect/README.md`](../mlir-toy-dialect/README.md) |
+| **读** | 先补 foundations **§6.2 渐进 lowering + §5.1 tensor/buffer + §6.4 代价模型（浅）** → 扫 [`paper-notes/03-mlir.md`](./paper-notes/03-mlir.md) → [`mlir-learning-guide.md`](./learning-guides/mlir-learning-guide.md)（Conversion / Interface / Linalg 三章最重）+ [`mlir-toy-dialect/README.md`](../mlir-toy-dialect/README.md) |
 | **做** | `cd mlir-toy-dialect && bash scripts/all.sh`；对照读 `ConvertToyToLow.cpp` 与 `ToyCostPass.cpp`。Toy→llvm 端到端属加深，不挡入门 |
 | **验** | 默画 Operation⊃Region⊃Block；说清 greedy vs Dialect Conversion；解释 Interface 为何让一个 Pass 跨 dialect 工作 |
 | **与 LLVM 项目对照** | `toy-opt` ≈ `opt`；`--toy-to-low-convert` ≈ 一次跨 IR 变换；lit 写法两边一样 |
@@ -116,22 +121,22 @@ AI-Infra/
 
 | | 内容 |
 |--|------|
-| **读** | 先补 foundations **§8.1–8.2 设备抽象机+同步、§3.3 划分（先建立直觉）、§7.1 kernel、§7.3 variant** → 扫 [`paper-notes/07-tinyiree.md`](./paper-notes/07-tinyiree.md) → [`iree-learning-guide.md`](./iree-learning-guide.md)（HAL 第 4 章最重） |
-| **做** | `--compile-to` 至少 dump 两层；单后端（CPU 即可）`iree-run-module` 跑通。双后端 / C runtime 属加深 |
-| **验** | 画出 `linalg→flow→stream→hal`；口述 HAL 对象关系与 timeline semaphore 为何强于 `CUevent` |
+| **读** | 先补 foundations **§8.1–8.2 设备抽象机+同步、§3.3 划分（先建立直觉）、§7.1 kernel、§7.3 variant** → 扫 [`paper-notes/07-tinyiree.md`](./paper-notes/07-tinyiree.md) → [`iree-learning-guide.md`](./learning-guides/iree-learning-guide.md)（HAL 第 4 章最重） |
+| **做** | `cd iree-lab && pip install -r requirements.txt && bash scripts/run.sh` → 先读 `out/PHASES.md` 的行数表，再按 flow→stream→hal 顺序 diff。双后端 / C runtime 属加深 |
+| **验** | 画出 `linalg→flow→stream→hal`；口述 HAL 对象关系与 timeline semaphore 为何强于 `CUevent`；**数出主角模型的 `flow.dispatch` 个数并解释为什么少于 4** |
 | **串到项目目标** | HAL 的 device/buffer/command_buffer/variant ≈ 算力网「异构设备统一抽象」的现成词汇表 |
 
 ### 阶段 4｜图级编译与多后端委托（P1，约 1～1.5 周；对应周次表 W4+W5）
 
 | | 内容 |
 |--|------|
-| **读** | **W4 前**补 foundations §4.3 Roofline → §3.2 融合 → §4.1–4.2 算法/调度+tiling → §5.2 layout，然后 TVM：[`05-tvm.md`](./paper-notes/05-tvm.md) → [`tvm-learning-guide.md`](./tvm-learning-guide.md)<br>**W5 前**补 §3.3 四类边界代价 + §8.3 AOT/JIT，然后委托：[`onnx-learning-guide.md`](./onnx-learning-guide.md) + [`executorch-learning-guide.md`](./executorch-learning-guide.md) |
+| **读** | **W4 前**补 foundations §4.3 Roofline → §3.2 融合 → §4.1–4.2 算法/调度+tiling → §5.2 layout，然后 TVM：[`05-tvm.md`](./paper-notes/05-tvm.md) → [`tvm-learning-guide.md`](./learning-guides/tvm-learning-guide.md)<br>**W5 前**补 §3.3 四类边界代价 + §8.3 AOT/JIT，然后委托：[`onnx-learning-guide.md`](./learning-guides/onnx-learning-guide.md) + [`executorch-learning-guide.md`](./learning-guides/executorch-learning-guide.md) |
 | **做（建议顺序）** | ① `tvm-fatbin-lab` TVM 轨；② `onnx-delegate-lab`。时间紧 / 冲研究问题：对调。CUDA fatbin 轨留到阶段 6 |
 | **验** | 四类融合直觉；对着 lower 讲主要 schedule 原语；指出 EP/Partitioner 边界；对照 ET / ORT / IREE 三种划分答案 |
 
 ### 阶段 5（自选补充）｜负载侧论据，不占独立周次
 
-> 这两篇是**额外补充**的论文，不在主链上，也没有配套动手项目；结论已蒸馏进 [foundations](./ai-compiler-foundations.md) §4.3 / §9.4 / §9.5，**跳过原文不断链**。  
+> 这两篇是**额外补充**的论文，不在主链上，也没有配套动手项目；结论已蒸馏进 [foundations](./learning-guides/ai-compiler-foundations-learning-guide.md) §4.3 / §9.4 / §9.5，**跳过原文不断链**。  
 > 要读就按下面两个身份穿插进已有阶段，不要当成第五条技术栈。
 
 | 篇目 | 穿插到哪 | 只需回答 | 用时 |
@@ -143,8 +148,8 @@ AI-Infra/
 
 | | 内容 |
 |--|------|
-| **读** | 先补 foundations §7.2 虚拟/真实 ISA（回看 §7.3）→ Halide / Glow 短读 + [`cuda-fatbin-learning-guide.md`](./cuda-fatbin-learning-guide.md)；需要时回 llvm 学习文档 CodeGen<br>写观点前：foundations §3.4 四条栈选型（此时才有判断力）+ [09 PagedAttention](./paper-notes/09-paged-attention-vllm.md)（自选，问题③④的样本） |
-| **做** | `tvm-fatbin-lab` CUDA 轨（有环境时）；对照 IREE [`ExecutableVariant`](./iree-learning-guide.md#47-设备代码executable--variant--export) |
+| **读** | 先补 foundations §7.2 虚拟/真实 ISA（回看 §7.3）→ Halide / Glow 短读 + [`cuda-fatbin-learning-guide.md`](./learning-guides/cuda-fatbin-learning-guide.md)；需要时回 llvm 学习文档 CodeGen<br>写观点前：foundations §3.4 四条栈选型（此时才有判断力）+ [09 PagedAttention](./paper-notes/09-paged-attention-vllm.md)（自选，问题③④的样本） |
+| **做** | `tvm-fatbin-lab` CUDA 轨（有环境时）；对照 IREE [`ExecutableVariant`](./learning-guides/iree-learning-guide.md#47-设备代码executable--variant--export) |
 | **验** | 对根 README §6 **六个**研究问题写出观点笔记：价值 / 已有边界 / **自己的判断**（不要求实现方案） |
 
 ---
@@ -155,16 +160,20 @@ AI-Infra/
 
 | 文档 | 优先级 | 配套动手 | 一句话 |
 |------|--------|----------|--------|
-| **[AI 编译器前置核心概念](./ai-compiler-foundations.md)** | **开局读总图+§2.4；其余分轮补** | 默画五层栈；每轮开头按 §2.4 取那几节 | 横切词汇表：把各项目粘成一张总图 |
-| [IREE 学习文档](./iree-learning-guide.md) | **P0** | `iree-compile` / `iree-run-module`（见根 README §3.3） | 多后端统一运行时 + HAL 全景 |
-| [MLIR 学习文档](./mlir-learning-guide.md) | **P0** | [`mlir-toy-dialect/`](../mlir-toy-dialect/) | Conversion / Interface / Linalg / Bufferize |
-| [TVM 学习文档](./tvm-learning-guide.md) | P1 | [`tvm-fatbin-lab/`](../tvm-fatbin-lab/) TVM 轨 | 融合/layout/调度原语/调优闭环/PackedFunc |
-| [ONNX 学习文档](./onnx-learning-guide.md) | P1 | [`onnx-delegate-lab/`](../onnx-delegate-lab/) ONNX 轨 | IR 层次 + **GetCapability→Compile** |
-| [ExecuTorch 学习文档](./executorch-learning-guide.md) | P1 | [`onnx-delegate-lab/`](../onnx-delegate-lab/) ExecuTorch 轨 | `to_backend` + 分区边界代价 |
-| [LLVM 学习文档](./llvm-learning-guide.md) | P2 | [`llvm-hello-compile/`](../llvm-hello-compile/) | 四层 IR、New PM、后端七阶段、与 MLIR 接缝 |
-| [CUDA fatbin 学习文档](./cuda-fatbin-learning-guide.md) | P2（半天） | [`tvm-fatbin-lab/`](../tvm-fatbin-lab/) CUDA 轨 | 多架构镜像打包；同构于 IREE `ExecutableVariant` |
+| **[端到端链路](./learning-guides/00-end-to-end-pipeline.md)** | **开局读第 1–3 章（约 30 分钟）** | 五个 lab 按链路顺序跑一遍 | 一个模型、一次优化，穿过七个知识点：谁给谁喂什么、断了会怎样 |
+| **[AI 编译器前置核心概念](./learning-guides/ai-compiler-foundations-learning-guide.md)** | **开局读总图+§2.4；其余分轮补** | 默画五层栈；每轮开头按 §2.4 取那几节 | 横切词汇表：把各项目粘成一张总图 |
+| [IREE 学习文档](./learning-guides/iree-learning-guide.md) | **P0** | [`iree-lab/`](../iree-lab/) | 多后端统一运行时 + HAL 全景 |
+| [MLIR 学习文档](./learning-guides/mlir-learning-guide.md) | **P0** | [`mlir-toy-dialect/`](../mlir-toy-dialect/) | Conversion / Interface / Linalg / Bufferize |
+| [TVM 学习文档](./learning-guides/tvm-learning-guide.md) | P1 | [`tvm-fatbin-lab/`](../tvm-fatbin-lab/) TVM 轨 | 融合/layout/调度原语/调优闭环/PackedFunc |
+| [ONNX 学习文档](./learning-guides/onnx-learning-guide.md) | P1 | [`onnx-delegate-lab/`](../onnx-delegate-lab/) ONNX 轨 | IR 层次 + **GetCapability→Compile** |
+| [ExecuTorch 学习文档](./learning-guides/executorch-learning-guide.md) | P1 | [`onnx-delegate-lab/`](../onnx-delegate-lab/) ExecuTorch 轨 | `to_backend` + 分区边界代价 |
+| [LLVM 学习文档](./learning-guides/llvm-learning-guide.md) | P2 | [`llvm-hello-compile/`](../llvm-hello-compile/) | 四层 IR、New PM、后端七阶段、与 MLIR 接缝 |
+| [CUDA fatbin 学习文档](./learning-guides/cuda-fatbin-learning-guide.md) | P2（半天） | [`tvm-fatbin-lab/`](../tvm-fatbin-lab/) CUDA 轨 | 多架构镜像打包；同构于 IREE `ExecutableVariant` |
 
-**材料怎么配合**：论文笔记讲「为什么」→ [foundations](./ai-compiler-foundations.md) 讲「用什么词粘起来」→ 各 `*-learning-guide.md` 讲「这个项目怎么工作」→ 动手项目把概念跑通。
+**材料怎么配合**：论文笔记讲「为什么」→ [foundations](./learning-guides/ai-compiler-foundations-learning-guide.md) 讲「用什么词粘起来」→ [端到端链路](./learning-guides/00-end-to-end-pipeline.md) 讲「它们怎么接力」→ 各 `*-learning-guide.md` 讲「这个系统怎么工作」→ 动手项目把概念跑通。
+
+> foundations 与链路总纲不重复：前者是**词汇表**（每个概念是什么），后者是**接力图**（谁给谁喂什么、断了会怎样）。
+> 学完一份专题指南就回链路总纲第 5 章的断链表自测一次，是把知识点从"孤岛"变成"链条"最省事的办法。
 
 ### 3.2 论文精读笔记（动机 + 框架 + 必要集）
 
@@ -173,8 +182,8 @@ AI-Infra/
 | 优先级 | 笔记 | 配套 |
 |--------|------|------|
 | P0 | [01 分布式训练综述](./paper-notes/01-efficient-training-distributed-infra.md) | 实测 DDP/FSDP |
-| P0 | [03 MLIR](./paper-notes/03-mlir.md) | [`mlir-learning-guide.md`](./mlir-learning-guide.md) + [`mlir-toy-dialect/`](../mlir-toy-dialect/) |
-| P1 | [05 TVM](./paper-notes/05-tvm.md) | TVM→[`tvm-learning-guide.md`](./tvm-learning-guide.md)；委托→ONNX/ExecuTorch 学习文档 |
+| P0 | [03 MLIR](./paper-notes/03-mlir.md) | [`mlir-learning-guide.md`](./learning-guides/mlir-learning-guide.md) + [`mlir-toy-dialect/`](../mlir-toy-dialect/) |
+| P1 | [05 TVM](./paper-notes/05-tvm.md) | TVM→[`tvm-learning-guide.md`](./learning-guides/tvm-learning-guide.md)；委托→ONNX/ExecuTorch 学习文档 |
 | P1（自选补充） | [08 FlashAttention](./paper-notes/08-flash-attention.md) · [09 PagedAttention](./paper-notes/09-paged-attention-vllm.md) | 论据而非技术栈：FA→阶段 4 动机；PA→研究问题③④。结论见 foundations §4.3/§9.4/§9.5 |
 | P2 | [02 LLVM](./paper-notes/02-llvm.md) · [04 Halide](./paper-notes/04-halide.md) · [06 Glow](./paper-notes/06-glow.md) · [07 TinyIREE 简记](./paper-notes/07-tinyiree.md) | LLVM→学习文档；TinyIREE→IREE 学习文档 |
 
@@ -182,10 +191,11 @@ AI-Infra/
 
 | 项目 | 一键入口 | 建议阅读产物 | 对应知识库 |
 |------|----------|--------------|------------|
-| [llvm-hello-compile](../llvm-hello-compile/) | `bash scripts/run.sh` | `out/ANALYSIS.md`，再对比 `02_*.ll` / `03a_*.ll` / `05_*.s` | [llvm-learning-guide](./llvm-learning-guide.md) |
-| [mlir-toy-dialect](../mlir-toy-dialect/) | `bash scripts/all.sh` | `scripts/run.sh` 九组演示 + `test/*.mlir` | [mlir-learning-guide](./mlir-learning-guide.md) · [03-mlir](./paper-notes/03-mlir.md) |
-| [tvm-fatbin-lab](../tvm-fatbin-lab/) | `bash scripts/run.sh` | `out/ANALYSIS.md` + `out/tvm/*` + `out/cuda/*` | [tvm-learning-guide](./tvm-learning-guide.md) · [cuda-fatbin](./cuda-fatbin-learning-guide.md) |
-| [onnx-delegate-lab](../onnx-delegate-lab/) | `bash scripts/run.sh` | `out/ANALYSIS.md` + `out/onnx/*` + `out/executorch/*` | [onnx](./onnx-learning-guide.md) · [executorch](./executorch-learning-guide.md) |
+| [llvm-hello-compile](../llvm-hello-compile/) | `bash scripts/run.sh` | `out/ANALYSIS.md`，再对比 `02_*.ll` / `03a_*.ll` / `05_*.s` | [llvm-learning-guide](./learning-guides/llvm-learning-guide.md) |
+| [mlir-toy-dialect](../mlir-toy-dialect/) | `bash scripts/all.sh` | `scripts/run.sh` 九组演示 + `test/*.mlir` | [mlir-learning-guide](./learning-guides/mlir-learning-guide.md) · [03-mlir](./paper-notes/03-mlir.md) |
+| [tvm-fatbin-lab](../tvm-fatbin-lab/) | `bash scripts/run.sh` | `out/ANALYSIS.md` + `out/tvm/*` + `out/cuda/*` | [tvm-learning-guide](./learning-guides/tvm-learning-guide.md) · [cuda-fatbin](./learning-guides/cuda-fatbin-learning-guide.md) |
+| [onnx-delegate-lab](../onnx-delegate-lab/) | `bash scripts/run.sh` | `out/ANALYSIS.md` + `out/onnx/*` + `out/executorch/*` | [onnx](./learning-guides/onnx-learning-guide.md) · [executorch](./learning-guides/executorch-learning-guide.md) |
+| [iree-lab](../iree-lab/) | `pip install -r requirements.txt && bash scripts/run.sh` | `out/PHASES.md` 行数表 → `out/phases/*.mlir` 按 flow→stream→hal diff → `out/variants/` | [iree](./learning-guides/iree-learning-guide.md) · [07-tinyiree](./paper-notes/07-tinyiree.md) |
 
 ### 3.4 检验体系（动手过关标准）
 
@@ -208,7 +218,7 @@ AI-Infra/
 
 ## 4. 概念穿线（为什么这些材料要放在一起）
 
-自学时最容易「学成孤岛」。**完整横切词汇与五层栈总图**在 [`ai-compiler-foundations.md`](./ai-compiler-foundations.md)；下面只钉「动手项目 ↔ 编译栈」的最短对照：
+自学时最容易「学成孤岛」。**完整横切词汇与五层栈总图**在 [`ai-compiler-foundations.md`](./learning-guides/ai-compiler-foundations-learning-guide.md)；下面只钉「动手项目 ↔ 编译栈」的最短对照：
 
 ```
 llvm-hello-compile                mlir-toy-dialect                 IREE
@@ -255,15 +265,15 @@ tvm-fatbin-lab（融合/schedule）     ≈     onnx-delegate-lab（EP/Partition
 
 | 我卡住了… | 去读 | 去做 |
 |-----------|------|------|
-| 各项目怎么拼成一张图 / 公共词汇 | [ai-compiler-foundations](./ai-compiler-foundations.md) §1–2、§10–11 | 默画五层栈 |
-| ORT / ExecuTorch / IREE / TVM 该用哪个 | [ai-compiler-foundations](./ai-compiler-foundations.md) §3.4 选型对照 | 对着自己的场景填一遍表 |
+| 各项目怎么拼成一张图 / 公共词汇 | [ai-compiler-foundations](./learning-guides/ai-compiler-foundations-learning-guide.md) §1–2、§10–11 | 默画五层栈 |
+| ORT / ExecuTorch / IREE / TVM 该用哪个 | [ai-compiler-foundations](./learning-guides/ai-compiler-foundations-learning-guide.md) §3.4 选型对照 | 对着自己的场景填一遍表 |
 | SSA / Pass / 汇编从哪来 | foundations §6 → llvm-learning-guide §1–3、§5 | llvm-hello-compile |
-| Dialect / Conversion / Interface | foundations §5–6 → [mlir-learning-guide](./mlir-learning-guide.md) §4/§6/§8 | mlir-toy-dialect 的 convert/cost/region 测试 |
+| Dialect / Conversion / Interface | foundations §5–6 → [mlir-learning-guide](./learning-guides/mlir-learning-guide.md) §4/§6/§8 | mlir-toy-dialect 的 convert/cost/region 测试 |
 | 设备抽象 / fence / 多后端 | foundations §8 → iree-learning-guide §3–4 | `--compile-to` dump + 双后端跑通 |
-| fatbin / 多变体打包 | foundations §7 → [cuda-fatbin-learning-guide](./cuda-fatbin-learning-guide.md) + IREE §4.7 | 双 `-gencode` + `cuobjdump -lelf/-lptx` |
+| fatbin / 多变体打包 | foundations §7 → [cuda-fatbin-learning-guide](./learning-guides/cuda-fatbin-learning-guide.md) + IREE §4.7 | 双 `-gencode` + `cuobjdump -lelf/-lptx` |
 | 并行怎么切 / 显存为什么爆 | foundations §9 → 01 综述 §4/§6/§7 | DDP/FSDP 实测 |
-| 子图划分 / 委托 | foundations §3 → [onnx](./onnx-learning-guide.md) + [executorch](./executorch-learning-guide.md)；TVM 融合见 [tvm §2.2](./tvm-learning-guide.md) | [`onnx-delegate-lab`](../onnx-delegate-lab/) |
-| schedule / AutoTVM | foundations §4 → [tvm-learning-guide](./tvm-learning-guide.md) §3–5；动机见 [05-tvm](./paper-notes/05-tvm.md) | matmul 两 schedule + 一次调优 |
+| 子图划分 / 委托 | foundations §3 → [onnx](./learning-guides/onnx-learning-guide.md) + [executorch](./learning-guides/executorch-learning-guide.md)；TVM 融合见 [tvm §2.2](./learning-guides/tvm-learning-guide.md) | [`onnx-delegate-lab`](../onnx-delegate-lab/) |
+| schedule / AutoTVM | foundations §4 → [tvm-learning-guide](./learning-guides/tvm-learning-guide.md) §3–5；动机见 [05-tvm](./paper-notes/05-tvm.md) | matmul 两 schedule + 一次调优 |
 | 为什么要融合/tiling；大状态为何搬不动 | foundations §4.3 / §9.4 / §9.5；要实证再翻 08 / 09（自选） | 对着 Roofline 说瓶颈；用块化解释问题③④ |
 
 ---
@@ -295,8 +305,15 @@ tvm-fatbin-lab（融合/schedule）     ≈     onnx-delegate-lab（EP/Partition
 
 - **讲机制必须带「示例精讲」**：任何一节只要在讲机制（Pass、Conversion、融合、划分、打包……），就要有一个 `#### 示例精讲：<主题>` 小节，形态固定为**最小输入 → 文本 IR/命令/产物 → 对象结构或调用链 → 逐步注释 → 并排对照表 → 一句自测**。参考基准：[`notes/llvm-mlir-pass-ir-unit.md`](./notes/llvm-mlir-pass-ir-unit.md)。  
   判据很简单：**如果读完还得靠额外笔记才懂，这一节就没写完**。工具输出若非逐字复制，必须标注「形态示意（以本地版本为准）」。
+- **示例精讲优先取自动手项目**：写「示例精讲」时先去五个 lab 里找现成的源码/产物，**能引用就不要新编一段**。  
+  lab 里确实没有时，先问一句「补进去会不会破坏这个项目的定位」：不会就补（如 `kernel.c` 的 `clamp0`），会就另开目录并说明它不属于主体（如 `mlir-toy-dialect/examples/upstream/`）。两条都不成立才写纯教学示例。
+- **每个「示例精讲」标注可跑性**：标题下第一行用三选一的标签起头，让读者一眼知道该不该开终端：  
+  `**可跑**` · 源码 `<路径>` · 命令 `<命令>` · 产物 `<路径>`　｜　`**部分可跑**`（说明哪半段能跑、哪半段是推演）　｜　`**无 lab 对应**`（说明为什么不用 lab，以及最接近的 lab 在哪）。  
+  判据：读者照着标签行动，不应该出现「跑了半天发现根本跑不了」或「以为要推演其实能跑」。
+- **主角保持唯一**：图级主角是 `tiny_mlp`（`Gemm → Relu → Add`，权重 `[out,in]=[4,3]` + `transB=1`），算子级主角是它 Gemm 的最内层 `axpy`。新写示例尽量沿用，改主角要同步 [`00-end-to-end-pipeline.md`](./learning-guides/00-end-to-end-pipeline.md) 第 1 章。
+- **每份专题指南开头带「本篇在链路中的位置」**：四栏固定为「上游交给我 / 我固化 / 我交给下游 / 本篇的主角」，内容与 [`00-end-to-end-pipeline.md`](./learning-guides/00-end-to-end-pipeline.md) 第 2 章总图保持一致，改一处要同步另一处。
 - **新论文笔记** → 放进 `paper-notes/`，按现有七节骨架写，并更新 [`paper-notes/README.md`](./paper-notes/README.md) 与根 README §9。  
-- **新专题文档**（官方文档蒸馏）→ 放在 `docs/` 根下，在本页 §3.1 与根 README「专题学习文档」表各加一行；若引入新的横切概念，同步补 [`ai-compiler-foundations.md`](./ai-compiler-foundations.md) 对应章节与对照表。  
+- **新专题文档**（官方文档蒸馏）→ 放在 [`learning-guides/`](./learning-guides/)，在本页 §3.1 与根 README「专题学习文档」表各加一行；若引入新的横切概念，同步补 [`ai-compiler-foundations-learning-guide.md`](./learning-guides/ai-compiler-foundations-learning-guide.md) 对应章节与对照表。  
 - **新增检验条目** → 放进 [`checkpoints/`](./checkpoints/README.md) 对应分册，必须凑齐六栏：检验什么 / 前置 / 资源 / 任务 / **先预测再动手** / 可执行的验收命令 + 机器可判定的通过标准 + 常见失败映射。缺「通过标准」的条目不收——那样又退回成口述题。  
 - **动手项目升级**（例如 toy 打通到 linalg）→ 改项目自己的 README，并回写根 README 对应阶段的「动手验收」与本页阶段地图。  
 - **优先级变化** → 只改根 README §0 总表，本页阶段顺序跟着总表走。

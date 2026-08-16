@@ -1,7 +1,7 @@
 # TinyIREE：把 IREE 缩到嵌入式规模的一组部署选项（简版笔记）
 
-> **导航**：[笔记索引](README.md) · [自学枢纽](../README.md)（阶段 3） · [横切概念](../ai-compiler-foundations.md) §8（设备抽象机）  
-> **配套阅读**：本篇**只建立第一印象**，刻意不按七节骨架写；正式材料是 [`iree-learning-guide.md`](../iree-learning-guide.md)，最小必要集用它的 §7。
+> **导航**：[笔记索引](README.md) · [自学枢纽](../README.md)（阶段 3） · [横切概念](../learning-guides/ai-compiler-foundations-learning-guide.md) §8（设备抽象机）  
+> **配套阅读**：本篇**只建立第一印象**，刻意不按七节骨架写；正式材料是 [`iree-learning-guide.md`](../learning-guides/iree-learning-guide.md)，最小必要集用它的 §7。
 
 > 论文元信息
 > - 标题：*TinyIREE: An ML Execution Environment for Embedded Systems from Compilation to Deployment*
@@ -14,7 +14,7 @@
 > 这不是老师指定的必读论文，是用来建立"IREE 大概长什么样"的第一印象的。
 > 论文只有 9 页、发表于 2022 年，对 IREE 的核心机制（尤其是 HAL）讲得很浅，
 > 且很多细节已经过时（例如当时的 `--iree-llvm-target-*` 系列 flag 现已更名）。
-> **真正的学习材料见 [`docs/iree-learning-guide.md`](../iree-learning-guide.md)**，
+> **真正的学习材料见 [`docs/learning-guides/iree-learning-guide.md`](../learning-guides/iree-learning-guide.md)**，
 > 那份文档基于 IREE 官方文档与源码，重点讲 HAL。这里只留一个骨架印象。
 
 ---
@@ -90,7 +90,7 @@ LLVM dialect ──▶ LLVM IR ──▶ 目标架构二进制
 
 ## 7. 这篇论文没讲、但必须另外补的
 
-论文对下面这些只字未提或一带而过，而它们才是 IREE 的骨架（**全部在 [`docs/iree-learning-guide.md`](../iree-learning-guide.md) 里展开**）：
+论文对下面这些只字未提或一带而过，而它们才是 IREE 的骨架（**全部在 [`docs/learning-guides/iree-learning-guide.md`](../learning-guides/iree-learning-guide.md) 里展开**）：
 
 - **flow / stream / hal 三层 dialect 的分工**——论文只说"dispatch region + VM commands"，完全跳过了 Stream 这一层的异步调度与资源生命周期建模。
 - **HAL 的完整对象模型**——论文只出现了 "HAL driver = workload loader + scheduler" 这一句话式的描述。真实的 HAL 有 driver / device / allocator / buffer / buffer_view / command_buffer / executable / executable_cache / semaphore / fence / event / channel 等十余类对象。

@@ -1,12 +1,26 @@
 # 检验体系 06｜ExecuTorch
 
-> **对应学习文档**：[`../executorch-learning-guide.md`](../executorch-learning-guide.md)  
+> **对应学习文档**：[`../learning-guides/executorch-learning-guide.md`](../learning-guides/executorch-learning-guide.md)  
 > **对应动手项目**：[`onnx-delegate-lab/`](../../onnx-delegate-lab/) 的 ExecuTorch 轨（`executorch_lab/`）  
 > **分级与资源标签定义**：[`./README.md`](./README.md)
 
 本册检验的是这些知识点能不能落成代码：**Partitioner 契约（只打 `delegation_tag`，不改图结构）、tag 粒度如何决定 delegate 子图数与分区边界数、Edge Dialect 为什么要单独一层、`to_backend` 对划分合法性的要求、边界代价与 ORT EP / IREE dispatch 的同构关系**。
 
 学习指南里的过关标准是口述题（能不能默画流水线、能不能解释为什么禁止乱改图）。本册全部换成动手题：**每一条都要跑出一个可比较的数字或一段可复现的报错**。
+
+## 本册的实验对象
+
+全仓库共用的主角 `tiny_mlp`（`Gemm→Relu→Add`）**叠两层，中间夹一个 `softmax`**：
+
+```
+x ─▶ addmm ─▶ relu ─▶ add ─▶ softmax ─▶ addmm ─▶ relu ─▶ add ─▶ y
+     └───── 可委托 ─────┘    portable   └───── 可委托 ─────┘
+      索引 0    1     2         3         4      5     6
+```
+
+**为什么要叠两层、为什么要夹一个 softmax**：单独一份 `tiny_mlp` 三个算子谁都支持，会被整个后端一口吃掉——**没有边界就量不出边界代价**，本册九条题一条也做不成。夹一个 portable 的 `softmax` 把图切成两段，`per_node` 与 `connected` 才会给出不同的子图数与边界数。同样的手法在 [`05-onnx-ort.md`](./05-onnx-ort.md) 里是给主角接一条 `Softmax + ReduceSum` 的尾巴，动机完全一样。
+
+基线数字（L0-ET-01 会验证）：`per_node` = 6 子图 / 6 边界，`connected` = 2 子图 / 2 边界。**后面每一条题都是在这两组数字上做扰动。**
 
 **入门线**：L0 两条全做 + L1 至少一条 + **L2-ET-05 与 L2-ET-07 必做**（一个是「能不能自己写 Partitioner」，一个是「知不知道 Partitioner 的边界在哪」）。
 
@@ -71,7 +85,7 @@ PY
 **任务**：跑 `scripts/run_executorch.sh`（**模拟路径也算通过**），然后**不看 `01_READING.md` 的表格**，只对着 `out/executorch/01_partition_compare.json` 回答三个问题：
 
 1. `per_node` 与 `connected` 各自的 `delegate_subgraph_count` 和 `boundary_count` 是多少？
-2. 模型是 `+ * - / * +`，其中 `-` 和 `/` 不可委托。这两种策略的边界**分别落在哪两个节点之间**（读 `boundaries[].between`）？
+2. 模型是主角 `tiny_mlp` 叠两层、中间夹一个 `softmax`，算子序列 `addmm, relu, add, softmax, addmm, relu, add`，其中只有 `softmax` 不可委托。这两种策略的边界**分别落在哪两个节点之间**（读 `boundaries[].between`）？
 3. 两者的 `boundary_count` 差值从何而来——是「不可委托算子把图切开」造成的，还是「tag 打法自己制造的」？把差值拆成这两部分。
 
 答完再打开 `01_READING.md` 对答案。
@@ -95,8 +109,11 @@ PY
 **通过标准**：
 
 - `out/executorch/01_partition_compare.json`、`01_READING.md`、`02_THREE_SYSTEMS.md` 三个文件存在
-- 读出的数字是 `per_node: subgraphs=4, boundaries=4`、`connected: subgraphs=2, boundaries=2`
-- 你能指出：`connected` 的那 2 条边界都在 `mul#1 → sub#2` 和 `div#3 → mul#4`，即**由不可委托算子造成，无法通过改 tag 消除**；`per_node` 多出的 2 条（`add#0 → mul#1`、`mul#4 → add#5`）是**tag 打法自己制造的，纯属自伤**
+- 读出的数字是 `per_node: subgraphs=6, boundaries=6`、`connected: subgraphs=2, boundaries=2`
+- 你能把 6 拆成 **2 + 4**：
+  - `connected` 的那 2 条边界在 `add#2 → softmax#3` 和 `softmax#3 → addmm#4`，即**由不可委托算子造成，无法通过改 tag 消除**（**结构性边界**）
+  - `per_node` 多出的 4 条（`addmm#0 → relu#1`、`relu#1 → add#2`、`addmm#4 → relu#5`、`relu#5 → add#6`）是**tag 打法自己制造的，纯属自伤**（**策略性边界**）
+- 你能指出这 4 条自伤边界里最贵的是哪一类：`Gemm → Relu` 被切开，意味着 Relu 无法被吸进 Gemm 的输出循环，`h` 必须写回内存再读一遍——这个融合机会**下游谁都补不回来**（对照[链路总图](../learning-guides/00-end-to-end-pipeline.md)断链表第 ② 行）
 
 **常见失败 → 说明你哪里没懂**：
 
@@ -104,7 +121,7 @@ PY
 |------|------|
 | 脚本报「未找到 python」直接放弃 | `scripts/env.sh` 会尝试激活 conda 环境，路径是作者机器的；本机直接用 `python executorch_lab/01_partitioner_lab.py` 跑即可 |
 | 看到 `real.status = no_executorch` 以为失败了 | 没读懂脚本设计：ET 是可选依赖，模拟路径是**预期行为**不是降级失败 |
-| 说不清 4 条边界分别在哪 | 只看了汇总数字没看 `boundaries[].between`；边界是**边**不是**点**，说不出「哪两个节点之间」就等于没理解 |
+| 说不清 6 条边界分别在哪 | 只看了汇总数字没看 `boundaries[].between`；边界是**边**不是**点**，说不出「哪两个节点之间」就等于没理解 |
 | 认为 `connected` 的边界也能靠改 tag 消掉 | 没区分「结构性边界」（不可委托算子造成）与「策略性边界」（tag 粒度造成）——这是研究问题②的分水岭 |
 
 ---
@@ -158,29 +175,43 @@ PY
 
 ### L1-ET-03｜改可委托算子集合，验证「边界数不是由委托算子数量决定的」
 
-- **检验什么**：这条通过 = 你掌握了「**边界位置由未委托算子的分布决定，不由委托算子的多少决定**」，并且知道 `boundary_count` 单独看会骗人
+- **检验什么**：这条通过 = 你掌握了「**边界位置由未委托算子的分布决定，不由委托算子的多少决定**」，并且知道 `boundary_count` 单独看会骗人；附带一条：**用字符串判断算子身份有多脆**
 - **前置**：L0-ET-01
 - **资源**：本地
 - **预计耗时**：1h
 
-**任务**：改 `executorch_lab/01_partitioner_lab.py`，做两组独立实验（每组做完还原）：
+**任务**：改 `executorch_lab/01_partitioner_lab.py` 顶部的 `PORTABLE_HINTS`，做三组独立实验（每组做完还原）。
 
-- **A 组「减法」**：把可委托算子集合从 `add + mul` 缩成**只有 add**。要改两处，缺一不可——`simulate_partition()` 里的两个 `if op in ("add", "mul")`，以及真实路径 `AddMulPartitioner.partition()` 里的 `if node.target not in (_ADD, _MUL)`。
-- **B 组「加法」**：改成 `add + mul + sub`（真实路径需再取一个 `exir_ops.edge.aten.sub.Tensor`，**符号名以本地版本为准**）。
+这一版 lab 里，模拟路径与真实路径**共用同一个 `is_delegatable(op)`**，它对 `PORTABLE_HINTS` 里的每个串做**子串匹配**：
 
-每组都重跑并记录两种策略的 `delegate_subgraph_count`、`boundary_count`，以及**被 tag 的节点数**（`node_tags` 里 tag 非 `None` 的个数——这个指标现在必须自己数）。
+```python
+PORTABLE_HINTS = ("softmax",)                                  # ← 只改这一行
+
+def is_delegatable(op: str) -> bool:
+    return not any(h in op for h in PORTABLE_HINTS)
+```
+
+所以三组实验都只改这一行（真实路径匹配的是 `str(node.target)`，形如 `aten.addmm.default`，子串照样命中）：
+
+- **A 组「缩小委托面」**：`PORTABLE_HINTS = ("softmax", "relu")`
+- **B 组「取消所有边界」**：`PORTABLE_HINTS = ()`
+- **C 组「看着只动了一个算子」**：`PORTABLE_HINTS = ("softmax", "add")`
+
+每组都重跑并记录两种策略的 `delegate_subgraph_count`、`boundary_count`，以及**被 tag 的节点数**（`node_tags` 里 tag 非 `None` 的个数——这个指标必须自己数）。
 
 **先预测再动手**：动手前把答案写下来——
 
-1. A 组只 tag add 不 tag mul 之后，`connected` 策略的 `boundary_count` 会**翻倍、减半，还是不变**？想清楚：mul 从「被委托」变成「边界算子」，它会不会把原来 `add,mul` 那一段切碎？切碎之后，剩下的 add 还能形成几段？
-2. B 组把 sub 也纳入委托后，`connected` 的 `boundary_count` 会不会减少？模型里还剩谁是不可委托的？**它一个人能造出几条边界**？
-3. 如果 A 组和 B 组算出来的 `connected.boundary_count` 竟然一样，那这个指标还能不能单独用来判断「哪种划分更好」？你要补哪个指标才能分辨？
+1. A 组把 `relu` 变成 portable 之后，`connected` 的 `boundary_count` 会**变多、变少，还是不变**？想清楚：原来 `addmm,relu,add` 是一段连续可委托区，抽掉中间的 relu 之后，这一段还连着吗？
+2. A 组里 `per_node` 和 `connected` 算出来的数字会不会**完全相同**？什么条件下这两种策略必然等价？
+3. B 组把 `softmax` 也纳入委托后，`connected.boundary_count` 是多少？这个数字为什么必然是它——图上还剩几个「接缝」？
+4. C 组你以为只把 `add` 排除了。**数一下实际被排除的算子有几个**（提示：`"add" in "addmm"`）。
+5. 对比 A 组与 C 组的两个数字：哪一组 `boundary_count` 更小？哪一组 `tagged` 更大？如果只看 `boundary_count` 排名，会得出什么荒谬结论？
 
 **验收命令**：
 
 ```bash
 cd onnx-delegate-lab
-# 改完后每组各跑一次，并把结果另存以便对比
+# 改完 PORTABLE_HINTS 后每组各跑一次，并把结果另存以便对比
 python executorch_lab/01_partitioner_lab.py
 python - <<'PY'
 import json
@@ -189,24 +220,43 @@ for mode, v in d["simulate"].items():
     tagged = sum(1 for _, _, t in v["node_tags"] if t)
     print(f"{mode:10s} subgraphs={v['delegate_subgraph_count']} "
           f"boundaries={v['boundary_count']} tagged_nodes={tagged}")
+# 哪些算子实际被判成了 portable —— C 组必须看这一行
+print("portable:", [op for _, op, t in d["simulate"]["connected"]["node_tags"] if not t])
+# 真实路径：tag_count 是【tag 个数】= 模拟侧的 delegate_subgraph_count，不是 tagged 节点数
+for r in d["real"].get("runs", []):
+    print(" real", r.get("mode"), "tag_count=", r.get("tag_count", r.get("error")))
 PY
 ```
 
+注意真实路径的 `tag_count` 取的是 `len(pr.partition_tags)`，对应模拟侧的 **`delegate_subgraph_count`**（不是 `tagged`）。两者对不上，说明 `PORTABLE_HINTS` 的子串在 Edge 算子全名上的命中情况和你在短名上的预期不同——这本身就是 C 组要教的东西。
+
 **通过标准**：
 
-- A 组：`connected` 的 `boundary_count` **仍是 2**（与基线相同），但 `tagged_nodes` 从 4 掉到 2；`per_node` 从 4 掉到 2
-- B 组：`connected` 的 `boundary_count` **仍是 2**，`tagged_nodes` 从 4 升到 5；`per_node` 从 4 升到 5
-- 你能用一句话解释三组数据：**`connected` 的边界数始终等于「不可委托算子把链切开后产生的接缝数」**，A 组是 `mul,sub,div` 三个不可委托算子形成两个连续断带、B 组只剩 `div` 一个，接缝数恰好都是 2
-- 你能说出必须补的第二个指标：**被委托的节点数 / 覆盖率**（A 组边界数没变但只委托了一半算子，明显更差）
+四组数字（含基线）全部对上：
+
+| 组 | `PORTABLE_HINTS` | 实际不可委托的算子 | `connected` 子图/边界 | `per_node` 子图/边界 | `tagged` |
+|----|------------------|-------------------|----------------------|---------------------|----------|
+| 基线 | `("softmax",)` | `softmax` | 2 / **2** | 6 / 6 | 6 |
+| A | `("softmax","relu")` | `softmax`, `relu` ×2 | 4 / **6** | 4 / 6 | 4 |
+| B | `()` | 无 | 1 / **0** | 7 / 6 | 7 |
+| C | `("softmax","add")` | `softmax`, `add` ×2, **`addmm` ×2** | 2 / **4** | 2 / 4 | 2 |
+
+- 你能用一句话解释这四行：**`connected` 的边界数 = 不可委托算子在链上切出的接缝数**，与被委托算子的多少无关。B 组一个接缝都没有所以是 0；A 组的 relu 卡在每段中间，把两段切成四段，接缝反而从 2 涨到 6
+- A 组和 C 组你都能指出 `per_node` 与 `connected` **两列数字完全相同**，并说清条件：**没有任何两个可委托算子相邻**时，「连通分量」退化成「单节点」，两种策略必然等价
+- C 组你能报出：`"add"` 这一个 hint 实际命中了 **4** 个算子（2 个 `add` + 2 个 `addmm`），不是你以为的 2 个；连同 `softmax`，全图 7 个算子里有 **5** 个退回了 CPU。原因是 `is_delegatable` 做的是子串匹配，`"add" in "addmm"` 成立
+  （自查：`print([op for _, op, t in ...["connected"]["node_tags"] if not t])`）
+- **对比 A 与 C**：C 的 `boundary_count`（4）比 A（6）更小，但 C 只委托了 2 个算子而 A 委托了 4 个。只看 `boundary_count` 会得出「C 比 A 好」的结论，而 C 其实把七成算子都退回了 CPU
+- 你能说出必须补的第二个指标：**被委托的节点数 / 覆盖率**
 
 **常见失败 → 说明你哪里没懂**：
 
 | 现象 | 盲点 |
 |------|------|
-| 只改了 `simulate_partition` 没改 `AddMulPartitioner`（或反之），结果两条路径结论打架 | 没意识到这是**两套并行实现**；改算子集合必须同步改，否则模拟与真实不再是同一个实验 |
-| 预测「A 组边界会翻倍」 | 把「委托算子变少」直觉地等同于「碎片变多」；实际是委托区域整体缩小了，边界反而可能减少——代价藏在覆盖率里 |
-| 认为 B 组把 sub 纳入后边界一定减少 | 没数清剩下的不可委托算子；`div` 一个人就能造出 2 条边界（进 / 出各一条） |
-| 拿 `boundary_count` 单指标下「A 组和基线一样好」的结论 | 正中陷阱——这条题目的全部意义就在这里 |
+| 预测「A 组委托算子变少，边界也会变少」 | 把「委托面积」和「边界数」当成同向指标；实际 portable 算子插在段**中间**时会把一段劈成两段，面积减少而边界增加 |
+| C 组只数出 2 个被排除的算子 | 没读 `is_delegatable` 的实现就下结论；`any(h in op ...)` 是子串匹配不是相等判断 |
+| 认为 C 组的子串命中「是 lab 的 bug」 | 方向可以讨论，但要先想清楚：改成精确匹配后，真实路径上 `aten.add.Tensor` 这种带重载后缀的名字全都匹配不上了。**算子识别靠字符串本身就是脆的**，这正是 Edge Dialect 要收敛算子集合的动机（接 L2-ET-06） |
+| 拿 `boundary_count` 单指标下「C 组最优」的结论 | 正中陷阱——这条题目的全部意义就在这里 |
+| 改完只跑了模拟路径就收工（装了 ET 的情况下） | `PORTABLE_HINTS` 两条路径共用，但真实路径匹配的是 Edge 算子全名；**务必确认 `runs[].tag_count` 与模拟侧的 `tagged` 一致**，不一致说明子串在真实算子名上没按你以为的方式命中 |
 
 ---
 
@@ -217,18 +267,26 @@ PY
 - **资源**：本地
 - **预计耗时**：1h
 
-**任务**：改模型结构，构造两种排布并各跑一次：
+**任务**：改模型结构，构造两种排布并各跑一次（基线是「两段各 3 个」）：
 
-- **交替排布**：`add, sub, mul, div, add, mul`（可委托算子被打散）
-- **连续排布**：`add, mul, add, mul, sub, div`（可委托算子扎堆在前）
+- **交替排布**：`addmm, softmax, relu, softmax, add, softmax, addmm`（可委托算子被 softmax 完全打散）
+- **连续排布**：`addmm, relu, add, addmm, relu, add, softmax`（可委托算子全扎堆在前，softmax 挪到末尾）
 
-要改两处（同上，缺一不可）：`ToyModel.forward_ops()` 的返回列表，以及真实路径 `Model.forward()` 里的六行运算顺序。定义**收益** `gain = per_node.boundary_count − connected.boundary_count`，对两种排布各算一个 `gain`。
+这一组要改**两处**，缺一不可：
+
+1. `ToyModel.forward_ops()` 的返回列表（模拟路径）
+2. 真实路径 `TinyMlpx2.forward()` 里的运算顺序（把 `torch.softmax` 挪到对应位置）
+
+`PORTABLE_HINTS` 保持基线的 `("softmax",)` 不变——**这一条实验的自变量是「排布」，不是「算子集合」**，两个变量一起动就说明不了问题。
+
+定义**收益** `gain = per_node.boundary_count − connected.boundary_count`，对三种排布（基线 + 两种新排布）各算一个 `gain`。
 
 **先预测再动手**：
 
 1. 交替排布下，`connected` 策略还能把任何两个节点合进同一个 tag 吗？如果一个 tag 里只有一个节点，`connected` 和 `per_node` 有区别吗？
-2. 连续排布下，`per_node` 会把那 4 个连续可委托算子切成几段？`connected` 呢？中间那 3 条「本可以不存在」的边界，物理上对应什么代价（回看学习指南第 5 章的边界四代价）？
-3. 哪种排布的 `gain` 更大？如果一个真实模型全是「conv-relu-conv-relu」这种可委托算子连片的结构，Partitioner 该优先优化哪一项——**扩大算子覆盖面**，还是**把已覆盖的算子合并成更少的段**？
+2. 连续排布下，`per_node` 会把那 6 个连续可委托算子切成几段？`connected` 呢？中间那 5 条「本可以不存在」的边界，物理上对应什么代价（回看学习指南第 5 章的边界四代价）？
+3. 基线的 `gain` 是 4。你能不能在**不看结果**的前提下，只数「每段的长度」就把三种排布的 `gain` 全算出来？把你的公式写下来再跑。
+4. 如果一个真实模型全是「conv-relu-conv-relu」这种可委托算子连片的结构，Partitioner 该优先优化哪一项——**扩大算子覆盖面**，还是**把已覆盖的算子合并成更少的段**？
 
 **验收命令**：
 
@@ -248,19 +306,28 @@ PY
 
 **通过标准**：
 
-- 交替排布：`gain` 很小（1 条左右），`connected` 的 `delegate_subgraph_count` 与 `per_node` 接近
-- 连续排布：`gain` 明显更大（3 条左右），`connected` 的子图数降到 1
-- **两种排布的 `gain` 严格不等，且连续排布 > 交替排布**
-- 你能写出结论：`connected` 的收益上界 = `Σ(每个连续可委托段长度 − 1)`，段越长收益越大；段长全为 1 时收益为 0
+三组数字全部对上：
+
+| 排布 | 可委托段长 | `per_node` 边界 | `connected` 边界 | `gain` | `connected` 子图数 |
+|------|-----------|----------------|-----------------|--------|-------------------|
+| 基线 `addmm,relu,add,softmax,addmm,relu,add` | 3 + 3 | 6 | 2 | **4** | 2 |
+| 交替 | 1+1+1+1 | 6 | 6 | **0** | 4 |
+| 连续 | 6 | 6 | 1 | **5** | 1 |
+
+- 交替排布：`gain` 恰好为 **0**，`connected` 与 `per_node` 的每一个数字都相同
+- 连续排布：`gain` 为 **5**，`connected` 的子图数降到 **1**
+- **三种排布的 `gain` 严格递增（0 < 4 < 5），且三者的 `per_node.boundary_count` 全是 6**——`per_node` 的边界数只和可委托算子总数有关，与排布无关，这是对照组成立的前提
+- 你能写出结论并**用它反推出上表的 gain 列**：`connected` 的收益 = `Σ(每个连续可委托段长度 − 1)`。段越长收益越大；段长全为 1 时收益为 0
 
 **常见失败 → 说明你哪里没懂**：
 
 | 现象 | 盲点 |
 |------|------|
-| 两种排布 `gain` 算出来一样 | 排布没改对（可委托算子仍然扎堆或仍然全打散），先 `print` 一遍 `node_tags` 确认 |
-| 只改了 `forward_ops()` 没改 `Model.forward()`，真实路径结果对不上模拟 | 同 L1-ET-03，两套实现要同步 |
-| 说不出收益公式 | 只做了两组数据点没有归纳；这条题的产物是**公式**不是两个数字 |
-| 认为 `connected` 永远优于 `per_node` | 方向对但太粗——在全打散的图上两者几乎等价，「永远更优」和「有时白做」是两种理解深度 |
+| 三种排布 `gain` 算出来一样 | 排布没改对（可委托算子仍然扎堆或仍然全打散），先 `print` 一遍 `node_tags` 确认 |
+| 只改了 `forward_ops()` 没改 `TinyMlpx2.forward()`，真实路径结果对不上模拟 | 没意识到这是**两套并行实现**：`PORTABLE_HINTS` 是共用的，但**模型结构不是**，排布必须两边同步改 |
+| 顺手把 `PORTABLE_HINTS` 也改了 | 单次实验动了两个自变量，`gain` 的变化归因不到排布上 |
+| 说不出收益公式 | 只做了三组数据点没有归纳；这条题的产物是**公式**不是三个数字 |
+| 认为 `connected` 永远优于 `per_node` | 方向对但太粗——交替排布上两者**完全等价**（gain=0），「永远更优」和「有时白做」是两种理解深度 |
 
 ---
 
@@ -278,15 +345,26 @@ PY
 必须实现**两套**（这是本条的硬性要求，模拟侧是不依赖 ET 的等价降级）：
 
 1. **模拟侧**：给 `simulate_partition(ops, mode)` 加一个 `mode == "threshold"` 分支（连同一个 `min_len: int = 3` 参数）。实现方式建议：先扫一遍求出所有连续可委托段的 `(起点, 长度)`，再只给长度达标的段打 tag。**不要改 `boundaries` 的计算逻辑**——边界统计是公共判据，改了就没法和前两种策略比。在 `main()` 里加一次 `simulate_partition(ops, "threshold")` 并写进 `01_partition_compare.json`。
-2. **真实侧**：给 `AddMulPartitioner.__init__` 加参数（如 `mode: str` 或 `min_len: Optional[int]`），在 `partition()` 里实现同一套阈值逻辑。**注意 `partition()` 目前是单遍流式扫描，无法在遇到段首时就知道段长**——必须先把 `graph.nodes` 收集成 list 做两遍扫描。这正是这条题目的核心工程点。
+2. **真实侧**：给 `TinyMlpPartitioner.__init__` 加参数（如 `mode: str` 或 `min_len: Optional[int]`），在 `partition()` 里实现同一套阈值逻辑。**注意 `partition()` 目前是单遍流式扫描，无法在遇到段首时就知道段长**——必须先把 `graph.nodes` 收集成 list 做两遍扫描。这正是这条题目的核心工程点。
 
-跑在 **L1-ET-04 的连续排布**（`add, mul, add, mul, sub, div`）上，因为基线模型 `+ * - / * +` 的最长段只有 2，N=3 时什么都不会被委托——这个「空结果」本身也要记录下来解释。
+基线模型的两段长度都是 3，所以 **N=3 时 `threshold` 与 `connected` 完全相同**，N=4 时则一个段都不留。这两个退化情形都要跑一次并记录，但**它们都不足以证明你的实现是对的**——真正的判据是下面那条长短段共存的序列。
+
+**必须自己构造一条长短段共存的序列**：在 `ToyModel.forward_ops()` 里改成
+
+```
+addmm, relu, add, softmax, addmm, softmax, addmm, relu, add
+         └─ 段长 3 ─┘          └段长 1┘      └─ 段长 3 ─┘
+```
+
+中间那个孤零零的 `addmm` 就是要被阈值筛掉的短段。
 
 **先预测再动手**：
 
-1. 在基线模型 `+ * - / * +` 上跑 N=3，`delegate_subgraph_count` 和 `boundary_count` 各是多少？`boundary_count = 0` 是不是意味着「零边界代价、最优划分」？（想清楚这个数字为什么会骗人）
-2. 在连续排布上跑 N=3，`threshold` 和 `connected` 的结果会不会**完全相同**？什么情况下它们才会分岔？你需要构造一个什么样的 ops 序列，才能让 `threshold` 明显区别于 `connected`（提示：需要一条长段 + 一条短段共存，如 `add, mul, add, sub, mul, div, add, mul, add`）
-3. 真实路径下，一个 delegate 段在 Edge 图里会变成几个 `call_delegate`？如果 `threshold` 比 `connected` 少委托了一段，`.pte` 里 `call_delegate` 的数量会怎么变？
+1. 在基线模型上跑 N=4，`delegate_subgraph_count` 和 `boundary_count` 各是多少？`boundary_count = 0` 是不是意味着「零边界代价、最优划分」？（想清楚这个数字为什么会骗人）
+2. 在基线模型上跑 N=3，`threshold` 和 `connected` 的结果**完全相同**。为什么？这说明「结果相同」不能用来证明实现正确——你还需要什么样的测试用例？
+3. 在上面那条长短段序列上跑 N=3，`threshold` 与 `connected` 的 `delegate_subgraph_count` / `boundary_count` / `tagged` 三个数字**分别**会怎么变？三个都会变小吗？
+4. 那个被筛掉的短段（单个 `addmm`）退回 CPU 之后，边界数是变多还是变少？画一下它前后两条边：原来是「delegate → delegate」两条边，现在是什么？
+5. 真实路径下，一个 delegate 段在 Edge 图里会变成几个 `call_delegate`？如果 `threshold` 比 `connected` 少委托了一段，`.pte` 里 `call_delegate` 的数量会怎么变？
 
 **验收命令**：
 
@@ -323,10 +401,18 @@ PY
 **通过标准**：
 
 - `01_partition_compare.json` 的 `simulate` 段里出现第三个 key `threshold`，字段结构与前两个完全一致
-- 基线模型 + N=3：`delegate_subgraph_count == 0`、`boundary_count == 0`、`tagged == 0`；且你能解释这个 0 是「全部退回 CPU」而不是「完美划分」
-- 在你构造的长短段共存序列上：`threshold` 的 `delegate_subgraph_count` **严格小于** `connected`，`tagged` 也严格更小，而 `boundary_count` **更小或相等**
+- 基线模型 + N=3：三个数字与 `connected` **逐一相同**（2 / 2 / 6），且你知道这不构成正确性证据
+- 基线模型 + N=4：`delegate_subgraph_count == 0`、`boundary_count == 0`、`tagged == 0`；且你能解释这个 0 是「全部退回 CPU」而不是「完美划分」
+- 在长短段共存序列 `addmm,relu,add,softmax,addmm,softmax,addmm,relu,add` 上跑 N=3，三个数字**全部严格小于** `connected`：
+
+  | 策略 | 子图数 | 边界数 | tagged |
+  |------|--------|--------|--------|
+  | `connected` | 3 | 4 | 7 |
+  | `threshold` (N=3) | **2** | **2** | **6** |
+
+  边界数从 4 掉到 2，是因为那个孤立的 `addmm` 退回 CPU 后，它两侧的 `softmax` 与它同为「无 tag」，两条边界**合并消失**了
 - 真实路径（若可用）：`threshold` 模式下 `.pte` 仍能生成，且 delegate 痕迹计数不高于 `connected` 模式
-- 模拟路径（降级）：上述前三条全部满足即算通过，在笔记里注明「真实侧未验证」
+- 模拟路径（降级）：上述前四条全部满足即算通过，在笔记里注明「真实侧未验证」
 
 **常见失败 → 说明你哪里没懂**：
 
@@ -349,7 +435,16 @@ PY
 
 **⚠ 真实环境要求**：这是本册**唯一无法用 lab 模拟路径等价替代**的 L2 条目——`simulate_partition` 用的是字符串 op 名，压根不经过 dialect 转换。降级方案见下方，但降级版**只算补课，不算 L2 通过**，请在笔记里如实标注。
 
-**任务**：写一个独立小脚本（建议 `executorch_lab/03_dialect_diff.py`，或直接用下面的 heredoc），把同一个模型分别打印成 ATen Dialect 与 Edge Dialect 的图，**找出至少两处差异**并解释每一处存在的理由。
+**先看 lab 已经给你的东西**：真实路径跑通后，`01_partitioner_lab.py` 会落两份文本 dump——
+
+```bash
+cd onnx-delegate-lab
+diff out/executorch/01_aten.graph.txt out/executorch/01_edge.graph.txt
+```
+
+重点看 `self.fc1(x)` 这一句在两层各变成了什么：`nn.Linear` 在 Edge 层会被拆成 `permute_copy`（或 `t_copy`）+ `addmm`。**这条 diff 就是 L1-ET-03 里「为什么 Partitioner 只能用排除法」的证据**：一个 `Linear` 落到几个 edge op、叫什么名字，是随版本变的。
+
+**但文本 dump 只能看到名字**，看不到 `node.target` 的 Python 对象类型——那才是 ATen 与 Edge 的真正分界。所以本条还要写一个独立小脚本（建议 `executorch_lab/03_dialect_diff.py`，或直接用下面的 heredoc），**找出至少两处差异**并解释每一处存在的理由。
 
 至少要覆盖这两个方向：
 
@@ -360,7 +455,7 @@ PY
 
 1. 如果 Partitioner 拿到的是 ATen 图（有 Scalar 重载、dtype 可能未特化），你写 `if node.target == aten.add.Tensor` 这种判断会漏掉什么情况？后端拿到这个节点时还需要额外做什么才能生成代码？
 2. Edge Dialect 声称「仍然硬件无关」。既然硬件无关，为什么不干脆在 ATen 层做委托？（提示：ATen 算子有两千多个且带各种重载，Edge 是收敛过的子集）
-3. 你预计 `node.meta` 里除了 `val`，还会有哪些键是 Partitioner 依赖的？（回想 `AddMulPartitioner` 往里写了什么）
+3. 你预计 `node.meta` 里除了 `val`，还会有哪些键是 Partitioner 依赖的？（回想 `TinyMlpPartitioner` 往里写了什么）
 
 **验收命令**：
 
@@ -370,11 +465,18 @@ python - <<'PY'
 import torch
 from torch.export import export
 
+# 与 executorch_lab/01_partitioner_lab.py 的 TinyMlpx2 同构（主角叠两层夹 softmax）
 class M(torch.nn.Module):
-    def forward(self, x, y):
-        return ((x + y) * y - y) / y
+    def __init__(self):
+        super().__init__()
+        self.fc1, self.fc2 = torch.nn.Linear(3, 4), torch.nn.Linear(4, 4)
+        self.register_buffer("bias2", torch.full((4,), 1.0))
+    def forward(self, x):
+        h = torch.relu(self.fc1(x)) + self.bias2
+        p = torch.softmax(h, dim=-1)
+        return torch.relu(self.fc2(p)) + self.bias2
 
-m, inputs = M().eval(), (torch.randn(1, 3), torch.randn(1, 3))
+m, inputs = M().eval(), (torch.tensor([[1.0, 2.0, 3.0]]),)
 ep = export(m, inputs)
 
 def dump(tag, gm):
@@ -404,8 +506,9 @@ PY
 - 两段输出都成功打印
 - 你能列出**至少两处**具体差异，每处都指到字段级别（例如：`type(node.target)` 从 `OpOverload` 变成 `EdgeOpOverload`、`__module__` 从 `torch._ops` 变成 `executorch.exir.dialects.edge.*`、`meta` 键集合的增减、Scalar 重载被替换为 Tensor 重载）
 - 每处差异配一句「为什么委托机制需要它」
+- **额外一处必须来自 `diff 01_aten.graph.txt 01_edge.graph.txt`**：写出 `self.fc1(x)` 在两层分别对应哪几个节点，并解释这对 `PORTABLE_HINTS` 那种字符串匹配意味着什么风险（接 L1-ET-03 的 C 组）
 
-**降级方案（无 torch / 无 executorch）**：读 [`../executorch-learning-guide.md`](../executorch-learning-guide.md) 第 3 章的 §3.2 与 §3.3，对着文中给出的两段 IR 做同样的差异清单，产物形式一致（至少两处差异 + 每处的理由）。**在笔记里标注「纸面完成，未跑通真实 IR」**，这条按补课计，不计入 L2 完成数。
+**降级方案（无 torch / 无 executorch）**：读 [`../learning-guides/executorch-learning-guide.md`](../learning-guides/executorch-learning-guide.md) 第 3 章的 §3.2 与 §3.3，对着文中给出的两段 IR 做同样的差异清单，产物形式一致（至少两处差异 + 每处的理由）。**在笔记里标注「纸面完成，未跑通真实 IR」**，这条按补课计，不计入 L2 完成数。
 
 **常见失败 → 说明你哪里没懂**：
 
@@ -427,14 +530,16 @@ PY
 
 **任务**：构造一个**非法 tag 分组**，让本该合法的划分变成环状依赖，观察 ExecuTorch 怎么拒绝它。
 
-推荐做法（最容易复现）：在 `AddMulPartitioner.partition()` 里，把**第一个 add**（`add#0`）和**最后一个 add**（`add#5`）打成**同一个 tag**，中间的 `sub`/`div` 保持不打 tag。这样：
+推荐做法（最容易复现）：在 `TinyMlpPartitioner.partition()` 里，把**第一段**（`addmm#0, relu#1, add#2`）和**第二段**（`addmm#4, relu#5, add#6`）打成**同一个 tag**，中间的 `softmax#3` 保持不打 tag。这样：
 
 ```
-add#0 ─┬─► [同一个 tag，会被融成一个子图] ◄─┬─ add#5
-       └─► sub#2 ─► div#3 ─────────────────┘
+第一段 ─┬─► [同一个 tag，会被融成一个子图] ◄─┬─ 第二段
+        └─► softmax#3 ────────────────────┘
 ```
 
-子图的输出流进 `sub`，`sub`/`div` 的输出又流回子图——**子图与外部节点互为上下游，形成环**，无法拓扑排序。
+子图（第一段）的输出流进 `softmax`，`softmax` 的输出又流回子图（第二段）——**子图与外部节点互为上下游，形成环**，无法拓扑排序。
+
+注意这个非法分组恰好是 `connected` 策略「差一点」就会做出来的事：`connected` 在遇到 `softmax` 时执行了 `current = None`，正是这一行把两段隔开。**把那一行删掉就得到非法版本**——契约的边界就在这一行代码上。
 
 **同样必须做模拟侧的等价降级**：在 `01_partitioner_lab.py` 里新增一个 `validate_tags(node_tags) -> list[str]` 函数，把 tag 分组按「同 tag 的节点集合 + 节点间的链式依赖」建图，检测**同一 tag 的节点之间是否夹着未打该 tag 的节点**，是则返回一条违规说明。用它在你的非法分组上跑出报错文本。
 
@@ -462,7 +567,13 @@ import sys; sys.path.insert(0,'executorch_lab')
 import importlib.util as u
 spec = u.spec_from_file_location('lab','executorch_lab/01_partitioner_lab.py')
 lab = u.module_from_spec(spec); spec.loader.exec_module(lab)
-print(lab.validate_tags([(0,'add','t0'),(1,'mul',None),(2,'sub',None),(3,'add','t0')]))
+# 非法：t0 的两个节点中间夹着无 tag 的 softmax → 应报违规
+print('illegal:', lab.validate_tags([(0,'addmm','t0'),(1,'relu','t0'),(2,'add','t0'),
+                                     (3,'softmax',None),
+                                     (4,'addmm','t0'),(5,'relu','t0'),(6,'add','t0')]))
+# 合法：同一份图按 connected 打法 → 应返回空列表（不能误报）
+print('legal  :', lab.validate_tags(lab.simulate_partition(
+    lab.ToyModel().forward_ops(), 'connected')['node_tags']))
 "
 ```
 
@@ -566,18 +677,31 @@ cat out/executorch/02_THREE_SYSTEMS.md
 # 1) 构建 runtime（选项名与 target 名以本地版本为准，先看 ET 源码的 CMakeLists）
 #    典型形态：cmake -B cmake-out -DEXECUTORCH_BUILD_<...>=ON && cmake --build cmake-out
 # 2) 用自带的 executor_runner 加载 .pte
-#    ./cmake-out/executor_runner --model_path <repo>/onnx-delegate-lab/out/executorch/01_addmul_connected.pte
+#    ./cmake-out/executor_runner --model_path <repo>/onnx-delegate-lab/out/executorch/01_tiny_mlp_connected.pte
 # 3) 与 eager 结果对比（AOT 侧参考值）
 cd onnx-delegate-lab
 python - <<'PY'
+import json
+# lab 已经把第一段的手算参考值写进了 JSON，先对这一段
+d = json.load(open("out/executorch/01_partition_compare.json", encoding="utf-8"))
+print("stage1 实际:", d["real"].get("stage1_output"))
+print("stage1 手算:", d["real"].get("stage1_expected"))   # [[2.5, 3.5, 4.5, 7.5]]
+PY
+python - <<'PY'
 import torch
-torch.manual_seed(0)
-x, y = torch.randn(1, 3), torch.randn(1, 3)
-ref = ((((x + y) * y - y) / y) * y) + y
-print("inputs:", x, y)
+# 全图参考值：与 01_partitioner_lab.py 的 TinyMlpx2 同一组权重
+W1 = torch.tensor([[1.,0.,0.],[0.,1.,0.],[0.,0.,1.],[1.,1.,1.]])
+x, bias2 = torch.tensor([[1., 2., 3.]]), torch.full((4,), 1.0)
+h = torch.relu(x @ W1.T + 0.5) + bias2          # 第一份 tiny_mlp
+p = torch.softmax(h, dim=-1)                     # portable 边界
+ref = torch.relu(p @ torch.eye(4).T) + bias2     # 第二份 tiny_mlp（fc2 = I，b = 0）
+print("input:", x)
+print("stage1:", h)          # 应为 [[2.5, 3.5, 4.5, 7.5]]
 print("eager ref:", ref)
 PY
 ```
+
+**这条题在本册里独一份的价值**：前面所有条目量的都是「编译期的数字」（子图数、边界数、tag 数），只有这一条回答「这些数字**变了之后，算出来的结果还一样吗**」。`stage1` 那个 `[2.5, 3.5, 4.5, 7.5]` 与 [`iree-lab`](../../iree-lab/)、[`tvm_lab/02`](../../tvm-fatbin-lab/tvm_lab/02_fusion_relay.py)、[`onnx_lab/01`](../../onnx-delegate-lab/onnx_lab/01_build_and_infer.py) 是同一组权重下的同一个答案——**四个系统、四套划分策略，必须给出同一个数**。
 
 **降级方案（不构建 C++ runtime，只做 AOT 侧验证）** —— 这是推荐的默认路径：
 

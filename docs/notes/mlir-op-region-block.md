@@ -1,6 +1,6 @@
 # Op / Region / Block 与高级语言、Dialect 范围
 
-> 来源：[`mlir-learning-guide.md`](../mlir-learning-guide.md) §2.1 · §3.1
+> 来源：[`mlir-learning-guide.md`](../learning-guides/mlir-learning-guide.md) §2.1 · §3.1
 
 ## 嵌套关系
 

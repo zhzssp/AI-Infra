@@ -1,6 +1,6 @@
 # 内联（Inlining）与 DialectInlinerInterface
 
-> 来源：[`mlir-learning-guide.md`](../mlir-learning-guide.md) §4.3  
+> 来源：[`mlir-learning-guide.md`](../learning-guides/mlir-learning-guide.md) §4.3  
 > 相关：LLVM 中端的 `inline`（CGSCC pass）；`llvm-hello-compile` 里 `-O2` 后小函数消失
 
 ## 编译里的 inlining 是什么

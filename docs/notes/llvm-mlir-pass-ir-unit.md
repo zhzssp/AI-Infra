@@ -1,6 +1,6 @@
 # Pass 传入的 IR 单元：LLVM 四层 vs MLIR Op 层级
 
-> 来源：[`llvm-learning-guide.md`](../llvm-learning-guide.md) 第 3 章 · [`mlir-learning-guide.md`](../mlir-learning-guide.md) §5.4
+> 来源：[`llvm-learning-guide.md`](../learning-guides/llvm-learning-guide.md) 第 3 章 · [`mlir-learning-guide.md`](../learning-guides/mlir-learning-guide.md) §5.4
 
 ## 是什么
 

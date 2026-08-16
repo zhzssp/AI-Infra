@@ -1,6 +1,6 @@
 # 检验体系 07｜CUDA fatbin
 
-> **对应学习文档**：[`../cuda-fatbin-learning-guide.md`](../cuda-fatbin-learning-guide.md)  
+> **对应学习文档**：[`../learning-guides/cuda-fatbin-learning-guide.md`](../learning-guides/cuda-fatbin-learning-guide.md)  
 > **对应动手项目**：[`tvm-fatbin-lab/`](../../tvm-fatbin-lab/) 的 CUDA 轨（`scripts/run_fatbin.sh`）  
 > **分级与资源标签定义**：[`./README.md`](./README.md)
 

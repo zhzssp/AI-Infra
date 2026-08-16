@@ -1,6 +1,6 @@
 # Pattern Rewriting：机制、子图与 Dialect Conversion
 
-> 来源：[`mlir-learning-guide.md`](../mlir-learning-guide.md) 第 5 章 · 第 6 章
+> 来源：[`mlir-learning-guide.md`](../learning-guides/mlir-learning-guide.md) 第 5 章 · 第 6 章
 
 ## 是什么
 

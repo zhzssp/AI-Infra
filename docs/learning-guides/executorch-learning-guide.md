@@ -4,9 +4,9 @@
 > - 基于 ExecuTorch **官方文档**（https://docs.pytorch.org/executorch）整理，不是论文笔记。
 > - 目标读者是"要在算力网上搭分布式大模型执行基础设施"的编译器/系统工程师。
 > - **重点是 Backend Delegation 与 Partitioner**（约 55% 篇幅）：`to_backend` 三条流、分区边界代价、与 ORT EP / IREE `flow.dispatch` 的对照。
-> - 与根目录 [`../README.md`](../README.md) **§4.2**（ONNX + 多后端委托）和 **§6**（六个研究问题）直接对齐；自学路径见 [`README.md`](./README.md) 阶段 4。
-> - **先修**：[`ai-compiler-foundations.md`](./ai-compiler-foundations.md) §3.3（子图划分与四类边界代价）；图级融合背景见 [`tvm-learning-guide.md`](./tvm-learning-guide.md) §2.2。
-> - **动手项目**：[`../onnx-delegate-lab/`](../onnx-delegate-lab/) —— `bash scripts/run_executorch.sh`（或随 `scripts/run.sh`），先读 `out/ANALYSIS.md`。
+> - 与根目录 [`../../README.md`](../../README.md) **§4.2**（ONNX + 多后端委托）和 **§6**（六个研究问题）直接对齐；自学路径见 [`../README.md`](../README.md) 阶段 4。
+> - **先修**：[`ai-compiler-foundations.md`](./ai-compiler-foundations-learning-guide.md) §3.3（子图划分与四类边界代价）；图级融合背景见 [`tvm-learning-guide.md`](./tvm-learning-guide.md) §2.2。
+> - **动手项目**：[`../../onnx-delegate-lab/`](../../onnx-delegate-lab/) —— `bash scripts/run_executorch.sh`（或随 `scripts/run.sh`），先读 `out/ANALYSIS.md`。
 >
 > **一句话读法**：如果只有一小时，读第 1 章坐标系、第 4 章 Backend Delegation、第 5 章分区边界代价、第 8 章三系统对照。
 >
@@ -15,7 +15,42 @@
 > - `to_backend` 三条流：https://docs.pytorch.org/executorch/main/examples-end-to-end-to-lower-model-to-delegate.html
 > - EXIR / Edge Dialect：https://docs.pytorch.org/executorch/main/ir-exir.html
 > - 后端总览：https://docs.pytorch.org/executorch/main/backends-overview.html
-> - 交叉阅读：[`onnx-learning-guide.md`](./onnx-learning-guide.md)、[`iree-learning-guide.md`](./iree-learning-guide.md)、动手 [`../onnx-delegate-lab/`](../onnx-delegate-lab/)
+> - 交叉阅读：[`onnx-learning-guide.md`](./onnx-learning-guide.md)、[`iree-learning-guide.md`](./iree-learning-guide.md)、动手 [`../../onnx-delegate-lab/`](../../onnx-delegate-lab/)
+
+---
+
+### 本篇在链路中的位置
+
+> 全局链路见 [`00-end-to-end-pipeline.md`](./00-end-to-end-pipeline.md)。本篇覆盖**第 ② 站（划分）与第 ⑦ 站（打包）**，
+> 和 [ONNX 篇](./onnx-learning-guide.md)讲的是**同一件事的另一种做法**：
+> ORT 在 Session 构建期让各 EP 竞价，ExecuTorch 则在**导出期**由你写的 `Partitioner` 一次定死。
+
+```text
+① 表示 ──▶【② 划分 ← 本篇 4–7 章】──▶ ③ 融合 ──▶ ④ 调度 ──▶ ⑤ 降低 ──▶ ⑥ 指令 ──▶【⑦ 打包 ← 本篇 2、4.4 章】
+              谁来算哪一段                                                              blob 怎么进 .pte
+```
+
+| | |
+|--|--|
+| **上游交给我** | `torch.nn.Module` → `torch.export` 出来的 ATen 图 |
+| **我固化** | ① 哪几个连续算子归同一个后端（`delegation_tag`）<br>② 边界落在哪、中间张量是否必须物化<br>③ 编好的 blob 怎么塞进 `.pte` |
+| **我交给下游** | 一个 `.pte`：里面是「portable 算子 + 若干不透明 blob」 |
+| **本篇的主角** | [`executorch_lab/01_partitioner_lab.py`](../../onnx-delegate-lab/executorch_lab/01_partitioner_lab.py) 里的 `tiny_mlp` **叠两层**：`[Gemm→Relu→Add] → Softmax → [Gemm→Relu→Add]` |
+
+**为什么主角要叠两层**：单独一份 `tiny_mlp` 的三个算子在任何后端上都被支持，会被整段吃掉——
+**没有边界就量不出边界代价**。中间夹一个 portable 的 `Softmax`，图被迫切成两段，
+`per_node` 与 `connected` 两种打 tag 策略才有差别可看。这与 ONNX 篇给主角接 `Softmax + ReduceSum` 是同一个手法。
+
+**为什么说这里是单向阀**：`per_node` 策略下 `Relu` 自成一个 delegate，
+中间张量 `h` 必须写回内存再读出来——Gemm 的输出循环里顺手做一次 `max(0,·)` 的机会就此关闭。
+后面 [TVM 篇](./tvm-learning-guide.md)的 `FuseOps`、[IREE 篇](./iree-learning-guide.md)的 `flow.dispatch` 谁都补不回来。
+断链表（[链路总图第 5 章](./00-end-to-end-pipeline.md)）里 ② 标着"不能补救"。
+
+| 章节 | 示例来自 | 怎么跑 |
+|------|---------|--------|
+| 第 4、5、7 章（Partitioner 与边界账） | `executorch_lab/01_partitioner_lab.py` | `bash scripts/run_executorch.sh` → `out/executorch/01_READING.md`、`01_partition_compare.json` |
+| 第 8 章（三系统对照） | `executorch_lab/02_compare_three_systems.py` | 同上 → `out/executorch/02_THREE_SYSTEMS.md` |
+| 第 2、3 章（相位与 Edge Dialect） | 需装 torch + executorch 才有真实产物 | 同上 → JSON 里 `real.status` |
 
 ---
 
@@ -136,33 +171,33 @@ edge = edge.to_backend(MyPartitioner())   # 或 to_backend(ep, MyPartitioner())
 
 #### 示例精讲：同一个模型，四个相位各 dump 一次
 
-最小具体输入：`(x + y) * y`，两个 `[2,3]` 张量。
+**可跑（需装 torch + executorch）** · 源码 [`executorch_lab/01_partitioner_lab.py`](../../onnx-delegate-lab/executorch_lab/01_partitioner_lab.py) 的 `try_real_executorch()` · 产物 `out/executorch/01_tiny_mlp_*.pte`
+
+模型就是本篇主角——`tiny_mlp` 叠两层，中间夹 `Softmax`：
 
 ```python
-import torch
-from torch.export import export
-from executorch.exir import to_edge
+class TinyMlpx2(torch.nn.Module):
+    def forward(self, x):
+        h = torch.relu(self.fc1(x)) + self.bias2      # 第一份 tiny_mlp
+        p = torch.softmax(h, dim=-1)                  # portable，切开
+        return torch.relu(self.fc2(p)) + self.bias2   # 第二份 tiny_mlp
 
-class M(torch.nn.Module):
-    def forward(self, x, y):
-        return (x + y) * y
+inputs = (torch.tensor([[1.0, 2.0, 3.0]]),)           # 与 iree-lab / tvm_lab 同一组输入
+```
 
-inputs = (torch.randn(2, 3), torch.randn(2, 3))
+四个相位就是 lab 里这几行：
 
-ep = export(M(), inputs)                       # 相位 2：ATen Dialect
-print(type(ep).__name__); print(ep.graph_module.code)
-
-edge = to_edge(ep)                             # 相位 3：Edge Dialect
-print(type(edge).__name__); print(edge.exported_program().graph)
-
-edge = edge.to_backend(MyPartitioner())        # 相位 4：Backend Dialect（可选，见第 7 章）
-print(edge.exported_program().graph)
-
-prog = edge.to_executorch()                    # 相位 5：ExecuTorch Program
-open("m.pte", "wb").write(prog.buffer)
+```python
+ep    = export(m, inputs)                      # 相位 2：ATen Dialect
+edge  = to_edge(ep)                            # 相位 3：Edge Dialect
+lower = edge.to_backend(TinyMlpPartitioner(connected=True))   # 相位 4：Backend Dialect
+prog  = lower.to_executorch()                  # 相位 5：ExecuTorch Program
+open(pte, "wb").write(prog.buffer)
 ```
 
 > API 名称随版本变化（`prog.buffer` 与 `write_to_file`、`to_edge` 与 `to_edge_transform_and_lower`），跑之前核对本地版本。
+> lab 把这四步整个包在 `try/except` 里：没装 executorch 时退回模拟路径，
+> `out/executorch/01_partition_compare.json` 的 `real.status` 会写明是哪种。
 
 四次 dump 的产物类型与「能看见什么」：
 
@@ -179,6 +214,8 @@ open("m.pte", "wb").write(prog.buffer)
 2. **相位 4 不产生新的容器类型**。委托只是把图里一段换成 `call_delegate` + `LoweredBackendModule`，外层仍是 Edge 层的 manager——所以「委托前后」可以用同一段代码对比（见 [4.4](#44-从-tag-到-blob融合preprocessloweredbackendmodule)）。
 
 > **自测**：跳过相位 4 直接 `to_executorch()`，`.pte` 里还会有 delegate 条目吗？指令流里剩几条 kernel 调用？
+> lab 已经落了两份 `.pte`（`per_node` / `connected`），JSON 里有各自的 `pte_bytes`——
+> 同一个模型、同样的数值，**两个文件不一样大**，差的就是 delegate 条目的个数。
 
 与 [`iree-learning-guide.md`](./iree-learning-guide.md) 对照：IREE 的 `linalg → flow → stream → hal` 在**编译器内部**固化调度；ExecuTorch 的调度更多留在**运行时解释器 + 各 delegate**，编译期只决定"哪段图被哪块 blob 替换"。
 
@@ -232,6 +269,10 @@ Backend Delegation 的契约建立在 **Edge Dialect 图**上：
 **Backend Dialect** 是 Edge 之后的可选目标感知层：可插入 backend-specific op、元数据或已 lowered 的 module。它与"整段委托成 blob"是两条互补手段——融合模式可用 pattern→backend op；大块加速仍走 delegate。细节见官方 Backend Dialect 页；本仓库优先级上**先吃透 Partitioner，再碰 backend op 注册**。
 
 #### 示例精讲：`x + 1.0` 的 ATen 图 vs Edge 图
+
+**无 lab 对应（概念最小例）**——主角模型里没有「张量加裸标量」这种写法，
+所以这里单开一个两行的 Module 把 dtype promotion 说清楚。
+主角模型自己的两层 dump 见本节末尾。
 
 最小具体输入：一个只做「加常数」的 Module，输入故意用 `int32`，让 dtype 有话可说。
 
@@ -291,6 +332,37 @@ graph():
 对委托的直接后果：Partitioner 在 Edge 层看到的 `%aten_add_tensor`，**每个输入都是 Tensor 节点**——判断「这个节点我能不能吃」只需要看 `(target, 输入 dtype/shape)`，不必再分 Scalar 分支。这就是 [3.4](#34-为什么这层对委托至关重要) 说的「委托契约建在 Edge 层」的具体含义。
 
 > **自测**：如果 Partitioner 只 tag 了 `add` 而漏了那个 `full` 节点，委托子图的入参会多几个？
+
+##### 主角模型自己的两层 dump
+
+**可跑（需装 torch + executorch）** · 产物 `out/executorch/01_aten.graph.txt` 与 `01_edge.graph.txt`
+
+lab 对主角模型也落了同样的两份 dump。对比着读，重点看 `self.fc1(x)` 变成了什么：
+
+```text
+ATen：  torch.ops.aten.linear.default(x, W, b)
+Edge：  ..._ops_aten_permute_copy_default(W, [1, 0])
+        ..._ops_aten_addmm_default(b, x, permuted)
+```
+
+**一个 `Linear` 在 Edge 层散成了两个（有时三个）算子**。这件事对 Partitioner 有两层含义：
+
+1. **别写白名单**。`linear` 到底落成 `permute_copy + addmm` 还是 `t_copy + addmm` 还是 `mm + add`，随版本变。
+   lab 里的 `is_delegatable()` 因此用**排除法**——只把 `softmax` 留给 portable，其余全 tag：
+
+   ```python
+   PORTABLE_HINTS = ("softmax",)
+   def is_delegatable(op: str) -> bool:
+       return not any(h in op for h in PORTABLE_HINTS)
+   ```
+
+2. **`permute_copy` 就是 ONNX 里的 `transB`**。同一件事（权重按 `[out,in]` 存、乘之前要转置），
+   ONNX 把它塞进一个**属性**（`transB=1`，编译期常量），Edge Dialect 则把它**显式化成一个算子节点**。
+   显式化的代价是：Partitioner 如果漏 tag 这个节点，转置就留在 CPU 上，
+   每次推理都要搬一次权重——[第 5 章](#第-5-章-分区边界代价研究问题①②的物理根源)的边界代价凭空多一笔。
+
+> 这条对照见 [`onnx-learning-guide.md` §3.3](./onnx-learning-guide.md#33-属性-vs-输入两种传参通道)：
+> **"属性 vs 输入"在 ONNX 里是 IR 契约，在 Edge Dialect 里则被统一降成了输入。**
 
 ---
 
@@ -415,7 +487,9 @@ prog = edge.to_executorch()
 3. 每个子图走 Flow 1 的 `preprocess` → blob；
 4. 原图中对应区域替换为 `LoweredBackendModule` / `call_delegate`。
 
-官方示例模型（`+ * - / * +`）配合只接管 `add`/`mul` 的 `AddMulPartitionerDemo`，会在 `-`/`/` 处断开，形成**多个** delegate 子图——这正是根 README §4.2 动手验收第 3 条要观察的现象。
+本仓库 lab 里对应的实验：主角 `tiny_mlp` 叠两层、中间夹一个 portable 的 `softmax`，Partitioner 只跳过 `softmax`——于是第 2 步抽连通子图时在 `softmax` 两侧断开，形成**两个** delegate 子图。跑法与产物见下面 §4.4 的示例精讲与 [`executorch_lab/01_partitioner_lab.py`](../../onnx-delegate-lab/executorch_lab/01_partitioner_lab.py)。
+
+> 上游 ExecuTorch 自带的 demo（`AddMulPartitionerDemo` + 一个 `+ * - / * +` 的玩具模型）走的是同一套机制，只是换了模型和算子集合。**读上游示例时不要被算子名带跑**——决定子图个数的从来不是"接管了哪些算子"，而是"没接管的算子落在哪些位置"。
 
 ### 4.3 Partitioner 契约：只打标签，不改结构
 
@@ -468,45 +542,52 @@ class PartitionResult:
 
 #### 示例精讲：打 tag 前后的图
 
-最小具体输入：`x+y → *y → -y`；Partitioner 只吃 `add` / `mul`，且让同一连通分量共用一个 tag。
+**可跑** · 源码 [`executorch_lab/01_partitioner_lab.py`](../../onnx-delegate-lab/executorch_lab/01_partitioner_lab.py) · 产物 `out/executorch/01_partition_compare.json`（`real.runs[*].graph_excerpt`）
 
-打 tag 前的 Edge 图（`meta` 里还没有 `delegation_tag`）：
+主角模型：`[Gemm→Relu→Add] → Softmax → [Gemm→Relu→Add]`，
+Partitioner 吃掉除 `softmax` 外的一切，且让同一连通分量共用一个 tag（`connected=True`）。
+
+打 tag 前的 Edge 图（`meta` 里还没有 `delegation_tag`，只列关键行）：
 
 ```text
 graph():
-    %x, %y = placeholder
-    %aten_add_tensor = call_function[target=...edge__ops_aten_add_Tensor](%x, %y)
-    %aten_mul_tensor = call_function[target=...edge__ops_aten_mul_Tensor](%aten_add_tensor, %y)
-    %aten_sub_tensor = call_function[target=...edge__ops_aten_sub_Tensor](%aten_mul_tensor, %y)
-    return (aten_sub_tensor,)
+    %x = placeholder
+    %addmm       = call_function[...edge__ops_aten_addmm_default](%b1, %x, %w1_t)
+    %relu        = call_function[...edge__ops_aten_relu_default](%addmm)
+    %add         = call_function[...edge__ops_aten_add_Tensor](%relu, %bias2)
+    %softmax     = call_function[...edge__ops_aten__softmax_default](%add, -1, False)
+    %addmm_1     = call_function[...edge__ops_aten_addmm_default](%b2, %softmax, %w2_t)
+    ...
 ```
 
-`partition` 只写两处，**图结构一个字节都没动**：
+lab 里的 `partition` 只写两处，**图结构一个字节都没动**：
 
 ```python
-node.meta["delegation_tag"] = "t0"                       # add / mul 两个节点
-partition_tags["t0"] = DelegationSpec("BackendWithCompilerDemo", [])
+node.meta["delegation_tag"] = current                       # 可委托的节点
+self.partition_tags[current] = self.delegation_spec         # DelegationSpec("BackendWithCompilerDemo", [])
 ```
 
 ```text
-add  .meta["delegation_tag"] = "t0"
-mul  .meta["delegation_tag"] = "t0"
-sub  （无 tag → 留在 portable 路径）
+addmm / relu / add        .meta["delegation_tag"] = "mlp_0"
+softmax                   （无 tag → 留在 portable 路径）
+addmm_1 / relu_1 / add_1  .meta["delegation_tag"] = "mlp_1"
 ```
 
 `to_backend` 之后（示意）：
 
 ```text
 graph():
-    %x, %y = placeholder
+    %x = placeholder
     %lowered_module_0 = get_attr[target=lowered_module_0]         # ← LoweredBackendModule
     %executorch_call_delegate = call_function[
         target=torch.ops.higher_order.executorch_call_delegate](
-        args = (%lowered_module_0, %x, %y), kwargs = {})          # ← 委托点
+        args = (%lowered_module_0, %x), kwargs = {})              # ← 委托点
     %getitem = call_function[target=operator.getitem](
         args = (%executorch_call_delegate, 0), kwargs = {})       # ← 取第 0 个输出
-    %aten_sub_tensor = call_function[target=...edge__ops_aten_sub_Tensor](%getitem, %y)
-    return (aten_sub_tensor,)
+    %softmax = call_function[...edge__ops_aten__softmax_default](%getitem, -1, False)
+    %lowered_module_1 = get_attr[target=lowered_module_1]
+    %executorch_call_delegate_1 = call_function[...](%lowered_module_1, %softmax)
+    ...
 ```
 
 三个新东西各是什么：
@@ -514,14 +595,16 @@ graph():
 | 图上的节点 | 类型 | 里面装了什么 |
 |-----------|------|-----------|
 | `lowered_module_0` | `get_attr`，指向 `LoweredBackendModule` | `backend_id`、`preprocess` 产出的 blob、`compile_specs`、原子图 |
-| `executorch_call_delegate` | higher-order op 调用 | 第 1 个参数是 lowered module，其余是子图入参（这里是 `x`、`y`） |
+| `executorch_call_delegate` | higher-order op 调用 | 第 1 个参数是 lowered module，其余是子图入参 |
 | `getitem` | 普通 `operator.getitem` | 委托返回的是 tuple，按位置取出 |
 
-对着数一遍：`add` / `mul` 两个节点**从图里消失了**（被吃进 blob），`sub` 原样留下，图从「3 个计算节点」变成「1 次委托 + 1 个 portable 算子」。
+对着数一遍：`addmm` / `relu` / `add` 三个节点**从图里消失了**（被吃进 blob），
+`softmax` 原样留下，图从「6 个计算节点 + 1 个 portable」变成「2 次委托 + 1 个 portable 算子」。
 
 > 属性名与 higher-order op 的限定名随版本变化，跑之前先 dump 一次自己的图。
 
-> **自测**：若把 `add` 与 `mul` 打成 `t0` / `t1` 两个不同 tag，上面这张图会多出哪几行？
+> **自测**：把 lab 的 `connected` 换成 `False`（per_node），上面这张图会多出哪几行？
+> 不用猜——JSON 里两种模式的 `graph_excerpt` 并排放着，`tag_count` 分别是 6 和 2。
 
 ### 4.5 运行时：`call_delegate` / init / execute
 
@@ -535,7 +618,9 @@ graph():
 
 #### 示例精讲：一次 `execute` 走过的路，与 `.pte` 里的 delegate 条目
 
-沿用上一节的图：一个 delegate（吃掉 `add`+`mul`）加一个 portable 的 `sub`。
+**部分可跑** · `.pte` 由 [`executorch_lab/01_partitioner_lab.py`](../../onnx-delegate-lab/executorch_lab/01_partitioner_lab.py) 落到 `out/executorch/01_tiny_mlp_connected.pte`；下面的 FlatBuffer 内部结构需要 `flatc` 或官方 inspector 才能展开，lab 只给出文件大小对比。
+
+沿用上一节的图：两个 delegate（各吃掉一份 `Gemm→Relu→Add`）加一个 portable 的 `softmax`。
 
 ```text
 加载期（一次性）
@@ -550,9 +635,10 @@ graph():
 执行期（每次推理）
   method.execute()
     ├─ [0] DelegateCall  delegate_index = 0
-    │        └─ backend->execute(ctx, handle, args)     # args 是 EValue*：x / y / 输出缓冲
-    │              └─ 后端内部跑自己的 add+mul（对 ExecuTorch 不透明）
-    └─ [1] KernelCall    aten::sub.out                  # portable kernel，写进预分配的 out
+    │        └─ backend->execute(ctx, handle, args)     # args 是 EValue*：x / 输出缓冲
+    │              └─ 后端内部跑自己的 Gemm+Relu+Add（对 ExecuTorch 不透明）
+    ├─ [1] KernelCall    aten::_softmax.out             # portable kernel，写进预分配的 out
+    └─ [2] DelegateCall  delegate_index = 1             # 第二份 tiny_mlp
 ```
 
 `.pte`（FlatBuffer）里对应的条目（示意，字段名随 `schema/program.fbs` 版本变化）：
@@ -565,10 +651,21 @@ ExecutionPlan "forward"
 │     id            = "BackendWithCompilerDemo"      # ← 必须与设备上注册的名字一致
 │     processed     = 指向 blob 的引用（inline 段或独立数据段 + index）
 │     compile_specs = []
+├─ delegates[1] : BackendDelegate                    # 第二份，id 相同、blob 不同
 └─ chains[0].instructions
       [0] DelegateCall { delegate_index = 0, args = [...] }
-      [1] KernelCall   { op_index = <aten::sub.out>, args = [...] }
+      [1] KernelCall   { op_index = <aten::_softmax.out>, args = [...] }
+      [2] DelegateCall { delegate_index = 1, args = [...] }
 ```
+
+**`delegates[]` 的长度就是 `partition_tags` 的个数**——这是「tag 粒度 → 部署产物」最直接的一条因果链。
+lab 落了两份 `.pte`，JSON 里的 `pte_bytes` 一比就看得出：
+`per_node`（6 个 tag）比 `connected`（2 个 tag）多出四份 blob 头和四组入出参元数据。
+
+> 这一层的结构与 [CUDA fatbin](./cuda-fatbin-learning-guide.md) 和
+> [IREE 的 `ExecutableVariant`](./iree-learning-guide.md) 同源：
+> **一个容器文件里装若干块「对宿主不透明的目标代码」+ 一张索引表。**
+> 三者的差别只在谁来生成 blob（后端厂商 / `ptxas` / IREE codegen）。
 
 三条因果值得记住：
 
@@ -595,55 +692,65 @@ ExecutionPlan "forward"
 | **内存空间切换** | host / device / 加速器私有内存 | 跨 PCIe；跨 chip；跨进程共享失败 |
 | **同步点** | 两侧执行队列不同；必须 wait 结果可见 | GPU stream vs NPU cmd queue；CPU fallback 夹心 |
 
-根 README §4.2 原话（与 [`ai-compiler-foundations.md`](./ai-compiler-foundations.md#33-子图划分与委托partition--delegate) §3.3、[`onnx-learning-guide.md`](./onnx-learning-guide.md) §7.3 用同一套四类分类）：
+根 README §4.2 原话（与 [`ai-compiler-foundations.md`](./ai-compiler-foundations-learning-guide.md#33-子图划分与委托partition--delegate) §3.3、[`onnx-learning-guide.md`](./onnx-learning-guide.md) §7.3 用同一套四类分类）：
 
 > 每个分区边界都可能引入**四类代价：数据拷贝、layout 转换、内存空间切换、同步点**——**这正是研究问题①②的根源**。
 
-映射到 [`../README.md`](../README.md) §6：
+映射到 [`../README.md`](../../README.md) §6：
 
 - **问题①（子图划分与跨设备传输最小化）**：Partitioner 的 tag 策略 = 图分割决策。多切一刀就多一条边传输；少切一刀可能把低效算子硬塞进加速器或错过融合。优化目标是 **compute gain − boundary cost**，不是最大化委托节点数。
 - **问题②（Layout / 量化 / 内存空间兼容）**：边界上的 cast、layout transpose、dequant/quant 往往比"多跑一个 add"更贵。Campo 类工作指出 FP32↔FP16 cast 有时吃掉低精度收益——委托边界上同样成立。
 
-**观察实验（与动手清单呼应）**：用只 tag `add`/`mul` 的 Partitioner 跑官方 `+ * - / * +` 图，数 `call_delegate` / lowered submodule 个数。每增加一个夹在中间的 `-` 或 `/`，就多一条边界——把"分区边界有代价"从口号变成计数。
+**观察实验（与动手清单呼应）**：用 `executorch_lab/01_partitioner_lab.py` 跑主角模型的两种 tag 粒度，数 `call_delegate` / lowered submodule 个数。每多切一刀就多一条边界——把"分区边界有代价"从口号变成计数。
 
 与 IREE 对照：IREE 在 Flow 层形成 `flow.dispatch`，边界代价被编译进 Stream/HAL 的 copy 与 barrier；ExecuTorch 把边界留给 runtime + 各 delegate 的 buffer 约定。**问题同构，结算层不同**。
 
 #### 示例精讲：同一模型，两种 tag 粒度的边界账
 
-模型固定为官方那张 `+ * - / * +`（代码见[第 7 章](#第-7-章-最小-partitioner-示例概念代码)），可委托算子只有 `add` / `mul`：
+**可跑（模拟路径无需任何依赖）** · 源码 [`executorch_lab/01_partitioner_lab.py`](../../onnx-delegate-lab/executorch_lab/01_partitioner_lab.py) · 产物 `out/executorch/01_READING.md`、`01_partition_compare.json`
+
+模型是主角 `tiny_mlp` 叠两层，中间夹一个 portable 的 `softmax`：
 
 ```text
-x,y ─▶ add0 ─v1─▶ mul1 ─v2─▶ sub2 ─v3─▶ div3 ─v4─▶ mul4 ─v5─▶ add5 ─▶ y
-       ★委托       ★委托       portable    portable    ★委托       ★委托
+x ─▶ addmm0 ─h─▶ relu1 ─h_act─▶ add2 ─p─▶ softmax3 ─q─▶ addmm4 ─▶ relu5 ─▶ add6 ─▶ y
+     ★委托       ★委托          ★委托      portable      ★委托      ★委托     ★委托
 ```
 
-粒度 A：**逐节点一个 tag**（第 7 章示例代码就是这么写的）
+**这两种粒度算出来的数值完全一样**——差别全在性能与产物大小。
+
+粒度 A：**逐节点一个 tag**（`connected=False`）
 
 ```text
-D0={add0}  D1={mul1}   [sub2 div3 portable]   D2={mul4}  D3={add5}
-跨界张量：v1 (D0→D1)  v2 (D1→portable)  v4 (portable→D2)  v5 (D2→D3)
+D0={addmm0} D1={relu1} D2={add2}  [softmax3 portable]  D3={addmm4} D4={relu5} D5={add6}
+跨界张量：h (D0→D1)  h_act (D1→D2)  p (D2→portable)  q (portable→D3)  …
 ```
 
-粒度 B：**同一连通分量共用一个 tag**
+粒度 B：**同一连通分量共用一个 tag**（`connected=True`）
 
 ```text
-DA={add0, mul1}        [sub2 div3 portable]   DB={mul4, add5}
-跨界张量：v2 (DA→portable)  v4 (portable→DB)
+DA={addmm0, relu1, add2}   [softmax3 portable]   DB={addmm4, relu5, add6}
+跨界张量：p (DA→portable)  q (portable→DB)
 ```
 
-对照表：
+对照表（数字与 lab 的 `01_partition_compare.json` 对得上）：
 
 | 指标 | A 逐节点 | B 连通分量 | 差别来自哪 |
 |------|---------|-----------|----------|
-| delegate 子图数 | 4 | 2 | tag 的**集合划分**直接决定 |
-| `preprocess` 调用 / blob 数 | 4 | 2 | 每个 blob 有自己的头部与常量副本 |
-| `call_delegate` 指令数 | 4 | 2 | 每条都要过一次 backend ABI |
-| 跨界张量交接 | 4（v1 v2 v4 v5） | 2（v2 v4） | v1、v5 本可以留在后端内部 |
-| `y` 被送进后端的次数 | 4 | 2 | 每个子图都得单独拿到 `y` |
-| 委托入参张量总数 | 8 | 4 | 同上 |
-| 后端内可做的融合 | 无（一次只看见一个算子） | `add+mul` 可以融成一个 kernel | 粒度越粗，后端优化空间越大 |
+| delegate 子图数 | 6 | 2 | tag 的**集合划分**直接决定 |
+| `preprocess` 调用 / blob 数 | 6 | 2 | 每个 blob 有自己的头部与常量副本 |
+| `call_delegate` 指令数 | 6 | 2 | 每条都要过一次 backend ABI |
+| 跨界张量交接 | 6 | 2（`p`、`q`） | `h` / `h_act` 本可以留在后端内部 |
+| 后端内可做的融合 | 无（一次只看见一个算子） | `Gemm+Relu+Add` 可融成一个 kernel | 粒度越粗，后端优化空间越大 |
 
-数出来的办法（跑通后只改 tag 粒度，比 A/B 两组数字）：
+**最要紧的是最后一行。** A 粒度下 `h` 与 `h_act` 被强制物化：
+Gemm 算完一个输出元素后必须写回内存，`relu` 再把它读回来做一次 `max(0,·)`。
+这两个中间张量占的带宽，在真实尺寸（batch 1024 × hidden 4096 的 FP32 = 16 MiB）下
+比那次 `max` 本身贵两个数量级——**而且没人能补救**：
+后面 [TVM 的 `FuseOps`](./tvm-learning-guide.md#22-图级优化) 与
+[IREE 的 `flow.dispatch`](./iree-learning-guide.md) 都只在**自己的子图内部**做融合，
+跨 delegate 边界它们连图都看不见。
+
+数出来的办法（装了 ExecuTorch 时；lab 已经替你跑了两遍）：
 
 ```python
 import torch
@@ -655,11 +762,13 @@ print("delegate 子图数:", len(calls))
 print("委托入参张量总数:", sum(len(n.args) - 1 for n in calls))  # 第 1 个 arg 是 lowered module
 ```
 
-> API 名称随版本变化，跑之前核对本地版本；没装 ExecuTorch 时，`onnx-delegate-lab` 的模拟报告也给同样这两组数字。
+> API 名称随版本变化，跑之前核对本地版本；**没装 ExecuTorch 时 lab 会退回模拟路径**，
+> `simulate_partition()` 用同一套规则给出同样这两组数字，教学结论不受影响。
 
-结论一句话：**tag 粒度 = 图分割的自由度**。但 B 不是「永远更好」——若 `add0` 与 `mul1` 之间夹着后端不支持的属性组合，强行合并会让整块 `preprocess` 失败，反而退回全 portable。
+结论一句话：**tag 粒度 = 图分割的自由度**。但 B 不是「永远更好」——若 `addmm` 与 `relu` 之间夹着后端不支持的属性组合，强行合并会让整块 `preprocess` 失败，反而退回全 portable。
 
-> **自测**：把 `sub2` 也变成可委托算子后，A 与 B 的 delegate 子图数各变成几个？
+> **自测**：把 `softmax` 也变成可委托算子（改 lab 里的 `PORTABLE_HINTS = ()`），
+> A 与 B 的 delegate 子图数各变成几个？B 这时的边界数是多少？
 
 ---
 
@@ -704,31 +813,22 @@ class Backend_1_2_Partitioner(Partitioner):
 
 工程建议：先用选项 1 跑通双后端；需要联合优化边界时再上选项 2。
 
-#### 示例精讲：4 节点图上，两种写法各产出什么
+#### 示例精讲：主角的两层各归一个后端，两种写法产出什么
 
-最小具体输入：4 个算子，前两个归 Backend1，后两个归 Backend2。
+**无 lab 对应（在主角模型上的思想实验）**——lab 里两段都发给同一个 demo backend，
+但把 `TinyMlpPartitioner` 里的 `self.delegation_spec` 换成按段选 spec，就能真跑这个场景。
 
-```python
-class M(torch.nn.Module):
-    def forward(self, x, y):
-        a = x + y      # n0 → Backend1
-        b = a * y      # n1 → Backend1
-        c = b - y      # n2 → Backend2
-        d = c / y      # n3 → Backend2
-        return d
-
-inputs = (torch.randn(1, 3), torch.randn(1, 3))
-```
+模型仍是主角叠两层：第一份 `tiny_mlp` 归 Backend1，`softmax` 留 portable，第二份归 Backend2。
 
 **写法 1：串行两次 `to_backend`**
 
 ```python
-ep = to_edge(export(M(), inputs)).exported_program()
-ep = to_backend(ep, AddMulPartitioner())    # 只 tag add/mul → Backend1
-ep = to_backend(ep, SubDivPartitioner())    # 只 tag sub/div → Backend2
+ep = to_edge(export(m, inputs)).exported_program()
+ep = to_backend(ep, FirstBlockPartitioner())    # 吃掉第一段 → Backend1
+ep = to_backend(ep, SecondBlockPartitioner())   # 剩下的第二段 → Backend2
 ```
 
-关键点：第二次调用时 `add`/`mul` 已经被替换掉了，`SubDivPartitioner` **根本看不到它们**——它遍历到的只有 `get_attr`、`call_delegate`、`getitem`、`sub`、`div`。
+关键点：第二次调用时第一段已经被替换掉了，`SecondBlockPartitioner` **根本看不到它们**——它遍历到的只有 `get_attr`、`call_delegate`、`getitem`、`softmax`，以及第二段那三个算子。
 
 **写法 2：一个 Partitioner 打两种 tag**
 
@@ -740,34 +840,34 @@ class TwoBackendPartitioner(Partitioner):
         self.partition_tags: Dict[str, DelegationSpec] = {}
 
     def partition(self, exported_program: ExportedProgram) -> PartitionResult:
+        seen_softmax = False                      # softmax 之前算第一段，之后算第二段
         for node in exported_program.graph_module.graph.nodes:
             if node.op != "call_function":
                 continue
-            if node.target in (_ADD, _MUL):
-                node.meta["delegation_tag"] = "b1"
-                self.partition_tags["b1"] = self.spec1
-            elif node.target in (_SUB, _DIV):
-                node.meta["delegation_tag"] = "b2"
-                self.partition_tags["b2"] = self.spec2
+            if not is_delegatable(str(node.target)):
+                seen_softmax = True
+                continue
+            tag, spec = ("b2", self.spec2) if seen_softmax else ("b1", self.spec1)
+            node.meta["delegation_tag"] = tag
+            self.partition_tags[tag] = spec
         return PartitionResult(exported_program, self.partition_tags)
-
-ep = to_backend(to_edge(export(M(), inputs)).exported_program(), TwoBackendPartitioner())
 ```
 
-（`_ADD` 等 Edge op 常量与导入写法见[第 7 章](#第-7-章-最小-partitioner-示例概念代码)；`Partitioner` / `PartitionResult` / `DelegationSpec` 的模块路径随版本变化，跑之前核对本地版本。）
+（`is_delegatable` 见[第 7 章](#第-7-章-最小-partitioner-示例概念代码)；`Partitioner` / `PartitionResult` / `DelegationSpec` 的模块路径随版本变化，跑之前核对本地版本。）
 
 两种写法的**最终图长得一样**：
 
 ```text
 graph():
-    %x, %y = placeholder
-    %lowered_module_0 = get_attr[target=lowered_module_0]        # Backend1: add + mul
+    %x = placeholder
+    %lowered_module_0 = get_attr[target=lowered_module_0]        # Backend1: 第一份 tiny_mlp
     %d0 = call_function[target=torch.ops.higher_order.executorch_call_delegate](
-              args = (%lowered_module_0, %x, %y))
+              args = (%lowered_module_0, %x))
     %g0 = call_function[target=operator.getitem](args = (%d0, 0))
-    %lowered_module_1 = get_attr[target=lowered_module_1]        # Backend2: sub + div
+    %softmax = call_function[...edge__ops_aten__softmax_default](%g0, -1, False)
+    %lowered_module_1 = get_attr[target=lowered_module_1]        # Backend2: 第二份 tiny_mlp
     %d1 = call_function[target=torch.ops.higher_order.executorch_call_delegate](
-              args = (%lowered_module_1, %g0, %y))
+              args = (%lowered_module_1, %softmax))
     %g1 = call_function[target=operator.getitem](args = (%d1, 0))
     return (g1,)
 ```
@@ -782,97 +882,78 @@ graph():
 | 失败回退 | 某次 `preprocess` 失败只影响那一步 | 一次 `partition` 内要自己保证所有 tag 自洽 |
 | 实现成本 | 低，直接复用现成 Partitioner | 高，等于自己写图分割算法 |
 
-> **自测**：写法 1 里把两次调用顺序对调，最终图会变吗？如果两个 Partitioner 都想要那个 `mul`，谁拿到？
+> **自测**：写法 1 里把两次调用顺序对调，最终图会变吗？如果两个 Partitioner 都想要第一段那个 `relu`，谁拿到？
 
 ---
 
 ## 第 7 章 最小 Partitioner 示例（概念代码）
 
-下面是一份**教学用** Partitioner：只接管 Edge 图上的 `add` / `mul`，其余留给 portable runtime。逻辑对齐官方 `AddMulPartitionerDemo` 的意图。
+**可跑** · 这一节不再另写示例——下面就是 [`executorch_lab/01_partitioner_lab.py`](../../onnx-delegate-lab/executorch_lab/01_partitioner_lab.py) 里那个 Partitioner 的原文。
 
 ```python
-from typing import Dict
-import torch
-from torch.export import ExportedProgram, export
-from executorch.exir import to_edge
-from executorch.exir.backend.partitioner import Partitioner
-from executorch.exir.backend.backend_details import DelegationSpec, PartitionResult
-from executorch.exir.dialects._ops import ops as exir_ops
-
-# 演示用 backend_id；真实项目换成 XNNPACK / QNN / CoreML 等
-_DEMO_BACKEND = "BackendWithCompilerDemo"
-
-_ADD = exir_ops.edge.aten.add.Tensor
-_MUL = exir_ops.edge.aten.mul.Tensor
+# 只有 softmax 留给 portable runtime；其余（含权重搬运类 op）都视为可委托。
+# 用「排除法」而不是「白名单」，是因为 Linear 在 Edge Dialect 里会被分解成
+# addmm / permute_copy / view_copy 等若干形态，白名单容易随版本漏项。
+PORTABLE_HINTS = ("softmax",)
 
 
-class AddMulOnlyPartitioner(Partitioner):
-    """只把 add/mul 打上 delegation_tag；不修改图结构。"""
+def is_delegatable(op: str) -> bool:
+    return not any(h in op for h in PORTABLE_HINTS)
 
-    def __init__(self) -> None:
-        self.delegation_spec = DelegationSpec(_DEMO_BACKEND, [])
+
+class TinyMlpPartitioner(Partitioner):
+    """per_node 与 connected 的差别只有 `self.connected` 那一个分支。"""
+
+    def __init__(self, connected: bool) -> None:
+        self.connected = connected
+        self.delegation_spec = DelegationSpec("BackendWithCompilerDemo", [])
         self.partition_tags: Dict[str, DelegationSpec] = {}
 
-    def partition(self, exported_program: ExportedProgram) -> PartitionResult:
+    def partition(self, exported_program):
         graph = exported_program.graph_module.graph
         partition_id = 0
-
+        current = None
         for node in graph.nodes:
             if node.op != "call_function":
                 continue
-            if node.target not in (_ADD, _MUL):
+            if not is_delegatable(str(node.target)):
+                current = None          # ← portable 算子把连通分量打断
                 continue
-
-            # 简单策略：每个可委托节点独立 tag → 多个小 delegate 子图
-            # 更优策略：对连通的 add/mul 分量共用同一 tag，减少边界
-            tag = f"addmul_{partition_id}"
-            partition_id += 1
-            node.meta["delegation_tag"] = tag
-            self.partition_tags[tag] = self.delegation_spec
-
+            if self.connected:
+                if current is None:     # 只在「上一个不是委托节点」时开新 tag
+                    current = f"mlp_{partition_id}"
+                    partition_id += 1
+                    self.partition_tags[current] = self.delegation_spec
+                node.meta["delegation_tag"] = current
+            else:
+                tag = f"mlp_{partition_id}"   # 每个节点自成一 tag
+                partition_id += 1
+                node.meta["delegation_tag"] = tag
+                self.partition_tags[tag] = self.delegation_spec
         return PartitionResult(
             tagged_exported_program=exported_program,
             partition_tags=self.partition_tags,
         )
-
-
-class Model(torch.nn.Module):
-    def forward(self, x, y):
-        x = x + y      # 可委托
-        x = x * y      # 可委托
-        x = x - y      # portable → 断开
-        x = x / y      # portable → 断开
-        x = x * y      # 可委托
-        x = x + y      # 可委托
-        return x
-
-
-def compile_and_inspect():
-    m = Model()
-    inputs = (torch.randn(1, 3), torch.randn(1, 3))
-    edge = to_edge(export(m, inputs))
-    edge = edge.to_backend(AddMulOnlyPartitioner())
-    prog = edge.to_executorch()
-
-    # 观察点：打印图，数 LoweredBackendModule / call_delegate
-    print(edge.exported_program().graph)
-    # 期望直觉：- 与 / 把图切成两段 add/mul 区域 → ≥2 个 delegate 子图
-    # （若每个 add/mul 独立 tag，子图数会更多——刻意用来观察边界）
-    with open("addmul_partial.pte", "wb") as f:
-        f.write(prog.buffer)
-
-
-if __name__ == "__main__":
-    compile_and_inspect()
 ```
 
 **读这段代码时盯住三件事**：
 
-1. `partition` **只写** `node.meta["delegation_tag"]` 和 `partition_tags`；
-2. `-` / `/` 未打 tag → 留在 Edge portable 路径，成为**分区边界**；
-3. tag 粒度决定子图个数：一节点一 tag vs 连通分量共 tag，直接改变边界数量——这是研究问题①的最小实验室。
+1. `partition` **只写** `node.meta["delegation_tag"]` 和 `partition_tags`，图结构一个字节都没动；
+2. `softmax` 未打 tag → 留在 Edge portable 路径，成为**分区边界**；
+   代码里体现为 `current = None` 那一行——**连通分量在这里被打断**；
+3. tag 粒度决定子图个数：`connected` 的 True/False 直接把 delegate 子图数从 2 变成 6，
+   这是研究问题①的最小实验室，数字见 `out/executorch/01_partition_compare.json`。
+
+**为什么 lab 用排除法而不是白名单**：官方 demo 写的是 `node.target not in (_ADD, _MUL)`，
+在只有加减乘除的玩具图上没问题。但主角模型里有 `nn.Linear`——
+它在 Edge Dialect 里会散成 `permute_copy + addmm`（[§3 的两层 dump](#示例精讲x--10-的-aten-图-vs-edge-图) 看得到），
+白名单一漏项，转置就留在 CPU 上，每次推理都白搬一次权重。
+**写生产 Partitioner 时，先 dump 一次 Edge 图再决定判据，别照着 ATen 层的算子名写。**
 
 官方还提供 helper partitioners（见 custom compiler passes 文档），便于从 decomposed op 反查源算子；写生产 Partitioner 前先扫一眼。
+
+> 没装 ExecuTorch 也能跑：lab 里的 `simulate_partition()` 用**同一套 tag 规则**在纯 Python 列表上重放一遍，
+> 输出的子图数与边界数与真实路径一致。机制先学会，环境慢慢补。
 
 ---
 
@@ -908,8 +989,8 @@ if __name__ == "__main__":
 
 | 材料 | 角色 |
 |------|------|
-| 根 [`README.md`](../README.md) §4.2 | 规定 ExecuTorch 为 **P1**，与 ONNX/ORT 一起构成"多后端委托"必学块 |
-| [`docs/README.md`](./README.md) 阶段 4 | 读本篇 + ONNX 指南；做最小 Partitioner；验"边界为什么在那里" |
+| 根 [`README.md`](../../README.md) §4.2 | 规定 ExecuTorch 为 **P1**，与 ONNX/ORT 一起构成"多后端委托"必学块 |
+| [`docs/README.md`](../README.md) 阶段 4 | 读本篇 + ONNX 指南；做最小 Partitioner；验"边界为什么在那里" |
 | 本篇 | 机制教材（委托 / Partitioner / 边界代价） |
 | [`onnx-learning-guide.md`](./onnx-learning-guide.md) | 交换格式 + ORT EP `GetCapability` |
 | [`iree-learning-guide.md`](./iree-learning-guide.md) | 统一运行时 / HAL；对照"编译期划分" |
@@ -960,34 +1041,43 @@ if __name__ == "__main__":
 
 ### 10.3 动手清单（按顺序）
 
-**推荐入口：仓库动手项目**
+**第一步：先跑，再读**（模拟路径零依赖，装了 torch+executorch 会自动走真实路径）
 
 ```bash
 cd onnx-delegate-lab && bash scripts/run_executorch.sh
-# 未装 executorch 时仍产出 per-node vs connected 边界数模拟报告
-# 读 out/executorch/01_READING.md 与 02_THREE_SYSTEMS.md
 ```
 
-**第一步：无委托走通**（可选加深）
+然后带着问题去翻产物——**每个问题都有一个具体文件回答**：
 
-```bash
-python -c "import executorch; print(executorch.__file__)"
-```
+| 问题 | 去哪找答案 |
+|------|-----------|
+| tag 粒度怎么变成子图数？ | `out/executorch/01_READING.md` 的对照表，`per_node`=6 / `connected`=2 |
+| 边界具体落在哪两个算子之间？ | `01_partition_compare.json` 的 `boundaries[*].between` |
+| `Linear` 在 Edge 层散成了什么？ | `01_aten.graph.txt` vs `01_edge.graph.txt`（需装 torch） |
+| 粒度变粗，部署产物变小了吗？ | JSON 里两份 `.pte` 的 `pte_bytes`（需装 executorch） |
+| 三种系统的划分接口差在哪？ | `02_THREE_SYSTEMS.md` |
 
-**第二步：最小 Partitioner（根 README §4.2 验收）**——lab 已覆盖
+**第二步：动手改一处，预测再验证**（改之前先写下你的预测）
 
-1. 固定模型 `+ * - / * +`（见第 7 章或 lab）；
-2. 对比 per-node tag vs connected tag；
-3. 记录：delegate 子图数、边界位置、是否同意「边界在 `-`/`/`」。
+1. 把 `PORTABLE_HINTS` 改成 `()`（softmax 也可委托）→ 两种粒度的子图数各变成几？
+2. 把 `insert` 策略从 `connected` 改成 `per_node` → `.pte` 大了多少字节？
+3. 在模型里再叠第三层 → `connected` 的子图数是 3 还是 2？为什么取决于你在层间放了什么？
 
-**第三步：对照 ORT / IREE / TVM**
+**第三步：对照 ORT / IREE / TVM**（同一个主角模型，三种切法）
 
-- ORT：lab ONNX 轨步骤 03，或 [`onnx-learning-guide.md`](./onnx-learning-guide.md)；
-- IREE：`--compile-to=flow`——[`iree-learning-guide.md`](./iree-learning-guide.md)；
-- TVM 融合（单后端划分原型）：[`../tvm-fatbin-lab/`](../tvm-fatbin-lab/)；
+- ORT：`onnx_lab/03_ort_ep_partition.py`——同样是「主角 + 一个 portable 尾巴」，
+  但决策发生在 **Session 构建期**，见 [`onnx-learning-guide.md`](./onnx-learning-guide.md) §7；
+- IREE：`iree-lab/scripts/run_phases.sh`——数 `flow.dispatch` 的个数，
+  决策发生在 **编译相位**，见 [`iree-learning-guide.md`](./iree-learning-guide.md)；
+- TVM 融合（单后端划分原型）：`tvm_lab/02_fusion_relay.py`——同一个 `tiny_mlp`，
+  数融合前后的函数个数，见 [`tvm-learning-guide.md`](./tvm-learning-guide.md) §2.2；
 - 写三句：三种切分的**决策时刻**与**边界代价支付方**。
 
-**过关标准（与 [`docs/README.md`](./README.md) 阶段 4 对齐）**：
+> 这四条轨跑的是同一个 `tiny_mlp`，所以这三句话不是背下来的对照表，
+> 是你在同一张图上量出来的四组数字。整条链路的串法见
+> [`00-end-to-end-pipeline.md`](./00-end-to-end-pipeline.md)。
+
+**过关标准（与 [`docs/README.md`](../README.md) 阶段 4 对齐）**：
 
 - [ ] 能默画 `export → Edge → Partitioner → blob → call_delegate`；
 - [ ] 能解释为何 Partitioner 禁止在 partition 时乱改图；
@@ -1029,13 +1119,13 @@ python -c "import executorch; print(executorch.__file__)"
 
 **交叉链接**
 
-- 动手项目：[`../onnx-delegate-lab/`](../onnx-delegate-lab/)  
-- 自学枢纽：[`docs/README.md`](./README.md) 阶段 4  
-- 总规划 §4.2 / §6：[`../README.md`](../README.md)  
-- 横切概念（划分与边界代价）：[`ai-compiler-foundations.md`](./ai-compiler-foundations.md) §3.3 · 四栈选型对照 §3.4  
+- 动手项目：[`../../onnx-delegate-lab/`](../../onnx-delegate-lab/)  
+- 自学枢纽：[`docs/README.md`](../README.md) 阶段 4  
+- 总规划 §4.2 / §6：[`../README.md`](../../README.md)  
+- 横切概念（划分与边界代价）：[`ai-compiler-foundations.md`](./ai-compiler-foundations-learning-guide.md) §3.3 · 四栈选型对照 §3.4  
 - ONNX / ORT EP：[`onnx-learning-guide.md`](./onnx-learning-guide.md)  
 - IREE / HAL / dispatch：[`iree-learning-guide.md`](./iree-learning-guide.md)  
-- 图级融合背景：[`tvm-learning-guide.md`](./tvm-learning-guide.md) §2.2 · 动手 [`../tvm-fatbin-lab/`](../tvm-fatbin-lab/)  
+- 图级融合背景：[`tvm-learning-guide.md`](./tvm-learning-guide.md) §2.2 · 动手 [`../../tvm-fatbin-lab/`](../../tvm-fatbin-lab/)  
 - 官方委托页：https://docs.pytorch.org/executorch/main/compiler-delegate-and-partitioner.html  
 
 ---
@@ -1043,5 +1133,5 @@ python -c "import executorch; print(executorch.__file__)"
 ## 维护约定
 
 - 官方 `to_backend` / Partitioner API 变更时，优先同步第 4、7 章与附录。  
-- 分区边界代价的分类以 [`ai-compiler-foundations.md`](./ai-compiler-foundations.md) §3.3 的四类为准，改动时同步 [`onnx-learning-guide.md`](./onnx-learning-guide.md) §7.3 与根 [`README.md`](../README.md) §4.2。  
-- 新增动手脚本入口补到 [`docs/README.md`](./README.md) 阶段 4。
+- 分区边界代价的分类以 [`ai-compiler-foundations.md`](./ai-compiler-foundations-learning-guide.md) §3.3 的四类为准，改动时同步 [`onnx-learning-guide.md`](./onnx-learning-guide.md) §7.3 与根 [`README.md`](../../README.md) §4.2。  
+- 新增动手脚本入口补到 [`docs/README.md`](../README.md) 阶段 4。

@@ -16,7 +16,7 @@ description: >-
 按顺序完成，缺信息就问一句再动手：
 
 1. **确认内容**：笔记写的是用户刚认可的那次回答（可按用户补充微调），不是另起炉灶重写长文。
-2. **确认挂靠点**：找出对应的知识文档与章节（如 `docs/llvm-learning-guide.md` §2.3）。用户若 `@` 了文件，以该文件为准。
+2. **确认挂靠点**：找出对应的知识文档与章节（如 `docs/learning-guides/llvm-learning-guide.md` §2.3）。用户若 `@` 了文件，以该文件为准。
 3. **写笔记**：在 `docs/notes/` 新建一个简短 Markdown（见下方模板）。**必须把问答里用于讲清概念的说明性示例一并写入**（见下节）。
 4. **加引用**：在知识文档讲解该概念的**适当位置**插入速记引用（见下方格式）。
 5. **收尾**：回复笔记路径 + 引用加在哪一节；不主动 commit。
@@ -49,7 +49,7 @@ description: >-
 ```markdown
 # <标题>
 
-> 来源：[`<knowledge-doc>.md`](../<knowledge-doc>.md) §<节号或小节名>
+> 来源：[`<knowledge-doc>.md`](../learning-guides/<knowledge-doc>.md) §<节号或小节名>
 
 ## 是什么
 
@@ -76,13 +76,13 @@ description: >-
 插在该概念讲解正文附近（规则句之后、延伸对比之前较合适），用相对路径指向 `notes/`：
 
 ```markdown
-> **速记**：[notes/<topic>.md](./notes/<topic>.md) —— <一句话摘要>。
+> **速记**：[notes/<topic>.md](../notes/<topic>.md) —— <一句话摘要>。
 ```
 
 要求：
 
 - 一句话摘要能让扫读者决定是否点开
-- 路径按知识文档所在目录计算（`docs/*.md` → `./notes/...`；`docs/paper-notes/*.md` → `../notes/...`）
+- 路径按知识文档所在目录计算（`docs/learning-guides/*.md` → `../notes/...`；`docs/paper-notes/*.md` → `../notes/...`）
 - 不重复粘贴整篇笔记；不改动无关章节
 
 ## 不要做的事

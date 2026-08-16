@@ -2,10 +2,10 @@
 
 > **本文档的定位**
 > - 基于 **MLIR 官方文档主干**（LangRef、DialectConversion、Interfaces、PatternRewriter、Bufferization、PassManagement、DefiningDialects/Operations、Linalg Rationale）蒸馏，讲的是**今天的 MLIR 实际长什么样**。
-> - 与 [`paper-notes/03-mlir.md`](./paper-notes/03-mlir.md) 分工明确：那篇是 **2020 论文**笔记，讲"为什么需要多层 IR、为什么不能一步跳到 LLVM"。本文讲**结构与机制**，尤其是论文只点到、官方文档才写透的 **Dialect Conversion**、**OpInterface**、**One-Shot Bufferize**。
-> - 服务目标：读完能独立扩展 [`mlir-toy-dialect/`](../mlir-toy-dialect/)，并读懂 IREE 的 `linalg → flow → stream → hal` 流水线在 MLIR 层发生了什么。下游机器码见 [`llvm-learning-guide.md`](./llvm-learning-guide.md)；工业运行时见 [`iree-learning-guide.md`](./iree-learning-guide.md)。
-> - **先修**：[`ai-compiler-foundations.md`](./ai-compiler-foundations.md) §5.1（tensor vs buffer）、§6（SSA / 多层 IR / Pass）。
-> - **邻接动手**：图级划分/委托见 [`../onnx-delegate-lab/`](../onnx-delegate-lab/)；调度搜索见 [`../tvm-fatbin-lab/`](../tvm-fatbin-lab/)。
+> - 与 [`paper-notes/03-mlir.md`](../paper-notes/03-mlir.md) 分工明确：那篇是 **2020 论文**笔记，讲"为什么需要多层 IR、为什么不能一步跳到 LLVM"。本文讲**结构与机制**，尤其是论文只点到、官方文档才写透的 **Dialect Conversion**、**OpInterface**、**One-Shot Bufferize**。
+> - 服务目标：读完能独立扩展 [`mlir-toy-dialect/`](../../mlir-toy-dialect/)，并读懂 IREE 的 `linalg → flow → stream → hal` 流水线在 MLIR 层发生了什么。下游机器码见 [`llvm-learning-guide.md`](./llvm-learning-guide.md)；工业运行时见 [`iree-learning-guide.md`](./iree-learning-guide.md)。
+> - **先修**：[`ai-compiler-foundations.md`](./ai-compiler-foundations-learning-guide.md) §5.1（tensor vs buffer）、§6（SSA / 多层 IR / Pass）。
+> - **邻接动手**：图级划分/委托见 [`../../onnx-delegate-lab/`](../../onnx-delegate-lab/)；调度搜索见 [`../../tvm-fatbin-lab/`](../../tvm-fatbin-lab/)。
 >
 > **主要信息源**
 > - LangRef：https://mlir.llvm.org/docs/LangRef/
@@ -18,6 +18,31 @@
 > - Linalg Rationale：https://mlir.llvm.org/docs/Rationale/RationaleLinalgDialect/
 >
 > **一句话读法**：如果只有两小时，读[第 1 章总图](#第-1-章-mlir-是什么渐进式-lowering-的坐标系)、[第 4 章 Interfaces](#第-4-章-traits-vs-interfaces重点)、[第 6 章 Dialect Conversion](#第-6-章-dialect-conversion重点)、[第 8 章 Linalg + Bufferization](#第-8-章-linalg--bufferization重点)。
+
+---
+
+### 本篇在链路中的位置
+
+> 全局链路见 [`00-end-to-end-pipeline.md`](./00-end-to-end-pipeline.md)。本篇是**第 ⑤ 站：多层降低**。
+
+```text
+③ 融合 ──▶ ④ 调度 ──▶ 【⑤ 多层降低 ← 本篇】──▶ ⑥ 指令生成 ──▶ ⑦ 打包与运行时
+ (TVM)      (TVM)          (MLIR)                 (LLVM)          (fatbin / IREE)
+```
+
+| | |
+|--|--|
+| **上游交给我** | 一个带高层语义的计算描述（"这是一次矩阵乘"、"这两维可并行"） |
+| **我固化** | 每一层能表达什么、因而能做什么优化；以及**在哪一刀之后某个信息永久丢失** |
+| **我交给下游** | `llvm` dialect，外加一批**必须主动附上**的属性（`noalias` / `align`）——漏了下游补不回来 |
+| **本篇的主角** | 机制部分用 [`../../mlir-toy-dialect/`](../../mlir-toy-dialect/) 的 `toy` / `low` 两个 dialect；张量部分用 [`../../mlir-toy-dialect/examples/upstream/`](../../mlir-toy-dialect/examples/upstream/) 里 `tiny_mlp` 的 linalg 版 |
+
+**为什么本篇的示例分两套**：`toy` 是刻意做小的**标量 `i32`** dialect，把 Operation / Region / Trait / Interface / Dialect Conversion 讲得极干净，但它讲不了张量语义与 bufferization。所以第 8 章的示例改用 `examples/upstream/` 下的上游 dialect 样例——同样是仓库里可直接跑的文件，只是用现成的 `mlir-opt` 而不是 `toy-opt`。
+
+| 章节 | 示例来自 | 怎么跑 |
+|------|---------|--------|
+| 第 2–7 章（机制） | `mlir-toy-dialect/test/*.mlir` | `bash scripts/all.sh`，或 `toy-opt test/xxx.mlir --pass` |
+| 第 8 章（Linalg / Bufferize） | `mlir-toy-dialect/examples/upstream/*.mlir` | `bash scripts/run_upstream.sh` |
 
 ---
 
@@ -58,7 +83,7 @@
 | 算子语义（matmul / conv） | 三层嵌套 for + fmuladd | 无法直接调库或做算子级变换 |
 | 设备亲和 / 异步时间线 | 没有对应物 | 调度决策必须另起炉灶 |
 
-论文动机见 [`paper-notes/03-mlir.md`](./paper-notes/03-mlir.md) §1；本文只记结论：**过早 lowering = 语义丢失 = 后续要么猜（模式匹配），要么放弃（不做高层优化）**。
+论文动机见 [`paper-notes/03-mlir.md`](../paper-notes/03-mlir.md) §1；本文只记结论：**过早 lowering = 语义丢失 = 后续要么猜（模式匹配），要么放弃（不做高层优化）**。
 
 ### 1.2 渐进式 lowering 的典型流水线
 
@@ -126,7 +151,7 @@ Operation（唯一的语义单元）
 4. **Value 只有两种定义点**：Op 的 Result，或 Block 的 Argument。
 5. **Type / Attribute 本身也可扩展**——自定义类型（如 `!toy.num`）是可扩展性的第二根支柱。
 
-> **速记**：[notes/mlir-op-region-block.md](./notes/mlir-op-region-block.md) —— 语句→Op、作用域→Region、直线段→Block；顶层多为 `module`；Block≈Region 内基本块；自定义 dialect 只补领域层。
+> **速记**：[../notes/mlir-op-region-block.md](../notes/mlir-op-region-block.md) —— 语句→Op、作用域→Region、直线段→Block；顶层多为 `module`；Block≈Region 内基本块；自定义 dialect 只补领域层。
 
 ### 2.2 Value / Type / Attribute
 
@@ -138,20 +163,23 @@ Operation（唯一的语义单元）
 
 Attribute 与 Type 的分工：Type 描述"运行时值长什么样"，Attribute 描述"编译期已知的静态信息"。例如 `arith.constant {value = 42 : i32}` 里，结果类型是 `i32`，常量本身是 Attribute。
 
-> **速记**：[notes/mlir-type-attr-interface.md](./notes/mlir-type-attr-interface.md) —— `!` 表示 dialect 自定义类型；`<...>` 把类型参数编码进去，让同一类类型能区分不同实例，如 `!mydialect.point<1>` / `<2>` / `<3>`。
+> **速记**：[../notes/mlir-type-attr-interface.md](../notes/mlir-type-attr-interface.md) —— `!` 表示 dialect 自定义类型；`<...>` 把类型参数编码进去，让同一类类型能区分不同实例，如 `!mydialect.point<1>` / `<2>` / `<3>`。
 
 #### 示例精讲：把一段 IR 逐字段拆成 Value / Type / Attribute
 
+**可跑** · 源码 [`mlir-toy-dialect/test/strength.mlir`](../../mlir-toy-dialect/test/strength.mlir) 的 `@mul_pow2` ·
+命令 `toy-opt test/strength.mlir`
+
 > 目的：拿到任何一行 MLIR，都能立刻指出「哪个是值、哪个是类型、哪个是编译期常量」。
 
-```mlir
-#map = affine_map<(d0, d1) -> (d0, d1)>        // ① 属性别名：一个 AffineMapAttr
+下面这段就是该文件里的 `@mul_pow2`，只多加了一行让 `%c4` 被用两次。
 
-func.func @demo(%arg0: i32) -> i32 {
-  %c = arith.constant 42 : i32                 // ② 结果 %c；类型 i32；值 42 是 Attribute
-  %s = arith.addi %arg0, %c : i32              // ③ 两个 Operand，一个 Result
-  %t = arith.muli %s, %c : i32                 // ④ %c 被第二次使用（use-def 是图）
-  return %t : i32
+```mlir
+func.func @mul_pow2(%arg0: i32) -> i32 {
+  %c4 = toy.constant 4 : i32        // ① 结果 %c4；类型 i32；值 4 是 Attribute
+  %r  = toy.mul %arg0, %c4 : i32    // ② 两个 Operand，一个 Result
+  %s  = toy.add %r, %c4 : i32       // ③ %c4 被第二次使用（use-def 是图，不是树）
+  return %s : i32
 }
 ```
 
@@ -160,29 +188,39 @@ func.func @demo(%arg0: i32) -> i32 {
 | 文本片段 | 是什么 | 说明 |
 |----------|--------|------|
 | `%arg0` | **Value**（BlockArgument） | 定义点是入口 Block 的参数，不是某个 op 的结果 |
-| `%c` / `%s` / `%t` | **Value**（OpResult） | 定义点是各自那条 op |
+| `%c4` / `%r` / `%s` | **Value**（OpResult） | 定义点是各自那条 op |
 | `i32` | **Type** | 挂在 Value 上，描述运行时长什么样 |
-| `42` | **Attribute**（`IntegerAttr`） | 编译期就知道，存在 op 的属性字典里，**不是** Value |
-| `#map` | **Attribute**（`AffineMapAttr`） | 属性可以起别名复用，本身不可变、uniqued |
-| `arith.addi` | **Operation** | OpName = `dialect.opname` |
+| `4` | **Attribute**（`I32Attr`） | 编译期就知道，存在 op 的属性字典里，**不是** Value |
+| `toy.mul` | **Operation** | OpName = `dialect.opname` |
 
-关键区别：`42` 写在 op 里是 Attribute，但 `%c` 是它**物化出来的 Value**。所以下面两句含义不同：
+在 `ToyOps.td` 里能看到这个分工是**声明出来的**：`toy.constant` 的 `4` 写在 `arguments = (ins I32Attr:$value)`，而 `toy.mul` 的两个操作数写成 `(ins I32:$lhs, I32:$rhs)`——**前者是属性，后者是值，从定义那一刻就分开了**。
+
+关键区别：`4` 写在 op 里是 Attribute，但 `%c4` 是它**物化出来的 Value**。所以下面两句含义不同：
 
 ```mlir
-%c = arith.constant 42 : i32     // 有一个 SSA 值 %c，可被多处使用
-// 而属性 42 本身没有 SSA 名字，不能被别的 op 当操作数直接引用
+%c4 = toy.constant 4 : i32       // 有一个 SSA 值 %c4，可被多处使用
+// 而属性 4 本身没有 SSA 名字，不能被别的 op 当操作数直接引用
 ```
 
-`%c` 的 use-def 链（图，不是树）：
+这个区别不是学究——它正是[第 5 章](#第-5-章-pattern-rewriting--pass) `fold()` 需要 **Constant Materializer** 的原因：`fold` 算出来的是 Attribute（一个 `30`），而 IR 里要接着用的是 Value，中间必须有人把它变回一条 `toy.constant`。
+
+`%c4` 的 use-def 链（图，不是树）：
 
 ```text
-%c ──use──▶ arith.addi (%arg0, %c)
-   └─use──▶ arith.muli (%s,   %c)
+%c4 ──use──▶ toy.mul (%arg0, %c4)
+    └─use──▶ toy.add (%r,    %c4)
 ```
 
-> **自测**：把 `%c` 删掉但保留 `arith.addi %arg0, %c`，verifier 会报什么类别的错——类型错还是定义缺失？
+**属性还可以起别名复用**，这在 `toy` 里用不上（它只有整数属性），但在真实 dialect 里到处都是——见 [`examples/upstream/01-linalg-generic.mlir`](../../mlir-toy-dialect/examples/upstream/01-linalg-generic.mlir)：
 
-> **速记**：[notes/mlir-type-attr-interface.md](./notes/mlir-type-attr-interface.md) —— Type≠必须内存布局；Attribute 值种类内置、key 由 Op 约定；Interface≠fold，是跨 dialect 能力契约。
+```mlir
+#id2 = affine_map<(d0, d1) -> (d0, d1)>   // 一个 AffineMapAttr，起了别名反复引用
+```
+
+> **自测**：把 `%c4` 那行删掉但保留 `toy.mul %arg0, %c4`，verifier 会报什么类别的错——类型错还是定义缺失？
+> 再想一步：为什么 `toy.constant 4` 的 `4` 不能直接写进 `toy.mul` 当第二个操作数？
+
+> **速记**：[../notes/mlir-type-attr-interface.md](../notes/mlir-type-attr-interface.md) —— Type≠必须内存布局；Attribute 值种类内置、key 由 Op 约定；Interface≠fold，是跨 dialect 能力契约。
 
 ### 2.3 Block arguments 为何替代 phi
 
@@ -208,37 +246,59 @@ cf.br ^bb3(%b : i32)     // 来自 bb2
 - 嵌套 Region 时，外层值通过 Region 参数或捕获进入内层，模型一致。
 - Verifier 更容易检查：每个前驱传给后继的参数个数/类型必须匹配。
 
-#### 示例精讲：`max0` —— 同一个汇合点，phi 版与 block argument 版
+#### 示例精讲：`clamp0` —— 同一个汇合点，phi 版与 block argument 版
+
+**部分可跑** · LLVM 那一半可跑：源码 [`llvm-hello-compile/src/kernel.c`](../../llvm-hello-compile/src/kernel.c) 的 `clamp0`，
+命令 `cd llvm-hello-compile && bash scripts/tour.sh`（第 2 站）· 产物 `out/tour/`。
+MLIR 那一半是**等价手写**——lab 的 toy dialect 不生成多基本块的控制流，
+下面的 block argument 版本用来和左边逐行对照，不是 lab 产物。
 
 > 目的：把「汇合点接收不同前驱的值」这件事，在两套 IR 里各看一遍，并能默画对象树。
+> 对照阅读：[`llvm-learning-guide.md` §2.3](./llvm-learning-guide.md#23-ssa基本块与-phi)。
 
-源语义：`int max0(int x) { return x > 0 ? x : 0; }`
+源语义：
 
-**LLVM IR（phi 版）**
+```c
+int clamp0(int a, int b) {
+  int y = a + b;
+  int r;
+  if (y > 0) r = y;
+  else       r = 0;
+  return r;
+}
+```
+
+**LLVM IR（phi 版）**——`opt -passes=mem2reg` 之后的真实产物：
 
 ```llvm
-define i32 @max0(i32 %x) {
+define i32 @clamp0(i32 %a, i32 %b) {
 entry:
-  %cmp = icmp sgt i32 %x, 0
-  br i1 %cmp, label %pos, label %neg
-pos:
-  br label %exit
-neg:
-  br label %exit
-exit:
-  %r = phi i32 [ %x, %pos ], [ 0, %neg ]   ; ← 汇合：按"从哪来"选值
-  ret i32 %r
+  %add = add nsw i32 %a, %b
+  %cmp = icmp sgt i32 %add, 0
+  br i1 %cmp, label %if.then, label %if.else
+if.then:
+  br label %if.end
+if.else:
+  br label %if.end
+if.end:
+  %r.0 = phi i32 [ %add, %if.then ], [ 0, %if.else ]   ; ← 汇合：按"从哪来"选值
+  ret i32 %r.0
 }
 ```
 
 **MLIR（block argument 版）**
 
 ```mlir
-func.func @max0(%x: i32) -> i32 {
-  %c0 = arith.constant 0 : i32
-  %cmp = arith.cmpi sgt, %x, %c0 : i32
-  cf.cond_br %cmp, ^exit(%x : i32), ^exit(%c0 : i32)   // ← 由前驱"把值传进去"
-^exit(%r: i32):
+func.func @clamp0(%a: i32, %b: i32) -> i32 {
+  %c0  = arith.constant 0 : i32
+  %add = arith.addi %a, %b : i32
+  %cmp = arith.cmpi sgt, %add, %c0 : i32
+  cf.cond_br %cmp, ^then, ^else
+^then:
+  cf.br ^exit(%add : i32)          // ← 由前驱"把值传进去"
+^else:
+  cf.br ^exit(%c0 : i32)
+^exit(%r: i32):                    // ← 块声明自己要收什么
   return %r : i32
 }
 ```
@@ -255,21 +315,37 @@ func.func @max0(%x: i32) -> i32 {
 MLIR 侧的对象树（Pass 拿到 `func.func` 时看到的就是这棵树）：
 
 ```text
-func.func @max0                  ← Operation
+func.func @clamp0                ← Operation
 └─ Region
-   ├─ Block ^entry  args: %x
+   ├─ Block ^entry  args: %a, %b
    │    ├─ arith.constant
+   │    ├─ arith.addi
    │    ├─ arith.cmpi
-   │    └─ cf.cond_br            ← Terminator，带两个后继 + 各自实参
+   │    └─ cf.cond_br            ← Terminator，带两个后继
+   ├─ Block ^then   args: —
+   │    └─ cf.br                 ← Terminator，跳转时带实参 %add
+   ├─ Block ^else   args: —
+   │    └─ cf.br                 ← 同一个后继，带实参 %c0
    └─ Block ^exit   args: %r     ← 汇合点：值从这里"进入"
         └─ func.return
 ```
 
-> **自测**：若把 `cf.cond_br` 的一侧实参从 `%c0` 改成一个 `f32` 值，报错会发生在 verifier 的哪一条规则上？
+**和 LLVM 侧那棵树逐层对照**（同一个函数）：
+
+| LLVM | MLIR | 差别 |
+|------|------|------|
+| `Function` | `func.func` **Operation** | MLIR 里函数也只是一个普通 op，不是特殊实体 |
+| 函数体 | 一个 **Region** | LLVM 没有这一层，块直接挂在函数下 |
+| `BasicBlock` | `Block` | 对应 |
+| `Instruction` | `Operation` | MLIR 的 op 可以再嵌 Region，指令不能 |
+| `PHINode`（块首） | `^exit` 的**块参数** | 值从分支传入，而不是在块内回看前驱 |
+
+> **自测**：若把 `^else` 那条 `cf.br` 的实参从 `%c0` 改成一个 `f32` 值，报错会发生在 verifier 的哪一条规则上？
+> 若把 `^then` / `^else` 两个空块删掉、让 `cf.cond_br` 直接带实参跳 `^exit`，语义变了吗？（这正是 LLVM 侧 `-O2` 干的事。）
 
 读 [`llvm-learning-guide.md`](./llvm-learning-guide.md) §2.3 时，记住这句话：**MLIR 用 block argument 改进了 LLVM 的 phi 表示，语义等价、结构更干净**。
 
-> **速记**：[notes/mlir-block-arg-ssa.md](./notes/mlir-block-arg-ssa.md) —— phi/block-arg 是数据流汇合（到达定值），不是分支；≠ 活跃变量；SSA 值在构造时对应源变量/`alloca`。
+> **速记**：[../notes/mlir-block-arg-ssa.md](../notes/mlir-block-arg-ssa.md) —— phi/block-arg 是数据流汇合（到达定值），不是分支；≠ 活跃变量；SSA 值在构造时对应源变量/`alloca`。
 
 ### 2.4 两种 Region 语义：SSA CFG vs Graph
 
@@ -284,7 +360,7 @@ func.func @max0                  ← Operation
 
 ### 2.5 与 toy 项目的对照
 
-在 [`mlir-toy-dialect/`](../mlir-toy-dialect/) 里：
+在 [`mlir-toy-dialect/`](../../mlir-toy-dialect/) 里：
 
 ```
 builtin.module                    ← 最外层 Operation + SymbolTable
@@ -318,7 +394,7 @@ builtin.module                    ← 最外层 Operation + SymbolTable
 - 一个 Op 只属于一个 dialect，但**不同 dialect 的 op 可在同一 IR 中混合**。
 - 扩展三支柱：**自定义 Op、自定义 Type、自定义 Attribute**（Interface 是第四根"复用支柱"，见第 4 章）。
 
-> **速记**：[notes/mlir-op-region-block.md](./notes/mlir-op-region-block.md) —— 用排除法看 dialect 范围：标准 dialect 管通用脚手架，自定义只补领域 op/type。
+> **速记**：[../notes/mlir-op-region-block.md](../notes/mlir-op-region-block.md) —— 用排除法看 dialect 范围：标准 dialect 管通用脚手架，自定义只补领域 op/type。
 
 ### 3.2 ODS 定义 Op 的最小字段
 
@@ -382,7 +458,7 @@ Traits 在 `.td` 的方括号里列出，编译期附着到 Op 类上。常见�
 
 Traits 是"是/否"或轻量行为标记；需要**方法契约**时用 Interface（下一章）。
 
-> **速记**：[notes/mlir-trait-vs-interface.md](./notes/mlir-trait-vs-interface.md) —— Trait 可自定义但是标签；Interface 才是打分/重写；候选是遍历窗口而非全体一次处理；正确性靠逐步保义而非看完全局。
+> **速记**：[../notes/mlir-trait-vs-interface.md](../notes/mlir-trait-vs-interface.md) —— Trait 可自定义但是标签；Interface 才是打分/重写；候选是遍历窗口而非全体一次处理；正确性靠逐步保义而非看完全局。
 
 ---
 
@@ -397,8 +473,8 @@ Trait     = 编译期附着的"标签 / 轻量行为"（有没有某性质）
 Interface = 运行时可查询的"能力契约"（能不能做某事、怎么做）
 ```
 
-> **速记**：[notes/mlir-type-attr-interface.md](./notes/mlir-type-attr-interface.md) —— Interface 让 Pass 只认契约不认 op 名；与 `fold`/canonicalize 不是一回事。  
-> **速记**：[notes/mlir-trait-vs-interface.md](./notes/mlir-trait-vs-interface.md) —— 融合例子看 Trait/Interface 能力边界；候选窗口与「逐步保义」如何保证正确。
+> **速记**：[../notes/mlir-type-attr-interface.md](../notes/mlir-type-attr-interface.md) —— Interface 让 Pass 只认契约不认 op 名；与 `fold`/canonicalize 不是一回事。  
+> **速记**：[../notes/mlir-trait-vs-interface.md](../notes/mlir-trait-vs-interface.md) —— 融合例子看 Trait/Interface 能力边界；候选窗口与「逐步保义」如何保证正确。
 
 | | Trait | Interface |
 |--|-------|-----------|
@@ -421,7 +497,7 @@ Interface = 运行时可查询的"能力契约"（能不能做某事、怎么做
    (实现接口)     (实现接口)   (实现接口)
 ```
 
-Pass **不 `#include` 任何具体 dialect 头文件**也能工作——只要 op 实现了接口。这是 [`mlir-toy-dialect`](../mlir-toy-dialect/) 里 `--toy-print-cost` 的全部意义：`ToyCostPass.cpp` 是教学版的"跨 dialect 通用 Pass"。
+Pass **不 `#include` 任何具体 dialect 头文件**也能工作——只要 op 实现了接口。这是 [`mlir-toy-dialect`](../../mlir-toy-dialect/) 里 `--toy-print-cost` 的全部意义：`ToyCostPass.cpp` 是教学版的"跨 dialect 通用 Pass"。
 
 工业界同构例子：
 
@@ -439,7 +515,7 @@ Pass **不 `#include` 任何具体 dialect 头文件**也能工作——只要 o
 常见 **DialectInterface**：`DialectInlinerInterface`（方言级决定"能不能内联进/出"）、dialect 级的常量物化钩子。  
 常见 **OpInterface**：下面 4.4 列出的四个，几乎是 AI 编译每天都会碰到的。
 
-> **速记**：[notes/mlir-inlining.md](./notes/mlir-inlining.md) —— 内联=调用点展开函数体（≠`#include`）；`DialectInlinerInterface` 决定本方言如何参与通用 Inliner。
+> **速记**：[../notes/mlir-inlining.md](../notes/mlir-inlining.md) —— 内联=调用点展开函数体（≠`#include`）；`DialectInlinerInterface` 决定本方言如何参与通用 Inliner。
 
 ### 4.4 四个必知 OpInterface
 
@@ -465,6 +541,10 @@ One-Shot Bufferize 的扩展点：每个可 bufferize 的 op 实现：
 实现常常放在 **External Model**（另一编译单元），避免 dialect 定义与 transforms 循环依赖。
 
 #### 示例精讲：四个接口各看一眼「它让通用 Pass 免于认 op 名」
+
+**部分可跑** · ③ 的 `linalg.matmul` 就是
+[`mlir-toy-dialect/examples/upstream/01-linalg-generic.mlir`](../../mlir-toy-dialect/examples/upstream/01-linalg-generic.mlir)
+里主角模型的 Gemm 段，可直接 `mlir-opt` 跑；①②④ 是各接口的最小说明片段。
 
 > 目的：每个接口配一段最小 IR + 一句「通用 Pass 因此能做什么」。
 
@@ -527,7 +607,7 @@ toy 项目里的 `ToyCostOpInterface` + `--toy-print-cost` 就是这套模式的
 
 ### 4.5 论文四种策略 → 工程落点
 
-[`paper-notes/03-mlir.md`](./paper-notes/03-mlir.md) §3.5 的四种策略，对照今天的代码：
+[`paper-notes/03-mlir.md`](../paper-notes/03-mlir.md) §3.5 的四种策略，对照今天的代码：
 
 | 策略 | 工程落点 |
 |------|---------|
@@ -563,8 +643,10 @@ struct SimplifyMulOne : public OpRewritePattern<toy::MulOp> {
 
 #### 示例精讲：`x*1 → x` 与 `x+0 → x` 的一次完整重写
 
+**可跑** · 源码 [`mlir-toy-dialect/test/simplify.mlir`](../../mlir-toy-dialect/test/simplify.mlir) ·
+命令 `toy-opt test/simplify.mlir --toy-simplify`
+
 > 目的：看清「根 op → 沿 use-def 查条件 → replaceOp → 驱动器再来一轮」这条链，并理解不动点。
-> 可直接跑：`toy-opt test/simplify.mlir --toy-simplify`（见 [`mlir-toy-dialect/`](../mlir-toy-dialect/)）。
 
 **输入 IR**（把两条规则串起来，便于观察多轮迭代）
 
@@ -619,7 +701,7 @@ func.func @chain(%arg0: i32) -> i32 {
 
 > **自测**：若把输入里的 `%zero` 换成函数参数（不再是常量），第 2 轮会发生什么？最终 IR 里还剩几条 op？
 
-> **速记**：[notes/mlir-pattern-rewriting.md](./notes/mlir-pattern-rewriting.md) —— 机制而非专属优化；子图=根+use-def 约束；宏观靠流水线/高层 op；Conversion 也用 pattern 外加 Target/TypeConverter。
+> **速记**：[../notes/mlir-pattern-rewriting.md](../notes/mlir-pattern-rewriting.md) —— 机制而非专属优化；子图=根+use-def 约束；宏观靠流水线/高层 op；Conversion 也用 pattern 外加 Target/TypeConverter。
 
 ### 5.2 贪心驱动器（Greedy Pattern Rewrite Driver）
 
@@ -653,8 +735,10 @@ toy 里两种 fold 都有：`add/mul` 返回 Attribute；`unbox` 返回 Value（
 
 #### 示例精讲：同一段 IR，`fold` 与 pattern 各消掉了什么
 
+**可跑** · 源码 [`mlir-toy-dialect/test/canonicalize.mlir`](../../mlir-toy-dialect/test/canonicalize.mlir) ·
+命令 `toy-opt test/canonicalize.mlir --canonicalize`
+
 > 目的：分清「算值」（fold）与「换结构」（pattern），并看到 materializer 在中间补的那一步。
-> 可直接跑：`toy-opt test/canonicalize.mlir --canonicalize`。
 
 **输入**
 
@@ -718,7 +802,7 @@ builtin.module(
 - **IsolatedFromAbove**：可并行跑多个此类 op 的 Pass（use-def 不跨界）
 - **分析失效**：变换 Pass 必须声明保留了哪些分析（与 LLVM New PM 的 `PreservedAnalyses` 同构，见 [`llvm-learning-guide.md`](./llvm-learning-guide.md) 第 3 章）
 
-> **速记**：[notes/llvm-mlir-pass-ir-unit.md](./notes/llvm-mlir-pass-ir-unit.md) —— Pass 传入的是解析后的 IR 根对象；LLVM 四层 vs MLIR 按 Op 锚定；细粒度在回调内用 API/walk，Function/Op 不是黑盒。
+> **速记**：[../notes/llvm-mlir-pass-ir-unit.md](../notes/llvm-mlir-pass-ir-unit.md) —— Pass 传入的是解析后的 IR 根对象；LLVM 四层 vs MLIR 按 Op 锚定；细粒度在回调内用 API/walk，Function/Op 不是黑盒。
 
 `toy-opt` ≈ LLVM 的 `opt`：注册 dialect + pass，读 `.mlir`，跑 pipeline。
 
@@ -741,8 +825,8 @@ builtin.module(
 > 官方文档：https://mlir.llvm.org/docs/DialectConversion/  
 > 这是跨 dialect lowering 的主武器，也是根 README §3.2 标 ★ 的必补项。
 
-> **速记**：[notes/conversion-llvm-vs-mlir.md](./notes/conversion-llvm-vs-mlir.md) —— 与 LLVM IR「Conversion」指令类不是一回事：那边是值级 cast，这里是跨 dialect lowering。  
-> **速记**：[notes/mlir-pattern-rewriting.md](./notes/mlir-pattern-rewriting.md) —— Conversion 的重写手段仍是 pattern（ConversionPattern）；Target/TypeConverter 管合法与类型。
+> **速记**：[../notes/conversion-llvm-vs-mlir.md](../notes/conversion-llvm-vs-mlir.md) —— 与 LLVM IR「Conversion」指令类不是一回事：那边是值级 cast，这里是跨 dialect lowering。  
+> **速记**：[../notes/mlir-pattern-rewriting.md](../notes/mlir-pattern-rewriting.md) —— Conversion 的重写手段仍是 pattern（ConversionPattern）；Target/TypeConverter 管合法与类型。
 
 ### 6.1 框架三件套
 
@@ -784,6 +868,11 @@ builtin.module(
 你不必手写每对 dialect 的直接边。这是"专家混合编译器"（Mixture of Experts）能拼 pipeline 的基础设施前提。
 
 #### 示例精讲：两条规则拼出一条没人写过的降低路径
+
+**无 lab 对应（三层假想 dialect）**——lab 的 toy 只有 `toy → arith/scf` 一跳，
+演示不了「链式」。要看真实的多跳链，去
+[`examples/upstream/03-memref-to-llvm.mlir`](../../mlir-toy-dialect/examples/upstream/03-memref-to-llvm.mlir)：
+那里 `linalg → scf → memref → llvm` 就是框架自己接起来的，你一条 pattern 都没写。
 
 > 目的：看清「链式合法化」不是玄学，而是「合法化目标 + 逐步重写」自然导出的结果。
 
@@ -859,9 +948,12 @@ target.markOpRecursivelyLegal<MyKernelOp>();
 
 #### 示例精讲：同一个 `func.func`，为什么先非法后合法
 
+**可跑** · 源码 [`mlir-toy-dialect/test/convert.mlir`](../../mlir-toy-dialect/test/convert.mlir) 的 `@type_lowering` ·
+命令 `toy-opt test/convert.mlir --toy-to-low-convert`
+
 > 目的：理解「合法与否是一个**随转换进度变化的判断**」，而不是一次性打的静态标签。
 
-**输入**（函数签名里还带着 `!toy.num`）
+**输入**（这里把签名也换成 `!toy.num`，好让动态合法性有话可说；lab 里那份签名已经是 `i32`）
 
 ```mlir
 func.func @sig(%n: !toy.num) -> !toy.num {
@@ -872,6 +964,11 @@ func.func @sig(%n: !toy.num) -> !toy.num {
   return %r : !toy.num
 }
 ```
+
+> 想亲手看这个「先非法后合法」：把 `test/convert.mlir` 里 `@type_lowering` 的签名
+> 改成 `(%n: !toy.num) -> !toy.num` 再跑一次。`TypeConverter` 会把签名一起转掉，
+> 结果与 lab 原版逐字相同——**这正说明签名转换是 Dialect Conversion 内建的一步**，
+> 而不是你要额外写的 pattern。
 
 **Target 的三条标记，各自管什么**
 
@@ -929,8 +1026,10 @@ LogicalResult matchAndRewrite(Operation *op,
 
 #### 示例精讲：`operands[i]` 和 `op->getOperand(i)` 到底差在哪
 
+**可跑** · 源码 [`mlir-toy-dialect/test/convert.mlir`](../../mlir-toy-dialect/test/convert.mlir) 的 `@type_lowering` ·
+命令 `toy-opt test/convert.mlir --toy-to-low-convert`
+
 > 目的：用一段真实会发生类型变化的 IR，看清「原始操作数」与「已 remap 操作数」的区别。
-> 可直接跑：`toy-opt test/convert.mlir --toy-to-low-convert`。
 
 **输入**（`!toy.num` 会被 TypeConverter 映射成 `i32`）
 
@@ -1176,60 +1275,93 @@ Linalg 路径（保结构）:
 
 **融合不必理解"这是 softmax 还是 gelu"**——只看这两份元信息能否对齐。这正是相对 TOSA/StableHLO 上两两算子特殊融合规则的优势（IREE 文档同样强调这一点）。
 
-> **速记**：[notes/mlir-affine-map.md](./notes/mlir-affine-map.md) —— `affine_map` 是“索引访问声明”，编译器用它做合法性检查、依赖分析和 fusion/tiling 等优化；`linalg.generic` 的核心是 `indexing_maps` + `iterator_types`。
-> **速记**：[notes/mlir-iterator-types-verifier.md](./notes/mlir-iterator-types-verifier.md) —— `iterator_types` 给出每一维的语义角色（parallel / reduction），而 verifier 负责把明显不合法的 IR 拦掉，防止后续 pass 基于错误假设工作。
+> **速记**：[../notes/mlir-affine-map.md](../notes/mlir-affine-map.md) —— `affine_map` 是“索引访问声明”，编译器用它做合法性检查、依赖分析和 fusion/tiling 等优化；`linalg.generic` 的核心是 `indexing_maps` + `iterator_types`。
+> **速记**：[../notes/mlir-iterator-types-verifier.md](../notes/mlir-iterator-types-verifier.md) —— `iterator_types` 给出每一维的语义角色（parallel / reduction），而 verifier 负责把明显不合法的 IR 拦掉，防止后续 pass 基于错误假设工作。
 
 #### 示例精讲：读懂一个 `linalg.generic`，并据此判断能否融合
 
+**可跑** · 源码 [`mlir-toy-dialect/examples/upstream/01-linalg-generic.mlir`](../../mlir-toy-dialect/examples/upstream/01-linalg-generic.mlir)
+（链路主角 `tiny_mlp` 在 linalg 层的样子，batch 取 2）·
+命令 `cd mlir-toy-dialect && bash scripts/run_upstream.sh` · 产物 `out/upstream/`
+
 > 目的：把 `indexing_maps` / `iterator_types` 从"术语"变成"能逐维读出来的东西"。
 
-**最小的逐元素加法**
+**主角的 Relu：最小的逐元素 op**
 
 ```mlir
-#id = affine_map<(d0, d1) -> (d0, d1)>          // 迭代空间 (d0,d1) → 操作数下标 (d0,d1)
+#id2 = affine_map<(d0, d1) -> (d0, d1)>         // 迭代空间 (d0,d1) → 操作数下标 (d0,d1)
 
 %out = linalg.generic {
-    indexing_maps  = [#id, #id, #id],           // 顺序：ins..., outs...
+    indexing_maps  = [#id2, #id2],              // 顺序：ins..., outs...
     iterator_types = ["parallel", "parallel"]   // 两个维都可并行
-  } ins(%a, %b : tensor<4x8xf32>, tensor<4x8xf32>)
-    outs(%init : tensor<4x8xf32>) {
-  ^bb0(%x: f32, %y: f32, %acc: f32):            // 每个"点"上的标量计算
-    %s = arith.addf %x, %y : f32
-    linalg.yield %s : f32
-  } -> tensor<4x8xf32>
+  } ins(%h : tensor<2x4xf32>) outs(%init : tensor<2x4xf32>) {
+  ^bb0(%in: f32, %unused: f32):                 // 每个"点"上的标量计算
+    %p = arith.cmpf ogt, %in, %zero : f32
+    %r = arith.select %p, %in, %zero : f32
+    linalg.yield %r : f32
+  } -> tensor<2x4xf32>
 ```
 
 逐项读法：
 
 | 元信息 | 这里的取值 | 怎么读 |
 |--------|-----------|--------|
-| 迭代空间 | `(d0, d1)`，形状取自操作数 `4x8` | 一共要跑 4×8 个点 |
-| `indexing_maps[0]` | `(d0,d1) -> (d0,d1)` | 第一个输入按 `a[d0][d1]` 取 |
-| `indexing_maps[2]` | 同上 | 输出按 `out[d0][d1]` 写 |
+| 迭代空间 | `(d0, d1)`，形状取自操作数 `2x4` | 一共要跑 2×4 个点 |
+| `indexing_maps[0]` | `(d0,d1) -> (d0,d1)` | 输入按 `h[d0][d1]` 取 |
+| `indexing_maps[1]` | 同上 | 输出按 `out[d0][d1]` 写 |
 | `iterator_types` | `parallel, parallel` | 没有归约维，两维都能并行/切分 |
-| Region `^bb0` | 三个标量参数 | **点计算**：每个点做一次 `addf` |
+| Region `^bb0` | 两个标量参数 | **点计算**：每个点做一次 `cmpf` + `select` |
 
-**对照 matmul（含归约维）**
+> Region 里刻意用 `cmpf` + `select` 而不是 `arith.maxf`：跨 MLIR 版本都能跑，而且它降到 LLVM 之后
+> 与 [`llvm-hello-compile`](../../llvm-hello-compile/) 里 `relu_sum` 的 `v > 0 ? v : 0` **完全同形**——
+> 站 ⑤ 和站 ⑥ 在这里对上了。
+
+**只改 `indexing_maps` 就换一种访问模式**（同一文件里的 `@bias_add`，即主角的 Add）：
 
 ```mlir
+#bcast = affine_map<(d0, d1) -> (d1)>           // 广播：out[i,j] 读 bias[j]，i 被丢弃
+// indexing_maps = [#id2, #bcast, #id2]
+```
+
+注意 **region 里的代码一个字都没变**，广播完全体现在映射上。这是 linalg 的核心设计：**"怎么访问"与"算什么"彻底分开**。
+
+**对照归约**（同一文件里的 `@row_sum`；主角的 Gemm 也是这个形态）：
+
+```mlir
+#rowmap = affine_map<(d0, d1) -> (d0, d1)>
+#redmap = affine_map<(d0, d1) -> (d0)>          // 输出不含 d1 → d1 是归约维
+// iterator_types = ["parallel", "reduction"]
+
+// linalg.matmul 展开后同理：
 #A = affine_map<(m, n, k) -> (m, k)>
 #B = affine_map<(m, n, k) -> (k, n)>
 #C = affine_map<(m, n, k) -> (m, n)>            // 输出不含 k → k 是归约维
 // iterator_types = ["parallel", "parallel", "reduction"]
 ```
 
+亲手确认 `linalg.matmul` 的真身：
+
+```bash
+mlir-opt --linalg-generalize-named-ops examples/upstream/01-linalg-generic.mlir
+```
+
+**判断归约维的规则只有一条**：某个循环维**没出现在输出的 map 里**，它就是归约维。
+
 **融合合法性怎么判**：不看 op 名字，只看下游 op 读上游结果时的映射是否对得上。
 
 | 情形 | 上游写出的映射 | 下游读入的映射 | 能否直接融合 |
 |------|----------------|----------------|--------------|
-| add → relu（逐元素） | `(d0,d1)->(d0,d1)` | `(d0,d1)->(d0,d1)` | **可以**：同一个点只需算一次 |
-| matmul → relu | `(m,n)` | `(m,n)` | 可以（relu 作用在 matmul 的输出点上） |
+| Gemm → Relu（主角的前两步） | `(m,n)` | `(d0,d1)->(d0,d1)` | **可以**：relu 作用在 matmul 的输出点上 |
+| Relu → Add（主角的后两步） | `(d0,d1)->(d0,d1)` | `(d0,d1)->(d0,d1)` | **可以**：同一个点只需算一次 |
 | transpose → add | `(d0,d1)->(d1,d0)` | `(d0,d1)->(d0,d1)` | 需要先对齐映射，不能盲目合并 |
 | 上游含 reduction，下游要整行 | 输出少一维 | 需要跨点访问 | 一般不能简单融合，要靠 tiling 配合 |
 
+**前两行合起来，就是链路第 ③ 站那个"三个算子融成一个 kernel"的判据在 MLIR 侧的样子**——TVM 用算子类别（injective / reduction）判，MLIR 用索引映射判，结论一致，粒度更细。
+
 这就是「保结构」的价值：只要还是 `linalg.*`，这两份元信息就一直在 IR 里；一旦过早降成三层 `scf.for`，就得靠依赖分析把它们**猜回来**。
 
-> **自测**：把上面 add 的 `iterator_types` 改成 `["parallel", "reduction"]`，输出类型应该变成什么？为什么？
+> **自测**：把上面 Relu 的 `iterator_types` 改成 `["parallel", "reduction"]`，输出类型应该变成什么？为什么？
+> 改完跑一次 `mlir-opt`，verifier 会在哪一条上拦住你？
 
 ### 8.3 Destination-Passing Style（DPS）
 
@@ -1298,51 +1430,56 @@ RaW（Read-after-Write）冲突靠 SSA use-def 链检测：若同一 tensor 值�
 
 #### 示例精讲：同一段代码，一个能 in-place，一个必须 copy
 
+**可跑** · 源码 [`mlir-toy-dialect/examples/upstream/02-bufferize.mlir`](../../mlir-toy-dialect/examples/upstream/02-bufferize.mlir)
+（链路主角的 Relu 段，**两个函数几乎一模一样，只差「`%h` 之后还被不被读」**）·
+命令 `cd mlir-toy-dialect && bash scripts/run_upstream.sh`（脚本会替你数 `memref.alloc` / `memref.copy` 各几次）· 产物 `out/upstream/`
+
 > 目的：亲手判一次 RaW 冲突，并看到 Phase 2 因此插出来的 `memref.copy`。
 
-**情形 A：写完就不再读旧值 → 可以 in-place**
+**情形 A：写完就不再读旧值 → 可以 in-place**（文件里的 `@relu_can_inplace`）
 
 ```mlir
-func.func @inplace(%A: tensor<8xf32>, %v: f32) -> tensor<8xf32> {
-  %c0 = arith.constant 0 : index
-  %0 = tensor.insert %v into %A[%c0] : tensor<8xf32>   // 写
-  return %0 : tensor<8xf32>                            // %A 之后没人再读
+func.func @relu_can_inplace(%h: tensor<2x4xf32>) -> tensor<2x4xf32> {
+  %out = linalg.generic { ... }
+    ins(%h : tensor<2x4xf32>) outs(%h : tensor<2x4xf32>) {   // outs 就是 ins
+    ^bb0(%in: f32, %o: f32):
+      %p = arith.cmpf ogt, %in, %zero : f32
+      %r = arith.select %p, %in, %zero : f32
+      linalg.yield %r : f32
+  } -> tensor<2x4xf32>
+  return %out : tensor<2x4xf32>                              // %h 之后没人再读
 }
 ```
 
-Phase 1 的判断：`%A` 在写之后**没有其他读用户** → 结果 `%0` 可与 `%A` 共用同一块 buffer。
+Phase 1 的判断：`%h` 在写之后**没有其他读用户** → 结果 `%out` 可与 `%h` 共用同一块 buffer。
+
+Phase 2 产出（示意）：直接在传进来的 memref 上就地改写，**无 alloc、无 copy**。
+
+**情形 B：写完还要读旧值 → 必须 copy**（文件里的 `@relu_must_copy`）
+
+```mlir
+func.func @relu_must_copy(%h: tensor<2x4xf32>) -> (tensor<2x4xf32>, tensor<2x4xf32>) {
+  %relu  = linalg.generic { ... } ins(%h) outs(%h) { ...relu... }  // 写：产生新值
+  %twice = linalg.generic { ... } ins(%h) outs(%h) { ...x+x... }   // ★ 仍读【旧】值 %h
+  return %relu, %twice : tensor<2x4xf32>, tensor<2x4xf32>
+}
+```
+
+Phase 1 的判断：若让 `%relu` 原地写在 `%h` 的 buffer 上，第二个 op 读到的就不再是旧值——**RaW 冲突**，因此必须落在新 buffer 上。
 
 Phase 2 产出（示意）：
 
 ```mlir
-func.func @inplace(%A: memref<8xf32>, %v: f32) -> memref<8xf32> {
-  %c0 = arith.constant 0 : index
-  memref.store %v, %A[%c0] : memref<8xf32>   // 直接原地写，无 alloc / 无 copy
-  return %A : memref<8xf32>
-}
+%new = memref.alloc() : memref<2x4xf32>
+memref.copy %h, %new : memref<2x4xf32> to memref<2x4xf32>   // ← 冲突的代价在这里显形
+// relu 写进 %new，%h 保持原值供第二个 op 读
 ```
 
-**情形 B：写完还要读旧值 → 必须 copy**
+数出来的差别就是这一节的全部结论：
 
-```mlir
-func.func @conflict(%A: tensor<8xf32>, %v: f32) -> (tensor<8xf32>, f32) {
-  %c0 = arith.constant 0 : index
-  %c1 = arith.constant 1 : index
-  %0 = tensor.insert %v into %A[%c0] : tensor<8xf32>   // 写：产生新值 %0
-  %e = tensor.extract %A[%c1] : tensor<8xf32>          // ★ 仍读【旧】值 %A
-  return %0, %e : tensor<8xf32>, f32
-}
-```
-
-Phase 1 的判断：若让 `%0` 原地写在 `%A` 的 buffer 上，后面那句读到的就不再是旧值——**RaW 冲突**，因此 `%0` 必须落在新 buffer 上。
-
-Phase 2 产出（示意）：
-
-```mlir
-%new = memref.alloc() : memref<8xf32>
-memref.copy %A, %new : memref<8xf32> to memref<8xf32>   // ← 冲突的代价在这里显形
-memref.store %v, %new[%c0] : memref<8xf32>
-%e = memref.load %A[%c1] : memref<8xf32>                 // 旧值仍完好
+```bash
+mlir-opt --one-shot-bufferize="bufferize-function-boundaries" \
+         examples/upstream/02-bufferize.mlir | grep -c 'memref.alloc'
 ```
 
 两阶段各自的产物：
@@ -1354,7 +1491,8 @@ memref.store %v, %new[%c0] : memref<8xf32>
 
 > 因此「多做几次 tile/fuse 再 bufferize」是有道理的：tensor 世界里 SSA use-def 干净，冲突一眼可判；进了 memref 之后要靠更重的别名分析才能得到同样结论。
 
-> **自测**：把情形 B 里的 `tensor.extract %A` 改成 `tensor.extract %0`，还需要那次 copy 吗？为什么？
+> **自测**：把情形 B 里第二个 op 的 `ins(%h)` 改成 `ins(%relu)`，还需要那次 copy 吗？为什么？
+> 改完重跑上面那条 `grep -c` 验证你的判断。
 
 ### 8.7 与 IREE / 算力网的关系
 
@@ -1449,10 +1587,10 @@ mlir-opt input.mlir \
 
 ```
 paper-notes/03-mlir.md      ← 论文动机：为何多层、为何 Interfaces
-docs/mlir-learning-guide.md ← 本文：官方机制蒸馏
+docs/learning-guides/mlir-learning-guide.md ← 本文：官方机制蒸馏
 mlir-toy-dialect/           ← 动手：双 dialect / Conversion / Interface
-docs/llvm-learning-guide.md ← 出海之后：四层 IR + CodeGen
-docs/iree-learning-guide.md ← 工业栈：linalg→flow→stream→hal
+docs/learning-guides/llvm-learning-guide.md ← 出海之后：四层 IR + CodeGen
+docs/learning-guides/iree-learning-guide.md ← 工业栈：linalg→flow→stream→hal
 ```
 
 ### 10.2 概念同构表
@@ -1482,7 +1620,7 @@ docs/iree-learning-guide.md ← 工业栈：linalg→flow→stream→hal
 
 ### 10.4 toy 项目已经演示了什么
 
-见 [`mlir-toy-dialect/README.md`](../mlir-toy-dialect/) 覆盖对照表。机制上已齐：
+见 [`mlir-toy-dialect/README.md`](../../mlir-toy-dialect/) 覆盖对照表。机制上已齐：
 
 - 双 dialect + 自定义类型 + Region  
 - 贪心 lowering **与** Dialect Conversion 对照  

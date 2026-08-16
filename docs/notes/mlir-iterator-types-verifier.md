@@ -1,6 +1,6 @@
 # `iterator_types` 与 Verifier：声明式语义和 IR 安全网
 
-> 来源：[`mlir-learning-guide.md`](../mlir-learning-guide.md) §8.2
+> 来源：[`mlir-learning-guide.md`](../learning-guides/mlir-learning-guide.md) §8.2
 
 ## 是什么
 

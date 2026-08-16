@@ -1,6 +1,6 @@
 # 检验体系 08｜分布式训练
 
-> **导航**：[检验体系总纲](./README.md) · [总规划 §3.1 分布式训练基础](../../README.md#31-分布式训练基础) · [论文精读 01](../paper-notes/01-efficient-training-distributed-infra.md) · [横切概念 §9 分片如何变成 IR](../ai-compiler-foundations.md#第-9-章-分布式与编译的接缝分片如何变成-ir)
+> **导航**：[检验体系总纲](./README.md) · [总规划 §3.1 分布式训练基础](../../README.md#31-分布式训练基础) · [论文精读 01](../paper-notes/01-efficient-training-distributed-infra.md) · [横切概念 §9 分片如何变成 IR](../learning-guides/ai-compiler-foundations-learning-guide.md#第-9-章-分布式与编译的接缝分片如何变成-ir)
 >
 > 分级定义（L0 复现 / L1 改一处 / L2 加组件 / L3 打通）与资源标签的含义，以 [`./README.md`](./README.md) §2、§3 为准，本文不重复。
 
@@ -1061,7 +1061,7 @@ torchrun --standalone --nproc_per_node=4 comm_bench.py --device cuda --backend n
 
 #### L3-DIST-13｜SPMD 三种标注体系对照表，并用 DTensor 实操验证
 
-- **检验什么**：这条通过 = 你真的掌握了「Mesh-TensorFlow / GSPMD / OneFlow SBP **在讲同一件事**」——分片标注是把并行策略编译化的技术原型，也是本仓库分布式线与编译器线的交汇点（见 [`../ai-compiler-foundations.md` §9.2](../ai-compiler-foundations.md#第-9-章-分布式与编译的接缝分片如何变成-ir)）
+- **检验什么**：这条通过 = 你真的掌握了「Mesh-TensorFlow / GSPMD / OneFlow SBP **在讲同一件事**」——分片标注是把并行策略编译化的技术原型，也是本仓库分布式线与编译器线的交汇点（见 [`../learning-guides/ai-compiler-foundations-learning-guide.md` §9.2](../learning-guides/ai-compiler-foundations-learning-guide.md#第-9-章-分布式与编译的接缝分片如何变成-ir)）
 - **前置**：[L3-DIST-11](#l3-dist-11手写最小张量并行列切--all_gather)
 - **资源**：`本地`（纸面练习；DTensor 验证部分用 CPU/gloo 两进程）
 - **预计耗时**：2h
@@ -1080,7 +1080,7 @@ torchrun --standalone --nproc_per_node=4 comm_bench.py --device cuda --backend n
 **要在表下面用自己的话写清三件事**：
 
 1. 三种体系里，**「部分和」这个状态**分别叫什么（SBP 的 `P` / GSPMD 里的 partial reduction / DTensor 的 `Partial`），以及为什么必须有这个状态——没有它，行切之后的中间结果就无法在类型系统里表达。
-2. **谁来插通信**：Megatron 是人手写；GSPMD / SBP / DTensor 是**编译器或运行时按标注推导后自动插入**。这一步就是 [`../ai-compiler-foundations.md` §9.2](../ai-compiler-foundations.md#第-9-章-分布式与编译的接缝分片如何变成-ir) 说的「策略 → IR 属性 → Pass 插通信」。
+2. **谁来插通信**：Megatron 是人手写；GSPMD / SBP / DTensor 是**编译器或运行时按标注推导后自动插入**。这一步就是 [`../learning-guides/ai-compiler-foundations-learning-guide.md` §9.2](../learning-guides/ai-compiler-foundations-learning-guide.md#第-9-章-分布式与编译的接缝分片如何变成-ir) 说的「策略 → IR 属性 → Pass 插通信」。
 3. 为什么这套东西对本仓库的项目（算力网上的分布式基础设施）是核心：策略从训练脚本里的 if/else 变成了**可被 Pass 变换的 IR 属性**。
 
 **第二步（实操）**：用 PyTorch DTensor 把上表最后一行跑通，让纸面标注变成可执行代码：

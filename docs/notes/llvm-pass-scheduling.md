@@ -1,6 +1,6 @@
 # LLVM Pass 调度：analysis 与 transform 如何交错
 
-> 来源：[`llvm-learning-guide.md`](../llvm-learning-guide.md) §3.4–§3.6
+> 来源：[`llvm-learning-guide.md`](../learning-guides/llvm-learning-guide.md) §3.4–§3.6
 
 ## 是什么
 

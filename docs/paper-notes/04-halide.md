@@ -1,7 +1,7 @@
 # Halide：算法与调度分离范式的奠基之作
 
-> **导航**：[笔记索引](README.md) · [自学枢纽](../README.md)（阶段 6 / 可选） · [横切概念](../ai-compiler-foundations.md) §4（算法与调度、tiling、Roofline）  
-> **配套阅读**：本篇是**思想源头**，只需吃透「算法/调度分离 + 权衡三角」；同一套原语在工程系统里的落地见 [`tvm-learning-guide.md`](../tvm-learning-guide.md) §3 与 [`05-tvm.md`](05-tvm.md)。
+> **导航**：[笔记索引](README.md) · [自学枢纽](../README.md)（阶段 6 / 可选） · [横切概念](../learning-guides/ai-compiler-foundations-learning-guide.md) §4（算法与调度、tiling、Roofline）  
+> **配套阅读**：本篇是**思想源头**，只需吃透「算法/调度分离 + 权衡三角」；同一套原语在工程系统里的落地见 [`tvm-learning-guide.md`](../learning-guides/tvm-learning-guide.md) §3 与 [`05-tvm.md`](05-tvm.md)。
 
 > **论文元信息**
 > - 标题：*Halide: A Language and Compiler for Optimizing Parallelism, Locality, and Recomputation in Image Processing Pipelines*
