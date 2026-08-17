@@ -1,0 +1,11 @@
+# setup.sh 生成的本机环境变量脚本：含各人不同的 conda 路径与环境名，不入库。
+.ai-infra-env.sh
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# 编辑器 / 系统
+.DS_Store

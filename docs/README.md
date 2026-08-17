@@ -30,6 +30,7 @@ AI-Infra/
 ├── tvm-fatbin-lab/           ← ③ 动手项目 C：TVM 调度/融合/AutoTVM + CUDA fatbin
 ├── onnx-delegate-lab/        ← ③ 动手项目 D：ONNX/ORT EP + ExecuTorch Partitioner
 ├── iree-lab/                 ← ③ 动手项目 E：IREE 相位分解 + .vmfb 部署 + 对照实验
+├── dist-train-lab/           ← ③ 动手项目 F：DDP/FSDP/ZeRO 实测 + 通信拐点 + 最小 TP
 └── paper/                    ← ④ 原文 PDF（遇到细节再翻）
 ```
 
@@ -68,7 +69,8 @@ AI-Infra/
 | [`mlir-toy-dialect/`](../mlir-toy-dialect/) | **MLIR 心智模型**：双 dialect、Region、Interface、Dialect Conversion | P0 第二阶段主战场；后续打通 Toy→linalg→llvm 端到端 |
 | [`tvm-fatbin-lab/`](../tvm-fatbin-lab/) | **TVM + fatbin**：调度/融合/AutoTVM + 多架构打包 | 阶段 4（TVM 轨）/ 阶段 6（CUDA 轨）；`bash scripts/run.sh` → `out/ANALYSIS.md` |
 | [`onnx-delegate-lab/`](../onnx-delegate-lab/) | **委托/分区**：ONNX 构图 + ORT EP + ExecuTorch Partitioner | 阶段 4；研究问题①② 的实验室 |
-| [`iree-lab/`](../iree-lab/) | **工业编译器全链路**：flow/stream/hal/vm 相位分解 + `.vmfb` 部署 + 三组对照实验 | 阶段 3 之后；`pip install -r requirements.txt && bash scripts/run.sh` |
+| [`iree-lab/`](../iree-lab/) | **工业编译器全链路**：flow/stream/hal/vm 相位分解 + `.vmfb` 部署 + 三组对照实验 | 阶段 3 之后；`bash scripts/run.sh` |
+| [`dist-train-lab/`](../dist-train-lab/) | **设备维度的划分**：DDP/FSDP/ZeRO 显存实测 + 集合通信拐点 + 最小张量并行 | 阶段 1；**无卡可先做一半** `bash scripts/run_cpu_smoke.sh`，有卡后 `run_8gpu_wall.sh` |
 
 > LLVM 项目回答「单层 IR + Pass 怎么工作」；MLIR 项目回答「多层 dialect + 渐进 lowering 怎么工作」。  
 > 两者同构（ODS≈TableGen、lit/FileCheck、analysis 失效），对照着做会快很多。  
@@ -104,8 +106,8 @@ AI-Infra/
 | | 内容 |
 |--|------|
 | **读** | 先补 foundations **§9.1–9.3 + §5.4 内存层次**（§9.4–9.5 属自选，跳过）→ [`paper-notes/01-efficient-training-distributed-infra.md`](./paper-notes/01-efficient-training-distributed-infra.md)：先 §2 框架 + §12 最小必要集，再抠 SPMD / 16Φ / 五种并行；三种标注体系对照着扫即可 |
-| **做** | 根 README §3.1 入门验收：优先 DDP vs FSDP 显存实测（1～2 条即可） |
-| **验** | 五分钟讲清「70B 怎么切到 128 卡」；背出 16Φ；三种分片标注能对照说同一策略 |
+| **做** | `cd dist-train-lab && bash scripts/run_cpu_smoke.sh`（**无卡即可**，几十秒）→ 有卡后 `bash scripts/run_8gpu_wall.sh` 补显存与吞吐实测 |
+| **验** | 五分钟讲清「70B 怎么切到 128 卡」；背出 16Φ **并说清混合精度与 fp32 两种口径的构成差异**；三种分片标注能对照说同一策略；`param_diff == 0` 与 `grad_diff < 1e-6` 各自证明了什么 |
 | **串到后面** | 「并行策略要变成 IR 属性」→ 阶段 2/3 的 MLIR + IREE 才有的放矢 |
 
 ### 阶段 2｜MLIR 入门（P0，约 1 周；对应周次表 W2）
@@ -122,7 +124,7 @@ AI-Infra/
 | | 内容 |
 |--|------|
 | **读** | 先补 foundations **§8.1–8.2 设备抽象机+同步、§3.3 划分（先建立直觉）、§7.1 kernel、§7.3 variant** → 扫 [`paper-notes/07-tinyiree.md`](./paper-notes/07-tinyiree.md) → [`iree-learning-guide.md`](./learning-guides/iree-learning-guide.md)（HAL 第 4 章最重） |
-| **做** | `cd iree-lab && pip install -r requirements.txt && bash scripts/run.sh` → 先读 `out/PHASES.md` 的行数表，再按 flow→stream→hal 顺序 diff。双后端 / C runtime 属加深 |
+| **做** | `cd iree-lab && bash scripts/run.sh` → 先读 `out/PHASES.md` 的行数表，再按 flow→stream→hal 顺序 diff。双后端 / C runtime 属加深 |
 | **验** | 画出 `linalg→flow→stream→hal`；口述 HAL 对象关系与 timeline semaphore 为何强于 `CUevent`；**数出主角模型的 `flow.dispatch` 个数并解释为什么少于 4** |
 | **串到项目目标** | HAL 的 device/buffer/command_buffer/variant ≈ 算力网「异构设备统一抽象」的现成词汇表 |
 
@@ -160,7 +162,7 @@ AI-Infra/
 
 | 文档 | 优先级 | 配套动手 | 一句话 |
 |------|--------|----------|--------|
-| **[端到端链路](./learning-guides/00-end-to-end-pipeline.md)** | **开局读第 1–3 章（约 30 分钟）** | 五个 lab 按链路顺序跑一遍 | 一个模型、一次优化，穿过七个知识点：谁给谁喂什么、断了会怎样 |
+| **[端到端链路](./learning-guides/00-end-to-end-pipeline.md)** | **开局读第 1–3 章（约 30 分钟）** | 五个编译 lab 按链路顺序跑一遍，再追加 [`dist-train-lab/`](../dist-train-lab/) | 一个模型、一次优化，穿过七个知识点：谁给谁喂什么、断了会怎样 |
 | **[AI 编译器前置核心概念](./learning-guides/ai-compiler-foundations-learning-guide.md)** | **开局读总图+§2.4；其余分轮补** | 默画五层栈；每轮开头按 §2.4 取那几节 | 横切词汇表：把各项目粘成一张总图 |
 | [IREE 学习文档](./learning-guides/iree-learning-guide.md) | **P0** | [`iree-lab/`](../iree-lab/) | 多后端统一运行时 + HAL 全景 |
 | [MLIR 学习文档](./learning-guides/mlir-learning-guide.md) | **P0** | [`mlir-toy-dialect/`](../mlir-toy-dialect/) | Conversion / Interface / Linalg / Bufferize |
@@ -189,13 +191,18 @@ AI-Infra/
 
 ### 3.3 动手项目速查
 
+> **跑任何一个之前先配环境**：`bash setup.sh`（**不需要 root、不需要 apt**，六个 lab 的依赖一次装齐），
+> 之后 `bash setup.sh --check` 可随时体检。配置详解与排障见 [`environment-setup.md`](./environment-setup.md)。
+> 下表的入口命令默认环境已就绪；缺依赖时各 lab 会打印 `[SKIP]` 并说明原因，不会静默失败。
+
 | 项目 | 一键入口 | 建议阅读产物 | 对应知识库 |
 |------|----------|--------------|------------|
 | [llvm-hello-compile](../llvm-hello-compile/) | `bash scripts/run.sh` | `out/ANALYSIS.md`，再对比 `02_*.ll` / `03a_*.ll` / `05_*.s` | [llvm-learning-guide](./learning-guides/llvm-learning-guide.md) |
 | [mlir-toy-dialect](../mlir-toy-dialect/) | `bash scripts/all.sh` | `scripts/run.sh` 九组演示 + `test/*.mlir` | [mlir-learning-guide](./learning-guides/mlir-learning-guide.md) · [03-mlir](./paper-notes/03-mlir.md) |
 | [tvm-fatbin-lab](../tvm-fatbin-lab/) | `bash scripts/run.sh` | `out/ANALYSIS.md` + `out/tvm/*` + `out/cuda/*` | [tvm-learning-guide](./learning-guides/tvm-learning-guide.md) · [cuda-fatbin](./learning-guides/cuda-fatbin-learning-guide.md) |
 | [onnx-delegate-lab](../onnx-delegate-lab/) | `bash scripts/run.sh` | `out/ANALYSIS.md` + `out/onnx/*` + `out/executorch/*` | [onnx](./learning-guides/onnx-learning-guide.md) · [executorch](./learning-guides/executorch-learning-guide.md) |
-| [iree-lab](../iree-lab/) | `pip install -r requirements.txt && bash scripts/run.sh` | `out/PHASES.md` 行数表 → `out/phases/*.mlir` 按 flow→stream→hal diff → `out/variants/` | [iree](./learning-guides/iree-learning-guide.md) · [07-tinyiree](./paper-notes/07-tinyiree.md) |
+| [iree-lab](../iree-lab/) | `bash scripts/run.sh` | `out/PHASES.md` 行数表 → `out/phases/*.mlir` 按 flow→stream→hal diff → `out/variants/` | [iree](./learning-guides/iree-learning-guide.md) · [07-tinyiree](./paper-notes/07-tinyiree.md) |
+| [dist-train-lab](../dist-train-lab/) | `bash scripts/run_cpu_smoke.sh`（无卡）／`bash scripts/run_8gpu_wall.sh`（多卡） | `out/table_scaling.md` + `out/table_zero.md` + `out/comm_*.csv` | [01 分布式综述](./paper-notes/01-efficient-training-distributed-infra.md) · [08 检验](./checkpoints/08-distributed.md) |
 
 ### 3.4 检验体系（动手过关标准）
 
@@ -210,9 +217,11 @@ AI-Infra/
 | [05 ONNX + ORT](./checkpoints/05-onnx-ort.md) | 10 | 手写一个纯 Python 图优化 pass（模式匹配 + 重写） | 1 条可选 GPU |
 | [06 ExecuTorch](./checkpoints/06-executorch.md) | 9 | 写一个新 Partitioner（按段长阈值划分）并对比边界账 | **全部本地** |
 | [07 CUDA fatbin](./checkpoints/07-cuda-fatbin.md) | 8 | 加第二个 kernel，验证 fatbin 的多镜像结构 | 2 条需 GPU |
-| [08 分布式训练](./checkpoints/08-distributed.md) | 13 | DDP vs FSDP 显存实测，印证 16Φ 账 | **7 条需多卡（需申请）** |
+| [08 分布式训练](./checkpoints/08-distributed.md) | 13 | DDP vs FSDP 显存实测，印证 16Φ 账 | 配 [`dist-train-lab/`](../dist-train-lab/)；**7 条需多卡** |
 
 **共 86 条，其中 73 条在个人开发机上就能做完。** 需要卡的 13 条集中在 08 分布式与各册的 L3 性能项，且多数配了降级方案。申请机器的明细表见 [`08-distributed.md` §5](./checkpoints/08-distributed.md)，话术模板见 [checkpoints §6.2](./checkpoints/README.md#62-申请机器时可以直接发的话术)。
+
+> 已有同机多卡时，`dist-train-lab/scripts/run_8gpu_wall.sh` 一次覆盖 08 册的绝大部分多卡条目。若卡是消费级 GeForce（无 NVLink 且 P2P 关闭），实测数字会差于教科书值——**这不影响过关，但因果解释要跟上**，见 [`08-distributed.md` §5](./checkpoints/08-distributed.md) 开头的对照表。
 
 ---
 
@@ -305,7 +314,7 @@ tvm-fatbin-lab（融合/schedule）     ≈     onnx-delegate-lab（EP/Partition
 
 - **讲机制必须带「示例精讲」**：任何一节只要在讲机制（Pass、Conversion、融合、划分、打包……），就要有一个 `#### 示例精讲：<主题>` 小节，形态固定为**最小输入 → 文本 IR/命令/产物 → 对象结构或调用链 → 逐步注释 → 并排对照表 → 一句自测**。参考基准：[`notes/llvm-mlir-pass-ir-unit.md`](./notes/llvm-mlir-pass-ir-unit.md)。  
   判据很简单：**如果读完还得靠额外笔记才懂，这一节就没写完**。工具输出若非逐字复制，必须标注「形态示意（以本地版本为准）」。
-- **示例精讲优先取自动手项目**：写「示例精讲」时先去五个 lab 里找现成的源码/产物，**能引用就不要新编一段**。  
+- **示例精讲优先取自动手项目**：写「示例精讲」时先去六个 lab 里找现成的源码/产物，**能引用就不要新编一段**。  
   lab 里确实没有时，先问一句「补进去会不会破坏这个项目的定位」：不会就补（如 `kernel.c` 的 `clamp0`），会就另开目录并说明它不属于主体（如 `mlir-toy-dialect/examples/upstream/`）。两条都不成立才写纯教学示例。
 - **每个「示例精讲」标注可跑性**：标题下第一行用三选一的标签起头，让读者一眼知道该不该开终端：  
   `**可跑**` · 源码 `<路径>` · 命令 `<命令>` · 产物 `<路径>`　｜　`**部分可跑**`（说明哪半段能跑、哪半段是推演）　｜　`**无 lab 对应**`（说明为什么不用 lab，以及最接近的 lab 在哪）。  

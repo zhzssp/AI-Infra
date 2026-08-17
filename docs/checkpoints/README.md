@@ -61,6 +61,12 @@ L3 可按兴趣与资源条件选做。
 **建议合并成两次申请**：第一批同机 2 卡半天（覆盖上面前两行的绝大部分），第二批 2 节点 × 2 卡半天（只为跨机那条）。  
 [`08-distributed.md` §5](./08-distributed.md) 有一张**可直接贴进邮件的申请明细表**（卡数 / 互联 / 环境 / 机时 / 对应条目 / 不做的后果），配合本文 §6.2 的话术使用。
 
+> **已经有同机多卡的话**，上表前两行一次就能做完：`cd dist-train-lab && bash scripts/run_8gpu_wall.sh`，
+> 脚本按实际卡数自动生成 `world_size = 2, 4, 8, ...` 的对照序列。只有 `多机多卡` 那条仍需第二台机器。
+>
+> 若卡是消费级 GeForce（RTX 40/50 系，无 NVLink 且 P2P 关闭），实测数字会明显差于教科书值——
+> 这不影响过关，但判据的**因果解释**要跟上，见 [`08-distributed.md` §5](./08-distributed.md) 开头的对照表。
+
 > **注意**：CUDA fatbin 那一册**主体不需要 GPU**——`nvcc` + `cuobjdump` 属于 `本地+工具链`，只编译不执行。TVM 全册与 ExecuTorch 全册也都不需要卡（ExecuTorch 的 L3 要的是 C++ runtime 构建环境，不是显卡）。
 
 ---
@@ -103,7 +109,7 @@ L3 可按兴趣与资源条件选做。
 | [05 ONNX + ORT](./05-onnx-ort.md) | 10 | [`onnx-delegate-lab/`](../../onnx-delegate-lab/) ONNX 轨 | 手写一个纯 Python 图优化 pass（模式匹配 + 重写） | 本地，约 12h；1 条可选 GPU |
 | [06 ExecuTorch](./06-executorch.md) | 9 | [`onnx-delegate-lab/`](../../onnx-delegate-lab/) ET 轨 | 写一个新 Partitioner（按段长阈值划分）并对比边界账 | **全部本地，无需 GPU** |
 | [07 CUDA fatbin](./07-cuda-fatbin.md) | 8 | [`tvm-fatbin-lab/`](../../tvm-fatbin-lab/) CUDA 轨 | 加第二个 kernel，验证 fatbin 的多镜像结构 | 本地约 7.5h；2 条需 GPU |
-| [08 分布式训练](./08-distributed.md) | 13 | 无既有 lab（该册含 `dist-train-lab/` 脚手架设计） | DDP vs FSDP 显存实测并印证 16Φ 账 | 6 条本地可做；**7 条需多卡** |
+| [08 分布式训练](./08-distributed.md) | 13 | [`dist-train-lab/`](../../dist-train-lab/) | DDP vs FSDP 显存实测并印证 16Φ 账 | 6 条本地可做；**7 条需多卡** |
 
 **建议顺序**：01 → 02 是编译器地基（同一件事的单层与多层版本，对照做最省力）；03 / 04 / 05 / 06 / 07 相互独立，按你当前学到哪一段挑；08 单独排期，因为它卡在机器申请上——**建议尽早把申请发出去，等待期间先做前七册**。
 

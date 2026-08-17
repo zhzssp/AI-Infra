@@ -4,10 +4,19 @@
 >
 > 分级定义（L0 复现 / L1 改一处 / L2 加组件 / L3 打通）与资源标签的含义，以 [`./README.md`](./README.md) §2、§3 为准，本文不重复。
 
-**本册与其它册不同的地方**：仓库里**没有现成的分布式动手 lab**。所以这份文档承担两件事——
+**本册的动手项目是 [`dist-train-lab/`](../../dist-train-lab/)**，已按 [§2](#2-实验脚手架设计dist-train-lab) 的设计建好。所以这份文档承担两件事——
 
-1. 给出一套**最小可运行的实验脚手架设计**（[§2](#2-实验脚手架设计dist-train-lab)）：目录结构、每个脚本干什么、关键 API 是哪几个。照着建起来大约半天，之后所有检验条目都跑在它上面。
+1. 说明**脚手架的设计意图**（[§2](#2-实验脚手架设计dist-train-lab)）：每个文件干什么、关键 API 是哪几个、哪些坑要提前写进代码。**读它是为了理解 lab 里的代码为什么那样写**；想跳过直接跑，见下面的「先跑起来」。
 2. 在脚手架之上给出**分级检验条目**（[§3](#3-检验条目)）。
+
+> **先跑起来**（无卡也能做完 13 条里的 6 条）：
+>
+> ```bash
+> cd dist-train-lab && pip install -r requirements.txt
+> bash scripts/run_cpu_smoke.sh      # 几十秒，覆盖 L0 全部 + L1-DIST-04 + L3-DIST-11 主判据
+> ```
+>
+> 有多卡时再跑 `bash scripts/run_8gpu_wall.sh`——它把 [L2-DIST-06/07/08](#l2-dist-06ddp-vs-单卡显存几乎不降吞吐接近线性) 与 [L3-DIST-11](#l3-dist-11手写最小张量并行列切--all_gather) 的性能部分打包成四组对照，按实际卡数自动生成 `world_size = 2, 4, 8, ...` 序列。
 
 学习文档（[根 README §3.1](../../README.md#31-分布式训练基础)、[paper-notes/01](../paper-notes/01-efficient-training-distributed-infra.md)）考的是**口述**：16Φ 是怎么来的、ZeRO-1/2/3 各除以谁、SPMD 三种标注在说什么。本文考的是**动手**：把同一个知识点变成一条能跑出数字的命令，数字对不上就是没懂。
 
@@ -57,8 +66,9 @@
 
 ## 2. 实验脚手架设计：`dist-train-lab/`
 
-> 本节是**设计说明，不是已存在的代码**。仓库里目前没有这个目录，需要你按下面的说明建起来——建 lab 本身就是 [L0-DIST-01](#l0-dist-01建起-lab-骨架并在-cpu-上跑通单进程-baseline)。
-> 命名与布局对齐仓库既有 lab（[`tvm-fatbin-lab/`](../../tvm-fatbin-lab/)、[`onnx-delegate-lab/`](../../onnx-delegate-lab/)）：脚本平铺、`scripts/*.sh` 放启动命令、产物进 `out/` 且不入库。
+> 本节是**设计说明**。对应代码已在 [`dist-train-lab/`](../../dist-train-lab/) 里建好，命名与布局对齐仓库既有 lab（[`tvm-fatbin-lab/`](../../tvm-fatbin-lab/)、[`onnx-delegate-lab/`](../../onnx-delegate-lab/)）：脚本平铺、`scripts/*.sh` 放启动命令、产物进 `out/` 且不入库。
+>
+> **[L0-DIST-01](#l0-dist-01建起-lab-骨架并在-cpu-上跑通单进程-baseline) 现在有两种做法**：想练手就先把 `dist-train-lab/` 挪走、照本节说明自己写一遍，写完与仓库版本对读；时间紧就直接跑现成的，重点放在读懂 `common.py` 里那两个「必须踩到的坑」为什么要那样处理。
 
 ### 2.1 目录结构
 
@@ -78,14 +88,22 @@ dist-train-lab/
 ├── tp_min.py               # 最小张量并行（列切 + all_gather），做到 L3 再写
 ├── report.py               # 读 out/*.json → 生成 markdown 对比表
 ├── scripts/
+│   ├── env.sh              # 定位 python/torchrun，探测卡数与 P2P，统一实验档位
 │   ├── run_cpu_smoke.sh    # 无卡冒烟：单进程 + 2 进程 gloo DDP，几十秒跑完
-│   ├── run_single.sh
+│   ├── run_8gpu_wall.sh    # 多卡主线：通信墙四组对照，按实际卡数自动扩展
 │   ├── run_ddp.sh
 │   ├── run_fsdp.sh         # 参数化 sharding_strategy
 │   ├── run_comm_bench.sh
-│   └── run_multinode.sh    # 2 节点，torchrun 的 rdzv 参数在这里
+│   ├── run_multinode.sh    # 2 节点，torchrun 的 rdzv 参数在这里
+│   └── clean.sh
 └── out/                    # 产物：*.json（每次 run 一条记录）+ *.csv（comm_bench 扫描）
 ```
+
+`run_8gpu_wall.sh` 是设计里没有、实现时补上的一个脚本，它把四组对照串成一条主线：
+**A 通信带宽 vs 卡数 → B DDP 扩展效率 → C 张量并行会不会塌 → D ZeRO 阶梯**。
+四组共用同一个模型与口径，所以 B/C/D 的缺口都能拿 A 组测出的带宽去解释——
+这正是[研究问题 1](../../README.md#问题-1子图划分与跨设备传输最小化)所说的
+「带通信代价的图分割」在真实硬件上的样子。
 
 ### 2.2 环境与版本自查（先做这一步）
 
@@ -1155,6 +1173,24 @@ torchrun --standalone --nproc_per_node=2 tp_min.py --device cpu --backend gloo -
 ---
 
 ## 5. 机器申请清单
+
+> **已经有多卡机器的话，本节可以跳过**，直接 `bash scripts/run_8gpu_wall.sh`。下表是给还需要申请的人用的。
+>
+> **如果你的卡是消费级 GeForce（RTX 40/50 系）**：它们**没有 NVLink，且 P2P 被驱动关闭**，
+> NCCL 只能退回经 host 中转的 shared-memory 传输，卡间带宽通常只有几十 GB/s——
+> 与单卡显存带宽差**一到两个数量级**。
+>
+> 这会让下面几条的结论和「教科书版」不同，而且**差异本身就是最有价值的部分**：
+>
+> | 条目 | 在 NVLink 机器上 | 在消费级多卡机器上 |
+> |------|-----------------|-------------------|
+> | [L2-DIST-06](#l2-dist-06ddp-vs-单卡显存几乎不降吞吐接近线性) 扩展效率 | 容易达到 ≥ 80% | 可能明显低于 80%，缺口由通信解释 |
+> | [L2-DIST-07](#l2-dist-07fsdp-vs-ddp显存随卡数近似-1n吞吐略降) FSDP 吞吐 | 相对 DDP 降一点 | 降得更多（FSDP 通信量约 1.5 倍，悬崖越陡越吃亏） |
+> | [L3-DIST-11](#l3-dist-11手写最小张量并行列切--all_gather) TP 加速比 | TP=2/4 通常正收益 | **可能 < 1，即负优化** |
+>
+> 所以判据里的数值区间（如「≥ 1.6x」）要按实际互联条件放宽，**但因果解释不能放宽**：
+> 无论测出多少，都要能用「通信字节数 ÷ `comm_bench` 实测带宽」把差值算平。
+> 拿不到教科书数字不算失败；**说不清为什么拿不到才算**。
 
 > 下表可直接贴进邮件或消息。话术模板见 [`./README.md` §6.2](./README.md#62-申请机器时可以直接发的话术)——本表是它的「分布式部分」明细，两者配合使用：先用模板说明背景与产出承诺，再附上本表说明具体规格。
 

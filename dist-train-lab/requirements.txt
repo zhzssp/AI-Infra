@@ -1,0 +1,26 @@
+# dist-train-lab 依赖
+#
+# ---------- 无卡（笔记本 CPU，能完成全部 L0 + L1-DIST-04 + L3-DIST-11/13）----------
+#   pip install -r requirements.txt
+#   CPU 版 torch 即可。进程模型、集合通信语义、显存账本、分片标注四块核心知识
+#   全部可以在没有 GPU 的机器上学完并验证。
+#
+# ---------- 有卡 ----------
+#   torch 必须与显卡的 compute capability 匹配，**装错了会在第一次 kernel launch
+#   时报 "no kernel image is available for execution on the device"**。
+#
+#   RTX 50 系（Blackwell, sm_120）需要 CUDA 12.8 及以上的构建：
+#       pip install torch --index-url https://download.pytorch.org/whl/cu128
+#   RTX 40 / 30 系（sm_89 / sm_86）用 cu121 或 cu124 均可。
+#
+#   多卡还需要 NCCL ≥ 2.26 才能在 Blackwell 消费卡上正常初始化；更早的版本会报
+#   "ncclMaxSharedMem ... exceeds device maxSharedMem"。torch 的 wheel 自带 NCCL，
+#   用 python -c "import torch; print(torch.cuda.nccl.version())" 确认。
+
+torch>=2.1
+
+# 可选：CPU 侧 RSS 计量（无卡时给 train_single.py 一个粗略的内存口径）
+psutil>=5.9
+
+# 可选：画 comm_bench 的拐点图。不装也不影响任何判据，CSV 里数据是全的。
+matplotlib>=3.7

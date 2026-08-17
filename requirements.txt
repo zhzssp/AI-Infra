@@ -4,17 +4,48 @@
 # 覆盖动手项目：
 #   tvm-fatbin-lab/   （TVM 轨）
 #   onnx-delegate-lab/（ONNX / ORT EP 轨）
-# llvm-hello-compile / mlir-toy-dialect 走系统 LLVM/MLIR（apt 或 conda），无 pip 硬依赖。
+# 另有 iree-lab/ 与 dist-train-lab/ 两份独立清单，见下。
 #
-# ---------- 一键安装（建议用 venv）----------
+# 【不在本清单】的三类：
+#   llvm-hello-compile / mlir-toy-dialect —— 走 LLVM/MLIR 工具链（conda 或 apt），无 pip 硬依赖
+#   iree-lab（P0）——— 另有一份 iree-lab/requirements.txt，见下方「IREE 轨」
+#   dist-train-lab（P0）— 另有一份 dist-train-lab/requirements.txt，见下方「分布式轨」
+#
+# ---------- 推荐：一键脚本把下面所有清单都装了 ----------
+#   bash setup.sh
+#
+#   它会建/更新 conda 环境，把 LLVM/MLIR 工具链与这四份 pip 清单一起装齐，
+#   **不需要 root、不需要 apt**。逐组安装，某一组失败不影响其余 lab。
+#   装完 bash setup.sh --check 可随时体检。细节见 docs/environment-setup.md。
+#
+# ---------- 手动安装（走 venv）----------
 #   python3 -m venv .venv
 #   source .venv/bin/activate          # Windows: .venv\Scripts\activate
 #   pip install -U pip
 #   pip install -r requirements.txt
 #
+#   venv 只能解决 Python 依赖。clang / opt / llc / mlir-opt 这些二进制它给不了，
+#   无 root 时仍需从 conda-forge 取——这正是 setup.sh 存在的理由。
+#
+# ---------- IREE 轨（P0，需要单独一条命令）----------
+#   pip install -r iree-lab/requirements.txt
+#
+#   没有合并进本文件，是因为 iree-base-compiler 自带一整套编译器后端、体积可观，
+#   而只跑 ONNX/TVM 轨的人不需要它。装完会得到 iree-compile / iree-run-module 两个
+#   命令行工具，无需 GPU，也无需从源码编译 IREE。
+#
+# ---------- 分布式轨（P0，需要单独一条命令）----------
+#   pip install -r dist-train-lab/requirements.txt
+#
+#   同样没有合并：torch 体积大，且**版本必须与显卡的 compute capability 匹配**
+#   （RTX 50 系 sm_120 需要 cu128 及以上的构建），不能用一句通用的 `torch` 糊过去。
+#   无卡时装 CPU 版即可完成该 lab 13 条检验里的 6 条。
+#
 # 分项目安装仍可用：
 #   pip install -r tvm-fatbin-lab/requirements.txt
 #   pip install -r onnx-delegate-lab/requirements.txt
+#   pip install -r iree-lab/requirements.txt
+#   pip install -r dist-train-lab/requirements.txt
 # =============================================================================
 
 # --- 共用 ---

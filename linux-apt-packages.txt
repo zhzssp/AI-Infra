@@ -1,37 +1,77 @@
 # =============================================================================
-# AI-Infra —— Linux (Debian/Ubuntu) apt 依赖清单
+# AI-Infra —— Linux (Debian/Ubuntu) apt 依赖清单【可选路径】
 # =============================================================================
-# 覆盖仓库动手项目在 Linux 上构建/运行所需的系统包：
-#   llvm-hello-compile / mlir-toy-dialect / tvm-fatbin-lab / onnx-delegate-lab
-#   以及学习文档中用到的基础工具（git、cmake、python3 等）
 #
-# 推荐系统：Ubuntu 24.04 LTS（Noble）—— 自带 llvm/mlir 17 包。
-# Ubuntu 22.04：若找不到 mlir-17-*，请先加 https://apt.llvm.org/ 再装本清单。
+#   ⚠ 先读这段：**大多数人不需要这个文件。**
 #
-# ---------- 一键安装 ----------
+#   本仓库六个动手项目的系统级依赖，全部能从 conda-forge 装进你自己的目录，
+#   不需要 root、不需要 apt。这才是默认路径：
+#
+#       bash setup.sh              # 一键装齐，装完直接跑
+#       bash setup.sh --check      # 只体检
+#
+#   下面的 apt 清单留给两类人：
+#     · 有 root、且更愿意用系统包管理器的
+#     · 想知道「conda 里那堆东西对应系统上的什么包」的
+#
+# ---------- 无 root 怎么办：apt ↔ conda 对照 ----------
+#
+#   apt 包（需 root）                     conda-forge 等价物（不需 root）
+#   ─────────────────────────────────────────────────────────────────────
+#   build-essential / gcc / g++           cxx-compiler
+#   cmake                                 cmake
+#   ninja-build                           ninja
+#   pkg-config                            pkg-config
+#   zlib1g-dev / libzstd-dev              zlib / zstd
+#   libncurses-dev                        ncurses
+#   python3 / python3-pip / python3-venv   python（建 env 时自带，pip 内置）
+#   python3-numpy / python3-scipy         numpy / scipy（走 pip）
+#   python3-lit                           lit
+#   clang-17 / libclang-17-dev            clang=17.0.6 / clangxx=17.0.6
+#   llvm-17 / llvm-17-dev / llvm-17-tools  llvm=17.0.6 / llvmdev=17.0.6
+#   lld-17                                lld=17.0.6
+#   libmlir-17-dev / mlir-17-tools        mlir=17.0.6
+#   nvidia-cuda-toolkit                   cuda-nvcc / cuda-cuobjdump / cuda-nvdisasm
+#   git / curl / wget / unzip             git / curl / wget / unzip（一般系统自带）
+#
+#   唯一**装不进 conda**的是 NVIDIA 驱动本身（libcuda.so、nvidia-smi），
+#   那个必须管理员装。但有卡的机器上驱动通常早就有了——能跑 nvidia-smi 就够，
+#   nvcc 这类编译工具反而可以自己在 conda 里装。
+#
+# ---------- 各 lab 到底要什么 ----------
+#
+#   llvm-hello-compile   clang + opt + llc + llvm-config（构建 Pass 插件还要 cmake）
+#                        脚本先找 conda env，找不到退回系统 PATH
+#   mlir-toy-dialect     MLIR 全套 + cmake + ninja + lit + FileCheck
+#                        **只认 conda**（scripts/env.sh 找不到 conda 直接退出）
+#   tvm-fatbin-lab       python + apache-tvm；fatbin 轨另需 nvcc / cuobjdump
+#   onnx-delegate-lab    python + onnx + onnxruntime，无系统包依赖
+#   iree-lab             **零系统依赖**，两个 pip wheel 自带编译器与运行时
+#   dist-train-lab       python + torch；多卡实验需要 NVIDIA 驱动
+#                        RTX 50 系（sm_120）必须用 cu128 及以上构建的 torch
+#
+# ---------- 如果你确实有 root 并想走 apt ----------
+#
 #   sudo apt-get update
 #   sudo apt-get install -y $(grep -vE '^\s*(#|$)' linux-apt-packages.txt)
 #
-# 或：
-#   grep -vE '^\s*(#|$)' linux-apt-packages.txt | xargs -r sudo apt-get install -y
+#   推荐 Ubuntu 24.04 LTS（Noble）——自带 llvm/mlir 17。
+#   Ubuntu 22.04 找不到 mlir-17-* 时，先加 https://apt.llvm.org/ 源。
 #
-# ---------- apt 装完后仍需（不在本清单）----------
-#   # Python 实验室依赖（统一清单）
-#   python3 -m venv .venv && source .venv/bin/activate
-#   pip install -U pip && pip install -r requirements.txt
+#   装完仍需 Python 库（apt 装不了这些）：
+#       pip install -r requirements.txt
+#       pip install -r iree-lab/requirements.txt
+#       pip install -r dist-train-lab/requirements.txt
 #
-#   # 可选：ExecuTorch / torch —— 见 requirements.txt 注释与官方文档
-#   # 可选：IREE 预编译包 —— https://iree.dev/ （一般不走 apt）
-#   # 可选：CUDA Toolkit（fatbin 轨）—— 见下方「可选」注释行，或 NVIDIA 官方 repo
+#   并把 17 版工具设为默认（否则脚本可能挑到别的版本）：
+#       sudo update-alternatives --install /usr/bin/clang       clang       /usr/bin/clang-17       170
+#       sudo update-alternatives --install /usr/bin/clang++     clang++     /usr/bin/clang++-17     170
+#       sudo update-alternatives --install /usr/bin/opt         opt         /usr/bin/opt-17         170
+#       sudo update-alternatives --install /usr/bin/llc         llc         /usr/bin/llc-17         170
+#       sudo update-alternatives --install /usr/bin/llvm-config llvm-config /usr/bin/llvm-config-17 170
 #
-# ---------- 版本提示 ----------
-# 仓库脚本默认对齐 LLVM/MLIR 17（与 conda-forge mlir-env 一致）。
-# 装完后建议：
-#   sudo update-alternatives --install /usr/bin/clang clang /usr/bin/clang-17 170
-#   sudo update-alternatives --install /usr/bin/clang++ clang++ /usr/bin/clang++-17 170
-#   sudo update-alternatives --install /usr/bin/opt opt /usr/bin/opt-17 170
-#   sudo update-alternatives --install /usr/bin/llc llc /usr/bin/llc-17 170
-#   sudo update-alternatives --install /usr/bin/llvm-config llvm-config /usr/bin/llvm-config-17 170
+#   注意：即使走 apt，mlir-toy-dialect 仍然只认 conda 环境。想纯系统包跑它，
+#   得自己改 scripts/env.sh，并手动传 -DMLIR_DIR=/usr/lib/llvm-17/lib/cmake/mlir。
 # =============================================================================
 
 # --- 基础构建与系统工具（全项目通用）---
@@ -49,7 +89,7 @@ zlib1g-dev
 libzstd-dev
 libncurses-dev
 
-# --- Python（tvm-fatbin-lab / onnx-delegate-lab + lit）---
+# --- Python（tvm-fatbin-lab / onnx-delegate-lab / iree-lab / dist-train-lab）---
 python3
 python3-pip
 python3-venv
@@ -58,6 +98,10 @@ python3-setuptools
 python3-wheel
 python3-numpy
 python3-scipy
+# lit：LLVM 的测试驱动，提供 /usr/bin/lit。
+# 只在「不走 conda、自己 CMake 构建 mlir-toy-dialect」时才需要（配 -DLLVM_EXTERNAL_LIT）。
+# llvm-hello-compile 的 run_tests.sh 是自带的极简版，不依赖它。
+python3-lit
 
 # --- LLVM 17 工具链（llvm-hello-compile：clang/opt/llc + 自定义 Pass 插件）---
 clang-17
@@ -69,9 +113,13 @@ llvm-17-tools
 llvm-17-runtime
 lld-17
 
-# --- MLIR 17（mlir-toy-dialect：头文件 / 库 / mlir-tblgen / mlir-opt 等）---
+# --- MLIR 17（头文件 / 库 / mlir-tblgen / mlir-opt 等）---
+# 注意：默认路径下 mlir-toy-dialect 走 conda，这两个包用不上。详见文件头。
+# 只自己配 CMake 时才需要；想省体积可把下面两行注释掉。
 libmlir-17-dev
 mlir-17-tools
 
-# --- 可选：CUDA fatbin 轨（tvm-fatbin-lab CUDA；体积大，按需取消下一行注释）---
+# --- 可选：CUDA fatbin 轨（tvm-fatbin-lab CUDA；提供 nvcc / cuobjdump / nvdisasm）---
+# 体积大；无 root 时用 conda 的 cuda-nvcc 替代（bash setup.sh --with-cuda）。
+# 另注意 apt 源里的 nvidia-cuda-toolkit 往往版本偏旧，RTX 50 系需要 12.8+。
 # nvidia-cuda-toolkit

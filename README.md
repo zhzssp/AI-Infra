@@ -5,6 +5,17 @@
 > **怎么用这套仓库**：本文件是**总规划**（学什么 / 不学什么 / 学到什么程度）。  
 > **按阶段「读什么 → 做什么 → 验什么」** 的完整自学路径，见 **[`docs/README.md`](docs/README.md)**（自学体系枢纽）。
 
+**动手之前先配环境**（**不需要 root，不需要 apt**，六个 lab 的依赖一次装齐）：
+
+```bash
+bash setup.sh                 # 一键配置；没有 GPU 也能跑通六个 lab 里的五个
+bash setup.sh --torch cu128   # 有 RTX 50 系卡时补这一条（sm_120 必须 CUDA 12.8+）
+bash setup.sh --check         # 随时体检，缺什么列什么
+```
+
+clang / opt / llc / mlir-opt / cmake / ninja 乃至 nvcc 全部从 conda-forge 装进你自己的目录，
+系统上唯一必须由管理员提供的只有 NVIDIA 驱动。细节与排障见 **[`docs/environment-setup.md`](docs/environment-setup.md)**。
+
 ---
 
 ## 仓库怎么组成一套自学体系
@@ -23,7 +34,8 @@
 │  · foundations（横切）│                      │  · mlir-toy-dialect      │
 │  · paper-notes/ 论文  │                      │  · tvm-fatbin-lab        │
 │  · *-learning-guide   │                      │  · onnx-delegate-lab     │
-│                       │                      │  · iree-lab              │
+│  · checkpoints/ 检验  │                      │  · iree-lab              │
+│                       │                      │  · dist-train-lab        │
 └──────────┬───────────┘                      └──────────────────────────┘
            │ 细节不够再翻
            ▼
@@ -46,10 +58,13 @@
 | [`mlir-toy-dialect/`](mlir-toy-dialect/) | 动手：双 dialect · Region · Interface · Dialect Conversion；**外加上游示例轨**（linalg / bufferize / memref→llvm） | `bash scripts/all.sh`；上游轨 `bash scripts/run_upstream.sh` |
 | [`tvm-fatbin-lab/`](tvm-fatbin-lab/) | 动手：TVM 调度/融合/AutoTVM + CUDA fatbin 多变体 | `bash scripts/run.sh` |
 | [`onnx-delegate-lab/`](onnx-delegate-lab/) | 动手：ONNX 构图/改图 + ORT EP 分区 + ExecuTorch Partitioner | `bash scripts/run.sh` |
-| [`iree-lab/`](iree-lab/) | 动手：IREE 相位分解（flow/stream/hal/vm）+ `.vmfb` 部署 + 三组对照实验 | `pip install -r requirements.txt && bash scripts/run.sh` |
+| [`iree-lab/`](iree-lab/) | 动手：IREE 相位分解（flow/stream/hal/vm）+ `.vmfb` 部署 + 三组对照实验 | `bash scripts/run.sh` |
+| [`dist-train-lab/`](dist-train-lab/) | 动手：DDP/FSDP/ZeRO 显存实测 + 集合通信拐点 + 最小张量并行；**把通信代价测出来** | 无卡 `bash scripts/run_cpu_smoke.sh`；多卡 `bash scripts/run_8gpu_wall.sh` |
 | [`paper/`](paper/) | 原始论文 PDF | 笔记说不清时再打开 |
-| [`linux-apt-packages.txt`](linux-apt-packages.txt) | Linux（Ubuntu/Debian）系统依赖清单 | `sudo apt-get install -y $(grep -vE '^\s*(#|$)' linux-apt-packages.txt)` |
-| [`requirements.txt`](requirements.txt) | 全仓库 pip 依赖（TVM / ONNX labs）；**`iree-lab/` 另有一份自己的** | `pip install -r requirements.txt` |
+| **[`setup.sh`](setup.sh)** | **一键配置环境**：建 conda 环境 + 装齐六个 lab 的全部依赖；**不需要 root、不需要 apt** | `bash setup.sh`；体检 `bash setup.sh --check` |
+| [`docs/environment-setup.md`](docs/environment-setup.md) | 环境配置详解：apt ↔ conda 对照、各 lab 降级行为、RTX 50 系的两个坑、排障 | 装不上时进来查 |
+| [`linux-apt-packages.txt`](linux-apt-packages.txt) | Linux 系统依赖清单【**可选**，仅供有 root 者参考】 | 无 root 请改用 `bash setup.sh` |
+| [`requirements.txt`](requirements.txt) | 全仓库 pip 依赖（TVM / ONNX labs）；`iree-lab/` 与 `dist-train-lab/` 各另有一份 | `pip install -r requirements.txt` |
 
 **动手项目在主线上的位置**：
 
@@ -60,17 +75,21 @@
 3. **`iree-lab`**（P0，阶段 3）：把同一个模型停在 flow/stream/hal/vm 每一相位上，再编成 `.vmfb` 跑通并对答案 → [`docs/learning-guides/iree-learning-guide.md`](docs/learning-guides/iree-learning-guide.md)。同一件事的**自动挡**：工业编译器把第 2 步那套流程封装成了相位。**只需 `pip install`，不用编译 IREE 源码，不用 GPU。**
 4. **`tvm-fatbin-lab`**（P1 TVM 轨 → P2 CUDA 轨）：调度/融合/AutoTVM 在阶段 4；fatbin 多变体回填到阶段 6 → [`docs/learning-guides/tvm-learning-guide.md`](docs/learning-guides/tvm-learning-guide.md) · [`docs/learning-guides/cuda-fatbin-learning-guide.md`](docs/learning-guides/cuda-fatbin-learning-guide.md)。
 5. **`onnx-delegate-lab`**（P1，阶段 4）：ONNX/ORT EP 分区 + ExecuTorch Partitioner → [`docs/learning-guides/onnx-learning-guide.md`](docs/learning-guides/onnx-learning-guide.md) · [`docs/learning-guides/executorch-learning-guide.md`](docs/learning-guides/executorch-learning-guide.md)。
+6. **`dist-train-lab`**（P0，阶段 1）：把划分推广到**设备维度**——DDP/FSDP/ZeRO 的显存实测、集合通信拐点、最小张量并行 → [`docs/checkpoints/08-distributed.md`](docs/checkpoints/08-distributed.md)。**排期上它可以最先开始**：进程模型、集合通信语义、16Φ 账本、分片标注这四块在**没有 GPU 的笔记本上**就能学完（13 条检验里能实质完成 6 条），剩下的等有卡再补。
 
-LLVM/MLIR/IREE 练 IR 基建与降低；后两个 lab 正交——TVM 练「算得快 + 多变体」，ONNX/ET 练「谁来划分 + 边界代价」。**默认顺序 4→5；时间紧或冲 §6 研究问题可先做 5。** 详细阶段地图见 [`docs/README.md`](docs/README.md)。
+LLVM/MLIR/IREE 练 IR 基建与降低；中间两个 lab 正交——TVM 练「算得快 + 多变体」，ONNX/ET 练「谁来划分 + 边界代价」；`dist-train-lab` 把「划分」从算子推到设备。**默认顺序 4→5；时间紧或冲 §6 研究问题可先做 5。** 详细阶段地图见 [`docs/README.md`](docs/README.md)。
 
 > 上面是**学习顺序**（由易到难、先地基后应用）。全部跑通之后，[链路总纲第 6 章](docs/learning-guides/00-end-to-end-pipeline.md#第-6-章-按链路顺序跑一遍)还给了一份**链路顺序**（按编译流水线站点重跑一遍）——两份顺序不同是有意的，各自解决「怎么学得进去」和「怎么串成一条线」。
 
-**五个 lab 共用一套主角，分两级**——这是把知识点串起来的载体，也是各篇「示例精讲」的公共素材：
+**六个 lab 共用一套主角，分三级**——这是把知识点串起来的载体，也是各篇「示例精讲」的公共素材：
 
-- **图级主角 `tiny_mlp`**（`Gemm→Relu→Add`，权重取 `[out,in]=[4,3]`、靠 `transB=1` 对齐）：在 `onnx-delegate-lab` 里是 ONNX 图，在 `mlir-toy-dialect/examples/upstream/` 里是 linalg IR，在 `tvm-fatbin-lab` 里是 Relay 图，在 `iree-lab` 里被真编真跑。**四副面孔共用同一份权重**——喂 `x=[1,2,3]`，四个系统都必须给出 `[2.5, 3.5, 4.5, 7.5]`。
 - **算子级主角 `axpy`**（就是 Gemm 的最内层）：在 [`llvm-hello-compile/src/kernel.c`](llvm-hello-compile/src/kernel.c) 里。LLVM 篇讲的别名分析、FMA、向量化、寄存器分配，讲的都是这张图里的这一个算子。
+- **图级主角 `tiny_mlp`**（`Gemm→Relu→Add`，权重取 `[out,in]=[4,3]`、靠 `transB=1` 对齐）：在 `onnx-delegate-lab` 里是 ONNX 图，在 `mlir-toy-dialect/examples/upstream/` 里是 linalg IR，在 `tvm-fatbin-lab` 里是 Relay 图，在 `iree-lab` 里被真编真跑。**四副面孔共用同一份权重**——喂 `x=[1,2,3]`，四个系统都必须给出 `[2.5, 3.5, 4.5, 7.5]`。
+- **规模级主角 `FFNBlock`**（`Gemm→GELU→Add`，`hidden→4·hidden→hidden`）：在 [`dist-train-lab/model.py`](dist-train-lab/model.py) 里。**是 `tiny_mlp` 那根骨架的放大版**——多了一个降维矩阵和一个 LayerNorm，但「Gemm → 逐元素激活 → 逐元素加」完全一致。该文件里保留了原尺寸的 `TinyMlp` 作数值锚点，跑 `python model.py` 会验证它仍给出 `[2.5, 3.5, 4.5, 7.5]`。
 
-图级问「算几次、中间结果落不落 DRAM」，算子级问「这一次算得多快」；**前者做错是几百倍，后者是几倍，所以顺序不能反**。完整链路见 [`docs/learning-guides/00-end-to-end-pipeline.md`](docs/learning-guides/00-end-to-end-pipeline.md)。
+为什么要放大：`tiny_mlp` 只有约 64 次浮点运算，**比一张现代 GPU 小十二个数量级**，不放大就什么性能现象都观察不到。
+
+三级各问一个问题：算子级问「这一次算得多快」，图级问「算几次、中间结果落不落 DRAM」，规模级问「装不下时切到多卡要付多少通信代价」。**做错的代价依次是几倍、几百倍、几十倍，所以顺序不能反**。完整链路见 [`docs/learning-guides/00-end-to-end-pipeline.md`](docs/learning-guides/00-end-to-end-pipeline.md)。
 
 **把各工具串成体系的胶水**：专题文档各讲一块（MLIR / IREE / TVM / …），中间还有一批跨项目反复出现的概念（计算图与融合、算法/调度、tensor vs buffer、渐进 lowering、委托分区、设备抽象机、分片标注进 IR 等）。这些写在 [`docs/learning-guides/ai-compiler-foundations-learning-guide.md`](docs/learning-guides/ai-compiler-foundations-learning-guide.md)——**建议开局先扫总图与概念索引，学每个项目前按该文档第 11 章补对应章节**。
 
@@ -209,6 +228,8 @@ LLVM/MLIR/IREE 练 IR 基建与降低；后两个 lab 正交——TVM 练「算�
 
 📄 **精读笔记**：[`01-efficient-training-distributed-infra.md`](docs/paper-notes/01-efficient-training-distributed-infra.md)
 📌 **原文**：[Efficient Training of LLMs on Distributed Infrastructures: A Survey](https://arxiv.org/abs/2407.20018)
+🛠 **动手项目**：[`dist-train-lab/`](dist-train-lab/) —— **无卡也能开始**：`bash scripts/run_cpu_smoke.sh` 几十秒跑完，覆盖进程模型、集合通信语义、16Φ 账本、分片标注四块核心知识；有多卡后 `bash scripts/run_8gpu_wall.sh`
+🧪 **检验条目**：[`docs/checkpoints/08-distributed.md`](docs/checkpoints/08-distributed.md)（13 条，其中 6 条无卡可做）
 
 #### 必须掌握的「核心运行框架」
 
@@ -249,9 +270,18 @@ LLVM/MLIR/IREE 练 IR 基建与降低；后两个 lab 正交——TVM 练「算�
 
 #### 动手验收（入门：完成 1～2 条即可；其余有环境再补）
 
+**无卡先做这两条**（在 [`dist-train-lab/`](dist-train-lab/) 里，`bash scripts/run_cpu_smoke.sh` 一次跑完）：
+
+0. 两进程 gloo DDP 喂**不同**数据，验证 `param_diff == 0` 与 `grad_diff < 1e-6`——证明 all_reduce 做的是**平均**，以及 DDP 的核心不变量靠什么维持。
+0'. `comm_bench` 扫出延迟/带宽拐点，说清它和「DDP 为什么要做梯度分桶」的因果。
+
+**有卡后**：
+
 1. 单机双卡跑 DDP vs FSDP，用 `torch.cuda.max_memory_allocated()` **实测验证 16Φ → 16Φ/N**（最优先）。
 2. 开关 selective recompute，或用 profiler 看一次 All-Reduce 是否与反向重叠（二选一）。
 3. （加深）`NCCL_DEBUG=INFO` 观察 Ring/Tree；填简易性能模型扫 (TP, PP, DP)。
+
+> **注意 16Φ 的两种口径**：经典混合精度（DeepSpeed/Megatron）是 `2Φ+2Φ+12Φ`，而 **`torch.autocast` 的参数与梯度始终是 fp32**，实际是 `4Φ+4Φ+8Φ`——合计都是 16Φ 但构成不同。用 AMP 实测时对的是 fp32 那一栏，真正把参数压到 2Φ 的是 FSDP 的 `MixedPrecision(param_dtype=bf16)`。这一条不搞清楚，实测永远对不上账。
 
 ---
 
@@ -312,7 +342,7 @@ Dialect = 一组 Op + Type + Attribute + Interface 的命名空间
 ### 3.3 IREE 与 HAL
 
 📘 **主学习材料**：[`docs/learning-guides/iree-learning-guide.md`](docs/learning-guides/iree-learning-guide.md) —— 基于官方文档与源码整理的 IREE 核心概念全景 + **HAL 详解**，本阶段以它为准
-🛠 **动手项目**：[`iree-lab/`](iree-lab/) —— `pip install -r requirements.txt && bash scripts/run.sh`，先读 `out/PHASES.md`。学习文档里的示例精讲基本都对着它的产物讲
+🛠 **动手项目**：[`iree-lab/`](iree-lab/) —— `bash scripts/run.sh`（依赖已由根目录 `setup.sh` 装好），先读 `out/PHASES.md`。学习文档里的示例精讲基本都对着它的产物讲
 📄 **论文简记**：[`07-tinyiree.md`](docs/paper-notes/07-tinyiree.md) —— TinyIREE 只给初步印象，非必读
 📌 **官方文档**：[IREE HAL Dialect](https://iree.dev/reference/mlir-dialects/HAL/) · [Invocation Execution Model](https://github.com/iree-org/iree/blob/main/docs/website/docs/developers/design-docs/invocation-execution-model.md) · [CUDA HAL Driver](https://iree.dev/developers/design-docs/cuda-hal-driver/)
 

@@ -24,6 +24,7 @@
 ## 主角模型：`tiny_mlp`
 
 全仓库共用一套主角：**四个 lab 跑的是同一张图**（本 lab、`mlir-toy-dialect`、`iree-lab`、`tvm-fatbin-lab`），
+另外两个各取一级尺度——`llvm-hello-compile` 钻进最内层算子，`dist-train-lab` 把这根骨架放大到 GPU 尺寸，
 第五个 `llvm-hello-compile` 钻进这张图的最内层算子。所以各阶段的数字可以横着比：
 
 ```
