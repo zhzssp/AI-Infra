@@ -42,17 +42,17 @@ echo "# 输出目录: ${OUT_DIR}"
 
 sep() { printf '\n========== %s ==========\n' "$1"; }
 
-# 运行一个演示，同时把两路输出都落盘（且终端实时可见）：
-#   stdout（最终 IR）      -> tee 到 out/<demo>.mlir
-#   stderr（调试 trace）   -> tee 到 out/<demo>.log
-# 用 process substitution 让两路各自 tee，互不污染。
+# 运行一个演示，两路分别落盘后再回放到终端（终端仍经上面的 exec tee 进 full_run.log）。
+#   stdout（最终 IR）    -> out/<demo>.mlir
+#   stderr（调试 trace） -> out/<demo>.log
+# 不要用 `> >(tee) ...; wait`：脚本开头已经 `exec > >(tee full_run.log)`，
+# 裸 `wait` 会连那个永不退出的 tee 一起等，演示 1 打完 IR 后整进程就挂死。
 run_demo() {
   local out_file="$1"; shift
   local log_file="${out_file%.mlir}.log"
-  "${TOY_OPT}" "$@" \
-    > >(tee "${out_file}") \
-    2> >(tee "${log_file}" >&2)
-  wait   # 等待两个 tee 子进程把文件写完，避免顺序错乱
+  "${TOY_OPT}" "$@" >"${out_file}" 2>"${log_file}"
+  cat "${log_file}" >&2
+  cat "${out_file}"
 }
 
 sep "演示 1：解析并回显（dialect Parser/Printer）"
