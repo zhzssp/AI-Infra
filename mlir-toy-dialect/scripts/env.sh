@@ -27,11 +27,23 @@ if [[ ! -x "${CONDA_HOME}/bin/conda" ]]; then
 fi
 
 # --- 激活 conda 环境 ---
+# conda 的 hook / activate 会读 $PS1；非交互脚本里 PS1 通常没设。
+# 外层 build.sh 开了 `set -u`，一旦展开空的 $PS1 整个脚本立刻退出，
+# 旧写法还把 activate 的 stderr 丢进 /dev/null，于是步骤 2 看起来像「突然停住」。
+_nounset_was_on=0
+case $- in *u*) _nounset_was_on=1; set +u ;; esac
+: "${PS1:=}"
+
+echo "[env] 激活 conda 环境 '${TOY_ENV}' ..."
 eval "$("${CONDA_HOME}/bin/conda" shell.bash hook)"
-if ! conda activate "${TOY_ENV}" 2>/dev/null; then
-  echo "[env] conda 环境 '${TOY_ENV}' 不存在。请先运行：scripts/setup.sh" >&2
+if ! conda activate "${TOY_ENV}"; then
+  echo "[env] conda 环境 '${TOY_ENV}' 不存在或激活失败。请先运行：scripts/setup.sh" >&2
+  [[ "${_nounset_was_on}" == 1 ]] && set -u
+  unset _nounset_was_on
   return 1 2>/dev/null || exit 1
 fi
+[[ "${_nounset_was_on}" == 1 ]] && set -u
+unset _nounset_was_on
 
 # --- 导出关键路径 ---
 TOY_ENV_PREFIX="${CONDA_PREFIX}"
