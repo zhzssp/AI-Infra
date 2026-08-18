@@ -44,14 +44,18 @@ def Low_AddOp : Low_Op<"add", [Pure, Commutative, ToyCostOpInterface]> {
 // low.mul —— 低层乘法（强度削减的改写目标）
 //===----------------------------------------------------------------------===//
 // 覆盖接口默认实现：代价 = 5（见 LowOps.cpp 的 MulOp::getCost）。
+// extraClassDeclaration 把声明写进生成的类；不要只靠
+// DeclareOpInterfaceMethods 的第二个参数（增量构建漏跑 tblgen 时会缺声明）。
 // 强度削减把它换成 low.shl（代价 1）之后，--toy-print-cost 算出来的
 // 总代价会从 5 掉到 1 —— 这就是"优化到底赚了多少"的量化证据。
-def Low_MulOp : Low_Op<"mul",
-    [Pure, Commutative, DeclareOpInterfaceMethods<ToyCostOpInterface>]> {
+def Low_MulOp : Low_Op<"mul", [Pure, Commutative, ToyCostOpInterface]> {
   let summary = "两个 i32 相乘（低层）";
   let arguments = (ins I32:$lhs, I32:$rhs);
   let results = (outs I32:$result);
   let assemblyFormat = "$lhs `,` $rhs attr-dict `:` type($result)";
+  let extraClassDeclaration = [{
+    unsigned getCost();
+  }];
 }
 
 //===----------------------------------------------------------------------===//

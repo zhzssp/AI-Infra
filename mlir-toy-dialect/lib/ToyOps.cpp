@@ -107,8 +107,8 @@ OpFoldResult MulOp::fold(FoldAdaptor adaptor) {
 // MulOp::getCost —— 实现 ToyCostOpInterface
 //===----------------------------------------------------------------------===//
 //
-// toy.mul 在 .td 里用 DeclareOpInterfaceMethods<ToyCostOpInterface> 声明了
-// "我要覆盖接口的默认实现"，所以必须在这里给出定义。
+// toy.mul 在 .td 的 extraClassDeclaration 里声明了 getCost()，
+// 所以必须在这里给出定义（覆盖接口默认的代价 1）。
 // 对比：toy.add 直接挂接口名、没有 Declare...，于是沿用默认实现（返回 1），
 //       一行 C++ 都不用写。
 //

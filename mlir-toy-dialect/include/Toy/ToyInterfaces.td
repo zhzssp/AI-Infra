@@ -44,8 +44,12 @@ def ToyCostOpInterface : OpInterface<"ToyCostOpInterface"> {
       /*args=*/        (ins),
       /*methodBody=*/  "",
       // 默认实现：不写 getCost() 的 op 一律算 1。
-      // op 若想给出自己的代价，在 .td 里用 DeclareOpInterfaceMethods<...>
-      // 声明，然后在 .cpp 里写一个真正的 getCost()（见 toy.mul / low.mul）。
+      // op 若想覆盖，在该 op 的 extraClassDeclaration 里写
+      //   unsigned getCost();
+      // 再到对应 .cpp 里给定义（见 toy.mul / low.mul）。
+      // 不要指望 DeclareOpInterfaceMethods 自动生成这份声明：
+      // 方法已有 defaultImplementation 时 tblgen 默认跳过，
+      // 增量构建再不重跑，.cpp 就会报 "no declaration matches getCost()"。
       /*defaultImplementation=*/[{
         return 1;
       }]

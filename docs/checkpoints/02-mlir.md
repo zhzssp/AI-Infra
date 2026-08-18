@@ -63,7 +63,7 @@ bash scripts/build.sh && bash scripts/test.sh && bash scripts/run.sh
 
 1. `MulOp` 的 `getLhs()` / `getRhs()` 访问器是怎么生成的
 2. `assemblyFormat = "$lhs `,` $rhs attr-dict `:` type($result)"` 生成出的 `parse()` 与 `print()` 函数体
-3. `DeclareOpInterfaceMethods<ToyCostOpInterface>` 生成的 `getCost()` **声明**（注意只有声明，定义在 `lib/ToyOps.cpp` 里手写）
+3. `Toy_MulOp` 的 `extraClassDeclaration` 拷进 `.inc` 的 `getCost()` **声明**（注意只有声明，定义在 `lib/ToyOps.cpp` 里手写）
 
 **验收命令**：
 
@@ -74,7 +74,7 @@ find build -name 'ToyOps*.inc'
 mlir-tblgen -gen-op-defs -I include -I "$MLIR_DIR/../../../include" include/Toy/ToyOps.td | head -80
 ```
 
-**通过标准**：你能指出 `.inc` 里哪一段对应 `.td` 里的哪一行；能解释为什么 `Toy_AddOp` 没有生成 `getCost()` 声明而 `Toy_MulOp` 有（前者用接口默认实现，后者声明要覆盖）。
+**通过标准**：你能指出 `.inc` 里哪一段对应 `.td` 里的哪一行；能解释为什么 `Toy_AddOp` 没有 `getCost()` 声明而 `Toy_MulOp` 有（前者用接口默认实现，后者靠 `extraClassDeclaration` 覆盖）。
 
 **常见失败 → 说明你哪里没懂**：找不到 `.inc` → 没意识到它是构建期产物，`clean` 之后要重新 build。
 
@@ -382,7 +382,7 @@ EOF
 - **资源**：本地+工具链
 - **预计耗时**：1h
 
-**任务**：`low.shl` 目前直接挂 `ToyCostOpInterface`（用默认代价 1）。把它改成 `DeclareOpInterfaceMethods<ToyCostOpInterface>`，在 `lib/LowOps.cpp` 实现 `getCost()` 返回 0（移位视为免费），然后跑演示 9-a / 9-b（`test/cost.mlir` 上强度削减前后的代价对比）。
+**任务**：`low.shl` 目前直接挂 `ToyCostOpInterface`（用默认代价 1）。给它加上与 `low.mul` 一样的 `extraClassDeclaration { unsigned getCost(); }`，在 `lib/LowOps.cpp` 实现 `getCost()` 返回 0（移位视为免费），然后跑演示 9-a / 9-b（`test/cost.mlir` 上强度削减前后的代价对比）。改完 `.td` 后若增量构建没重跑 tblgen，用 `bash scripts/build.sh clean`。
 
 **先预测再动手**：
 
@@ -407,6 +407,7 @@ bash scripts/test.sh    # test/cost.mlir 有 BEFORE/AFTER 两组 CHECK，需同�
 | 现象 | 盲点 |
 |------|------|
 | 代价没变 | 只改了 `.td` 没写 C++ 定义（或反之），链接期/运行期用的还是默认实现 |
+| 编译报 `no declaration matches ... getCost()` | `.inc` 里没有声明：要么漏了 `extraClassDeclaration`，要么改了 `.td` 但没重跑 tblgen（`bash scripts/build.sh clean`） |
 | 链接报未定义符号 `getCost` | `DeclareOpInterfaceMethods` 只生成**声明**，定义必须手写——这正是 L0-MLIR-02 要你看清的东西 |
 
 ---

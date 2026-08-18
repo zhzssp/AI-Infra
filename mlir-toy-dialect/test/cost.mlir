@@ -15,7 +15,7 @@
 //
 // 接口的两种实现方式在本项目里都能看到：
 //   low.add / low.shl  —— .td 里只写接口名，沿用默认实现（代价 1），零 C++ 代码；
-//   low.mul            —— .td 里写 DeclareOpInterfaceMethods<...>，
+//   low.mul            —— .td 里 extraClassDeclaration 声明 getCost()，
 //                          在 LowOps.cpp 里覆盖成 5。
 //   low.constant       —— 根本不实现接口，Pass 自动跳过（不会被打上 toy.cost）。
 //

@@ -66,7 +66,7 @@ def Toy_ConstantOp : Toy_Op<"constant", [Pure, ConstantLike]> {
 //   - Commutative trait：加法可交换，MLIR 优化时可利用这一点。
 //   - hasFolder = 1：我们实现常量折叠 —— 当两个操作数都是常量时，
 //     直接算出结果，把 toy.add 折叠成 toy.constant。
-//   - ToyCostOpInterface：直接挂上接口名，【不加】DeclareOpInterfaceMethods，
+//   - ToyCostOpInterface：直接挂上接口名，不加 extraClassDeclaration，
 //     表示"我用接口的默认实现"（代价 = 1），一行 C++ 都不用写。
 //
 def Toy_AddOp : Toy_Op<"add", [Pure, Commutative, ToyCostOpInterface]> {
@@ -88,21 +88,26 @@ def Toy_AddOp : Toy_Op<"add", [Pure, Commutative, ToyCostOpInterface]> {
 //   %3 = toy.mul %0, %1 : i32
 //
 // 学习要点：
-//   - DeclareOpInterfaceMethods<ToyCostOpInterface>：与 add 相反，
-//     这里声明"我要【覆盖】接口的默认实现"，于是 tblgen 会在 MulOp 类里
-//     生成 `unsigned getCost();` 的声明，必须在 ToyOps.cpp 里给出定义
-//     （我们返回 5：乘法比加法贵）。
+//   - ToyCostOpInterface：挂上接口。getCost 在接口里带了 defaultImplementation
+//     （返回 1），tblgen **不会**自动在 op 类里生成声明。
+//   - extraClassDeclaration：把 `unsigned getCost();` 原文拷进生成的 MulOp 类。
+//     定义在 ToyOps.cpp（返回 5：乘法比加法贵）。
+//     不用 DeclareOpInterfaceMethods 的第二个参数：那条路依赖 tblgen 重跑，
+//     增量构建漏掉 .inc 时就会报 "no declaration matches getCost()"。
 //
 // 练习建议：给 MulOp 的 fold() 加入 "x * 1 = x"、"x * 0 = 0" 这样的化简规则。
 //
-def Toy_MulOp : Toy_Op<"mul",
-    [Pure, Commutative, DeclareOpInterfaceMethods<ToyCostOpInterface>]> {
+def Toy_MulOp : Toy_Op<"mul", [Pure, Commutative, ToyCostOpInterface]> {
   let summary = "两个 i32 相乘";
 
   let arguments = (ins I32:$lhs, I32:$rhs);
   let results = (outs I32:$result);
 
   let assemblyFormat = "$lhs `,` $rhs attr-dict `:` type($result)";
+
+  let extraClassDeclaration = [{
+    unsigned getCost();
+  }];
 
   let hasFolder = 1;
 }

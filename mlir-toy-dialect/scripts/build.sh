@@ -27,6 +27,27 @@ cmake -G Ninja -S "${TOY_PROJECT_DIR}" -B "${TOY_BUILD_DIR}" \
   -DLLVM_EXTERNAL_LIT="${TOY_LIT}" \
   -DLLVM_EXTERNAL_LIT_DIR="${TOY_BIN_DIR}"
 
+# 改 .td 后增量构建经常不重跑 mlir-tblgen，旧 .inc 里没有新声明，
+# 接着编 .cpp 就会报 "no declaration matches getCost()"。
+stale_inc=0
+while IFS= read -r td; do
+  [[ -z "${td}" ]] && continue
+  rel="${td#"${TOY_PROJECT_DIR}/"}"
+  # add_mlir_dialect(Foo bar) 把产物放在 include/<DialectDir>/Foo.h.inc
+  base="$(basename "${td}" .td)"
+  dir="$(basename "$(dirname "${td}")")"
+  inc="${TOY_BUILD_DIR}/include/${dir}/${base}.h.inc"
+  if [[ -f "${inc}" && "${td}" -nt "${inc}" ]]; then
+    echo "[build] ${rel} 比 $(basename "${inc}") 新，删除过期 TableGen 产物"
+    rm -f "${inc}" "${inc%.h.inc}.cpp.inc"
+    stale_inc=1
+  fi
+done < <(find "${TOY_PROJECT_DIR}/include" -name '*.td' 2>/dev/null)
+
+if [[ "${stale_inc}" == 1 ]]; then
+  echo "[build] 将重跑 mlir-tblgen"
+fi
+
 echo "[build] 阶段 2/2：编译 ..."
 cmake --build "${TOY_BUILD_DIR}"
 
