@@ -27,7 +27,7 @@ llvm-config --version
 - **资源**：本地+工具链
 - **预计耗时**：1h
 
-**任务**：跑 `scripts/run.sh`，然后**不看解释**，只对着 `out/steps/diff_02_to_03a.txt` 回答：mem2reg 消掉了哪几类指令、新增了什么、`%retval` 这类槽位去哪了。再用 `out/08_summary` 里的指令计数印证。
+**任务**：跑 `scripts/run.sh`，然后**不看解释**，只对着 `out/diff_02_to_03a.txt` 回答：mem2reg 消掉了哪几类指令、新增了什么、`%retval` 这类槽位去哪了。再用 `out/steps/08_summary.log` 里的指令计数印证。
 
 **验收命令**：
 
@@ -37,7 +37,7 @@ bash scripts/run.sh
 # 重点读这三个产物
 #   out/02_sum_O0.ll          alloca/load/store 满天飞
 #   out/03a_sum_mem2reg.ll    alloca 消失，phi 出现
-#   out/steps/diff_02_to_03a.txt
+#   out/diff_02_to_03a.txt    ② → ③a 的逐行差异
 ```
 
 **通过标准**：

@@ -12,8 +12,9 @@
 > **先跑起来**（无卡也能做完 13 条里的 6 条）：
 >
 > ```bash
-> cd dist-train-lab && pip install -r requirements.txt
-> bash scripts/run_cpu_smoke.sh      # 几十秒，覆盖 L0 全部 + L1-DIST-04 + L3-DIST-11 主判据
+> bash setup.sh --torch cpu          # 仓库根目录，不需要 root；已配好则跳过
+> cd dist-train-lab
+> bash scripts/run_cpu_smoke.sh      # 几十秒，覆盖 L0 全部 + L1-DIST-04 + L3-DIST-11/13 主判据
 > ```
 >
 > 有多卡时再跑 `bash scripts/run_8gpu_wall.sh`——它把 [L2-DIST-06/07/08](#l2-dist-06ddp-vs-单卡显存几乎不降吞吐接近线性) 与 [L3-DIST-11](#l3-dist-11手写最小张量并行列切--all_gather) 的性能部分打包成四组对照，按实际卡数自动生成 `world_size = 2, 4, 8, ...` 序列。

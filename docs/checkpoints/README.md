@@ -102,14 +102,14 @@ L3 可按兴趣与资源条件选做。
 
 | 文档 | 条目数 | 对应动手项目 | 主判据（L2 举例） | 资源 |
 |------|-------|-------------|------------------|------|
-| [01 LLVM](./01-llvm.md) | 12 | [`llvm-hello-compile/`](../../llvm-hello-compile/) | 写一个新的 Function 分析 Pass 并注册到正确 PM 层级，补 FileCheck 测试 | 全部本地，约 17h |
-| [02 MLIR](./02-mlir.md) | 12 | [`mlir-toy-dialect/`](../../mlir-toy-dialect/) | 新增 `toy.sub`：ODS → fold → 两种 pattern 各写一版 lowering → lit 测试 | 全部本地，约 22h |
-| [03 IREE](./03-iree.md) | 11 | `iree-compile` / `iree-run-module` | 双后端编译，验证一个 vmfb 里多个 executable variant | 本地；1 条需 GPU |
+| [01 LLVM](./01-llvm.md) | 12 | [`llvm-hello-compile/`](../../llvm-hello-compile/) | 写一个新的 Function 分析 Pass 并注册到正确 PM 层级，补 FileCheck 测试 | 全部 `本地+工具链`，约 17h |
+| [02 MLIR](./02-mlir.md) | 12 | [`mlir-toy-dialect/`](../../mlir-toy-dialect/) | 新增 `toy.sub`：ODS → fold → 两种 pattern 各写一版 lowering → lit 测试 | 全部 `本地+工具链`，约 22h |
+| [03 IREE](./03-iree.md) | 11 | [`iree-lab/`](../../iree-lab/)（判据另在 `~/iree-check` 直接用 `iree-compile` / `iree-run-module` 跑） | 双后端编译，验证一个 vmfb 里多个 executable variant | 本地；1 条需 GPU |
 | [04 TVM](./04-tvm.md) | 11 | [`tvm-fatbin-lab/`](../../tvm-fatbin-lab/) TVM 轨 | 新增 TE 算子 + 两套 schedule + AutoTVM template，给出量化对比 | 本地，约 17.5h；1 条可选 GPU |
 | [05 ONNX + ORT](./05-onnx-ort.md) | 10 | [`onnx-delegate-lab/`](../../onnx-delegate-lab/) ONNX 轨 | 手写一个纯 Python 图优化 pass（模式匹配 + 重写） | 本地，约 12h；1 条可选 GPU |
-| [06 ExecuTorch](./06-executorch.md) | 9 | [`onnx-delegate-lab/`](../../onnx-delegate-lab/) ET 轨 | 写一个新 Partitioner（按段长阈值划分）并对比边界账 | **全部本地，无需 GPU** |
+| [06 ExecuTorch](./06-executorch.md) | 9 | [`onnx-delegate-lab/`](../../onnx-delegate-lab/) ET 轨 | 写一个新 Partitioner（按段长阈值划分）并对比边界账 | **全部无需 GPU**；4 条纯 `本地`，5 条走真实路径时需 `本地+工具链` |
 | [07 CUDA fatbin](./07-cuda-fatbin.md) | 8 | [`tvm-fatbin-lab/`](../../tvm-fatbin-lab/) CUDA 轨 | 加第二个 kernel，验证 fatbin 的多镜像结构 | 本地约 7.5h；2 条需 GPU |
-| [08 分布式训练](./08-distributed.md) | 13 | [`dist-train-lab/`](../../dist-train-lab/) | DDP vs FSDP 显存实测并印证 16Φ 账 | 6 条本地可做；**7 条需多卡** |
+| [08 分布式训练](./08-distributed.md) | 13 | [`dist-train-lab/`](../../dist-train-lab/) | DDP vs FSDP 显存实测并印证 16Φ 账 | 6 条本地可做；**7 条需真机**（1 单卡 + 5 多卡 + 1 多机） |
 
 **建议顺序**：01 → 02 是编译器地基（同一件事的单层与多层版本，对照做最省力）；03 / 04 / 05 / 06 / 07 相互独立，按你当前学到哪一段挑；08 单独排期，因为它卡在机器申请上——**建议尽早把申请发出去，等待期间先做前七册**。
 

@@ -2,7 +2,7 @@
 
 > **本文档的定位**
 > - 其余七份 `*-learning-guide.md` 各自讲清**一个系统怎么工作**；这一份只回答一件事：**它们怎么接力完成同一次优化**。
-> - 做法是全仓库共用一个**主角**：一个 tiny MLP 和它内部的一个算子。每份指南的「示例精讲」讲的都是**这同一个东西在本层长什么样**，而不是各讲各的玩具。
+> - 做法是全仓库共用一个**主角**：一个 tiny MLP 和它内部的一个算子（另有一级放大版留给 `dist-train-lab`，见 §1.3）。每份指南的「示例精讲」讲的都是**这同一个东西在本层长什么样**，而不是各讲各的玩具。
 > - 主角不是新编的——它已经躺在 [`onnx-delegate-lab/onnx_lab/01_build_and_infer.py`](../../onnx-delegate-lab/onnx_lab/01_build_and_infer.py) 和 [`llvm-hello-compile/src/kernel.c`](../../llvm-hello-compile/src/kernel.c) 里了。本文只是把这条已经长了一半的线点明并接通。
 >
 > **怎么用这份文档**
@@ -72,7 +72,7 @@ float relu_sum(const Tensor *t);                                        // ← R
 
 **所以 `kernel.c` 不是"一个随便的 C 文件"，它是 `tiny_mlp` 里那个 Gemm 降到 C 层之后的样子。** LLVM 指南里所有关于别名、FMA、向量化、寄存器分配的讨论，讨论的都是这张图里那一个算子。
 
-### 1.3 为什么要双层主角
+### 1.3 为什么要分层主角
 
 图级和算子级回答的是**两个不相干的问题**，混在一起讲是绝大多数材料读起来割裂的根因：
 
@@ -84,6 +84,10 @@ float relu_sum(const Tensor *t);                                        // ← R
 | 做错的后果 | 多几次 DRAM 往返（**几百倍**） | 少几倍 IPC（**几倍**） |
 
 **量级差这么多，所以顺序不能反**：先把图级边界定对，再去抠算子级。第 3 章那次优化就是按这个顺序接力的。
+
+> 全仓库其实有**三级**主角，上表只列了七站用得到的两级。第三级是**规模级 `FFNBlock`**
+> （`dist-train-lab/model.py`，`tiny_mlp` 那根骨架放大到 GPU 尺寸），它问的是「装不下时切到多卡
+> 要付多少通信代价」。这个问题**不在七站之内**，所以本章不展开——见[第 6 章](#第-6-章-按链路顺序跑一遍)末尾。
 
 ---
 
@@ -285,7 +289,7 @@ python onnx-delegate-lab/executorch_lab/01_partitioner_lab.py
 | **上游给我** | 归我这个后端的一段子图 |
 | **我固化** | 中间张量落不落 DRAM |
 | **交给下游** | 若干个"一个 kernel 该算什么"的定义 |
-| **亲手看** | `python tvm-fatbin-lab/tvm_lab/02_fusion_relay.py` → 对比 `out/tvm/02_relay_before_fuse.ir.txt` 与 `after` |
+| **亲手看** | `cd tvm-fatbin-lab && python tvm_lab/02_fusion_relay.py` → 对比 `out/tvm/02_relay_before_fuse.ir.txt` 与 `after` |
 
 融合的判据是**算子类别**，不是算子名字：
 
@@ -315,7 +319,7 @@ lab 里跑的就是主角本身：`nn.dense → add(b) → relu → add(bias2)`�
 | **上游给我** | 一个 kernel 该算什么（算法） |
 | **我固化** | 循环序、tile、并行、向量宽度（调度） |
 | **交给下游** | 一个具体的循环嵌套 |
-| **亲手看** | `python tvm-fatbin-lab/tvm_lab/01_te_matmul_schedules.py` → 两份 `lower` 文本并排 |
+| **亲手看** | `cd tvm-fatbin-lab && python tvm_lab/01_te_matmul_schedules.py` → `out/tvm/01_matmul_{naive,tiled}.lower.txt` 两份并排 |
 
 这一站的全部内容浓缩成一句话：**算法说"算什么"，调度说"怎么算"，改调度不改结果。** lab 里 `N=64` 的 matmul，算法四行一个字不改，只换 schedule，`lower` 出来的循环嵌套完全不同。
 
@@ -416,8 +420,8 @@ IREE 还多做了一件 fatbin 不做的事：把宿主侧的调度逻辑（分�
 |--------|---------|------------|------------|
 | ① 把 batch 写成动态维 | tile 因子、向量宽度只能保守取 | 不能（要么重编、要么运行时特化） | `out/onnx/01_READING.md` 的 `infer_shapes` 结果<br>`iree-lab` 实验 A：静态 vs 动态两份 stream IR |
 | ② 划分把 Relu 判给另一个后端 | 中间张量被强制物化，**融合窗口关闭** | **不能** | `out/onnx/03_*`、`out/executorch/01_*` 的边界张量计数 |
-| ③ 没融合 | 3 个 kernel、2 张中间张量往返 DRAM | 不能（kernel 边界已定死） | `02_relay_before_fuse.ir.txt` vs `after`<br>`iree-lab`：数 `tiny_mlp.flow.mlir` 里的 `flow.dispatch` |
-| ④ 没 vectorize / 没 compute_at | 标量循环；融合只是打了个包 | 能，但要回到这一层重调 | `01_matmul_*.lower.txt` 两份并排 |
+| ③ 没融合 | 3 个 kernel、2 张中间张量往返 DRAM | 不能（kernel 边界已定死） | `out/tvm/02_relay_before_fuse.ir.txt` vs `after`<br>`iree-lab`：数 `out/phases/tiny_mlp.flow.mlir` 里的 `flow.dispatch` |
+| ④ 没 vectorize / 没 compute_at | 标量循环；融合只是打了个包 | 能，但要回到这一层重调 | `out/tvm/01_matmul_*.lower.txt` 两份并排 |
 | ⑤ 降低时没传 `noalias` | LLVM 只能 MayAlias | **不能**（信息已丢失） | `tour.sh` 第 9 站 `aa-eval` 输出 |
 | ⑥ TTI 没报告 AVX2 | 向量化器按 128-bit 选 4 宽 | 不能（中端唯一的目标信息入口） | `tour.sh` 第 12 站，默认 vs `+avx2` 两份<br>`iree-lab` 实验 B：`<4/8/16 x float>` 计数表 |
 | ⑦ 只打了一个 `sm_*` | 换一张卡直接**加载失败** | 不能 | `cuobjdump -lelf` 的 image 列表<br>`iree-lab`：`grep hal.executable.variant` |
@@ -427,7 +431,7 @@ IREE 还多做了一件 fatbin 不做的事：把宿主侧的调度逻辑（分�
 
 所以这张表真正的结论是狠话一句：**没有任何一站的错误能靠下游消化掉，区别只在重做的代价。**
 重调一次 schedule，与"重新导出模型 + 把后面六站全跑一遍"，完全不是一个量级——
-这正是[第 1 章](#13-为什么要双层主角)那句"顺序不能反"的实际含义，也是要先把整条链看一遍再动手的原因。
+这正是[第 1 章](#13-为什么要分层主角)那句"顺序不能反"的实际含义，也是要先把整条链看一遍再动手的原因。
 
 > ④ 那一格值得多看一眼：它写的是「没 vectorize / 没 compute_at」，但这两半的下场并不一样。
 > **没 vectorize**，下游 LLVM 的自动向量化器还有机会替你补一部分（前提是站 ⑤ 把 `noalias` 传下来了——
@@ -444,13 +448,15 @@ IREE 还多做了一件 fatbin 不做的事：把宿主侧的调度逻辑（分�
 最后追加的 `dist-train-lab` 不在七站之内——它是站 ② 在**设备维度**上的展开，理由见本章末尾。
 
 ```bash
+# 依赖一次装齐（仓库根目录，不需要 root）：bash setup.sh
+
 # 站 ①②  表示与划分
-cd onnx-delegate-lab && pip install -r requirements.txt && bash scripts/run.sh
+cd onnx-delegate-lab && bash scripts/run.sh
 #        → out/ANALYSIS.md，重点看 onnx/01_READING.md（结构层次）与 onnx/03（EP 分区边界）
 #        → executorch/01_READING.md：同一张图换 ExecuTorch 划分，per_node=6 vs connected=2
 
 # 站 ③④  融合与调度
-cd ../tvm-fatbin-lab && pip install -r requirements.txt && bash scripts/run_tvm.sh
+cd ../tvm-fatbin-lab && bash scripts/run_tvm.sh
 #        → out/tvm/02_relay_*fuse*.txt（融合前后）、01_matmul_*.lower.txt（两套 schedule）
 
 # 站 ⑤    多层降低（手工挡：自己一个 pass 一个 pass 地降）
@@ -463,7 +469,7 @@ cd ../llvm-hello-compile && bash scripts/run.sh && bash scripts/tour.sh
 #        → out/ANALYSIS.md 建立链路感；out/tour/TOUR.md 逐个要点看
 
 # 站 ⑤⑦   多层降低（自动挡）+ 打包与运行时
-cd ../iree-lab && pip install -r requirements.txt && bash scripts/run.sh
+cd ../iree-lab && bash scripts/run.sh
 #        → out/PHASES.md：每相位新增了什么信息
 #        → out/execute/：.vmfb 跑出来的数值必须和手算一致
 #        → out/variants/：静态 vs 动态、baseline vs avx2 vs avx512
@@ -488,7 +494,7 @@ bash scripts/run_8gpu_wall.sh                                  # 有多卡时
 > **`dist-train-lab` 为什么排在最后而不是站 ② 那里**：前面七站讲的是「一张图在**一个设备**上
 > 怎么被编译」，划分的对象是**算子**；`dist-train-lab` 讲的是「一张图在**多个设备**上怎么被切」，
 > 划分的对象是**张量与模型状态**。两者是同一个问题的两个维度——都是
-> [第 2 章](#第-2-章-七站各自固化了什么决定)说的「带通信代价的图分割」——
+> [第 2 章](#第-2-章-七站总图)说的「带通信代价的图分割」——
 > 但设备维度多了一个前面完全没有的量：**卡间带宽**。先把单设备链路走通，
 > 再引入这个量，才不会把「融合省下的访存」和「通信省下的传输」混成一笔账。
 >

@@ -558,7 +558,10 @@ for m in chain chain_fused; do
     --compile-to=flow -o $m.flow.mlir
   printf "%-14s executables=%s\n" "$m" "$(grep -c 'flow.executable ' $m.flow.mlir)"
 done
-printf "%-14s executables=%s\n" "chain_pp" "$(grep -c 'flow.executable ' chain_pp.flow.mlir)"
+# ③ 注入 preprocessing 的那条：chain_pp.flow.mlir 由上面【任务】第 3 步生成，
+#    没跑那步就跳过，不影响前两条路线的对比
+[ -f chain_pp.flow.mlir ] && \
+  printf "%-14s executables=%s\n" "chain_pp" "$(grep -c 'flow.executable ' chain_pp.flow.mlir)"
 ```
 
 **通过标准**：`linalg.generic` 计数从 **2 降到 1**（证明这条 pass 真的生效了）；三条路线（原版 / 手工预融合 / 注入 preprocessing）的 `flow.executable ` 计数**全部相同**；你能用一句话解释这个「相同」意味着什么——IREE 自己的融合已经把这活干了，前置 pass 只是提前做了同一件事。做法 B 额外要求：`--iree-preprocessing-pass-pipeline` 里写上你自己的 pass 名字能被识别（写错名字时报 unknown pass），且 pass 生效前后 IR 有可 `diff` 出的差异。

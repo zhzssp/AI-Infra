@@ -161,7 +161,7 @@
 **可跑** · 源码 [`onnx-delegate-lab/onnx_lab/01_build_and_infer.py`](../../onnx-delegate-lab/onnx_lab/01_build_and_infer.py) · 产物 `out/onnx/01_tiny_mlp.onnx`、`out/onnx/01_READING.md`
 
 ```bash
-cd onnx-delegate-lab && pip install -r requirements.txt && bash scripts/run.sh
+cd onnx-delegate-lab && bash scripts/run.sh
 python -c "import onnx;print(onnx.load('out/onnx/01_tiny_mlp.onnx'))"
 ```
 
@@ -1237,7 +1237,7 @@ print("profile:", sess.end_profiling())  # Chrome tracing / JSON 里看各 op �
 **推荐：一键跑仓库项目**
 
 ```bash
-cd onnx-delegate-lab && pip install -r requirements.txt && bash scripts/run.sh
+cd onnx-delegate-lab && bash scripts/run.sh
 # 先读 out/ANALYSIS.md；ONNX 轨覆盖下方第一步～第三步
 ```
 

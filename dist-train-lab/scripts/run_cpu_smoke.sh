@@ -54,14 +54,18 @@ if [[ -n "${TORCHRUN}" ]]; then
   echo "    拐点位置就是 DDP 要做梯度分桶的理由。"
 fi
 
-sec "⑥ 最小张量并行的数值等价（本条主判据不需要卡）"
+sec "⑥ 最小张量并行的数值等价 + DTensor 分片标注（两条主判据都不需要卡）"
 if [[ -n "${TORCHRUN}" ]]; then
+  # --dtensor 覆盖 L3-DIST-13：torch 太旧时 run_dtensor 返回 unavailable，不会中断
   "${TORCHRUN}" --standalone --nproc_per_node=2 tp_min.py \
-    --device cpu --backend gloo --hidden 256 --check col,row,ffn --count-collectives \
+    --device cpu --backend gloo --hidden 256 --check col,row,ffn \
+    --count-collectives --dtensor \
     || echo "  （返回非 0 表示某项超出 atol，去看上面哪一行是 ✘）"
   echo
   echo "  ★ 列切配 all_gather、行切配 all_reduce —— 分片状态决定了补哪个 collective。"
   echo "    Megatron FFN 整块只要 1 次通信，这就是「先列切再行切」的理由。"
+  echo "  ★ 手写版和 DTensor 版做的是同一件事：前者你自己补 collective，"
+  echo "    后者框架按 placements 推导。能在 row_placements 里看到 Partial 即过关。"
 fi
 
 sec "⑦ 汇总"

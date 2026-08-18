@@ -64,15 +64,17 @@ clang / opt / llc / mlir-opt / cmake / ninja 乃至 nvcc 全部从 conda-forge �
 | **[`setup.sh`](setup.sh)** | **一键配置环境**：建 conda 环境 + 装齐六个 lab 的全部依赖；**不需要 root、不需要 apt** | `bash setup.sh`；体检 `bash setup.sh --check` |
 | [`docs/environment-setup.md`](docs/environment-setup.md) | 环境配置详解：apt ↔ conda 对照、各 lab 降级行为、RTX 50 系的两个坑、排障 | 装不上时进来查 |
 | [`linux-apt-packages.txt`](linux-apt-packages.txt) | Linux 系统依赖清单【**可选**，仅供有 root 者参考】 | 无 root 请改用 `bash setup.sh` |
-| [`requirements.txt`](requirements.txt) | 全仓库 pip 依赖（TVM / ONNX labs）；`iree-lab/` 与 `dist-train-lab/` 各另有一份 | `pip install -r requirements.txt` |
+| [`requirements.txt`](requirements.txt) | 全仓库 pip 依赖（TVM / ONNX labs）；`iree-lab/` 与 `dist-train-lab/` 各另有一份 | 已由 `setup.sh` 装好；单独补装才用 `pip install -r requirements.txt` |
 
 **动手项目在主线上的位置**：
 
-**下面按主线顺序排，编号即建议的做题顺序**（与 [`docs/README.md`](docs/README.md) 的阶段表一致）：
+**下面按主线顺序排，编号即建议的做题顺序**（阶段编号见 [`docs/README.md`](docs/README.md) 的阶段表。
+唯一的错位是 **`dist-train-lab`：它编号第 6，阶段上却属于阶段 1**——因为它不在编译链路上，
+排期可以最先开始，见第 6 条）：
 
 1. **`llvm-hello-compile`**（P2 地基，建议先跑一遍）：建立「单层 IR + Pass + CodeGen」手感 → 对应 [`docs/learning-guides/llvm-learning-guide.md`](docs/learning-guides/llvm-learning-guide.md)。`run.sh` 建立总体印象，`tour.sh` 是 17 站细读，LLVM 篇的示例全部取自它。
 2. **`mlir-toy-dialect`**（P0 主战场，阶段 2）：建立「多层 dialect + 渐进 lowering」手感 → 对应 [`docs/learning-guides/mlir-learning-guide.md`](docs/learning-guides/mlir-learning-guide.md)；入门以 `all.sh` + Conversion/Interface 为准，Toy→linalg→llvm 端到端属加深项。另有 `run_upstream.sh` 一条上游轨（linalg / bufferize / memref→llvm），是**手工挡**的渐进 lowering。
-3. **`iree-lab`**（P0，阶段 3）：把同一个模型停在 flow/stream/hal/vm 每一相位上，再编成 `.vmfb` 跑通并对答案 → [`docs/learning-guides/iree-learning-guide.md`](docs/learning-guides/iree-learning-guide.md)。同一件事的**自动挡**：工业编译器把第 2 步那套流程封装成了相位。**只需 `pip install`，不用编译 IREE 源码，不用 GPU。**
+3. **`iree-lab`**（P0，阶段 3）：把同一个模型停在 flow/stream/hal/vm 每一相位上，再编成 `.vmfb` 跑通并对答案 → [`docs/learning-guides/iree-learning-guide.md`](docs/learning-guides/iree-learning-guide.md)。同一件事的**自动挡**：工业编译器把第 2 步那套流程封装成了相位。**依赖是两个 pip wheel（`setup.sh` 已装好），不用编译 IREE 源码，不用 GPU。**
 4. **`tvm-fatbin-lab`**（P1 TVM 轨 → P2 CUDA 轨）：调度/融合/AutoTVM 在阶段 4；fatbin 多变体回填到阶段 6 → [`docs/learning-guides/tvm-learning-guide.md`](docs/learning-guides/tvm-learning-guide.md) · [`docs/learning-guides/cuda-fatbin-learning-guide.md`](docs/learning-guides/cuda-fatbin-learning-guide.md)。
 5. **`onnx-delegate-lab`**（P1，阶段 4）：ONNX/ORT EP 分区 + ExecuTorch Partitioner → [`docs/learning-guides/onnx-learning-guide.md`](docs/learning-guides/onnx-learning-guide.md) · [`docs/learning-guides/executorch-learning-guide.md`](docs/learning-guides/executorch-learning-guide.md)。
 6. **`dist-train-lab`**（P0，阶段 1）：把划分推广到**设备维度**——DDP/FSDP/ZeRO 的显存实测、集合通信拐点、最小张量并行 → [`docs/checkpoints/08-distributed.md`](docs/checkpoints/08-distributed.md)。**排期上它可以最先开始**：进程模型、集合通信语义、16Φ 账本、分片标注这四块在**没有 GPU 的笔记本上**就能学完（13 条检验里能实质完成 6 条），剩下的等有卡再补。
@@ -134,7 +136,7 @@ LLVM/MLIR/IREE 练 IR 基建与降低；中间两个 lab 正交——TVM 练「�
 
 ### 1.1 「算力网上大模型分布式运行基础设施」到底要做什么
 
-结合调研论文 [Efficient Training over Distributed Infra](docs/paper-notes/01-efficient-training-distributed-infra.md) 和第五阶段的研究问题，这套基础设施大致要回答四个工程问题：
+结合调研论文 [Efficient Training over Distributed Infra](docs/paper-notes/01-efficient-training-distributed-infra.md) 和 §6 的研究问题，这套基础设施大致要回答四个工程问题：
 
 ```
                         一个大模型（Transformer）
@@ -443,7 +445,7 @@ Runtime：HAL driver + VM
 
 📌 [ONNX](https://onnx.ai/) · [ExecuTorch `to_backend`](https://pytorch.org/executorch/) · [ORT Execution Providers](https://onnxruntime.ai/docs/execution-providers/)
 
-**为什么它是 P1 而不是 P2**：第五阶段那六个研究问题，**全部是从多后端委托机制里长出来的**。不亲手用一次 partitioner，那六个问题就只是纸上的句子。
+**为什么它是 P1 而不是 P2**：§6 那六个研究问题，**全部是从多后端委托机制里长出来的**。不亲手用一次 partitioner，那六个问题就只是纸上的句子。
 
 **必学核心特性**：
 
@@ -546,7 +548,7 @@ Runtime：HAL driver + VM
 
 ---
 
-## 6. 第五阶段：多后端协同的前沿研究问题
+## 6. 阶段 6 收束：多后端协同的前沿研究问题
 
 这是路线最终聚焦的研究课题，来自 ExecuTorch 与 ONNX Runtime 多后端委托机制衍生的六个关键挑战。**每个问题下列出「已有工作参照」——本仓库材料里已经部分触及该问题的工作。带着这些参照去想，比空想有效得多。**
 
@@ -690,7 +692,7 @@ Runtime：HAL driver + VM
 ### 8.1 三条硬性原则
 
 1. **每个项目先画框架图，再抠细节。** 如果画不出「输入是什么 → 经过哪几层 → 每层固化了什么决定 → 输出是什么」，说明还没入门，抠细节是浪费时间。
-2. **动手环节不可跳过，但停在入门线。** 硬门槛：`llvm-hello-compile` 与 `mlir-toy-dialect` 的 `ANALYSIS`/演示能讲；`iree-lab` 跑通并读完 `out/PHASES.md`；再加两个 lab 的 ONNX/TVM 轨。真·双后端、端到端 lowering、C runtime 属加深，不挡「入门通过」。
+2. **动手环节不可跳过，但停在入门线。** 硬门槛：`llvm-hello-compile` 与 `mlir-toy-dialect` 的 `ANALYSIS`/演示能讲；`iree-lab` 跑通并读完 `out/PHASES.md`；再加两个 lab 的 ONNX/TVM 轨；`dist-train-lab` 至少跑完无卡冒烟。真·双后端、端到端 lowering、C runtime、多卡实测属加深，不挡「入门通过」。
 3. **读材料带着两个问题**：*「核心框架是什么？」* 以及 *「它如何帮助我理解 §6 研究问题的价值与边界？」* 每篇笔记的关联/最小必要集节读完，对照检查自己的答案。
 
 ### 8.2 阶段性验收（入门通过线）
@@ -704,7 +706,7 @@ Runtime：HAL driver + VM
 - [ ] 说清「一个算子在 ORT 里从模型文件到某个 EP 上执行，中间经过了哪些决策点」。
 - [ ] 说明「融合 + tiling + 重计算」为何是关键杠杆（用 foundations §4.3 的 Roofline 说即可；读过 FA 的话用它当实证）。
 - [ ] 对六个研究问题**逐个**能说出：问题在问什么、为何值得想、已有工作大致边界、**自己的观点**（用 foundations 同一套词；不要求实现方案）。
-- [ ] **动手硬门槛（入门）**：`llvm-hello-compile` / `mlir-toy-dialect` / `iree-lab` / `tvm-fatbin-lab`（TVM 轨）/ `onnx-delegate-lab`（ONNX 轨）各自产物能讲；缺 CUDA/ExecuTorch/多卡时允许对应项降级（`iree-lab` 是 CPU-only 的 pip 包，**不在可降级之列**）。
+- [ ] **动手硬门槛（入门）**：`llvm-hello-compile` / `mlir-toy-dialect` / `iree-lab` / `tvm-fatbin-lab`（TVM 轨）/ `onnx-delegate-lab`（ONNX 轨）/ `dist-train-lab`（`run_cpu_smoke.sh`，无卡即可）各自产物能讲；缺 CUDA/ExecuTorch/多卡时允许对应项降级（`iree-lab` 是 CPU-only 的 pip 包，**不在可降级之列**）。
 - [ ] **把主角模型串起来**：`tiny_mlp` 这一张图在 ONNX / linalg / Relay / IREE 四处各是什么形态，各系统最后剩几个 kernel，差值说明了什么（见[链路总纲](docs/learning-guides/00-end-to-end-pipeline.md)第 4 章）。
 
 > 上面全是**口述题**。要判定「会做」而不只是「会讲」，走 [`docs/checkpoints/`](docs/checkpoints/README.md)：每个工具一册，把知识点绑到「在项目里加一个组件 + 跑出预期差异」上，每册的入门线是至少完成两条 L2。需要申请超算/GPU 的条目已在各册标注并汇总。

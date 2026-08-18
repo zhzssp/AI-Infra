@@ -61,7 +61,7 @@ AI-Infra/
 
 > 阶段地图里的「验」是**口述题**（能不能讲清）。口述过了不等于会做——动手判定在 [`checkpoints/`](./checkpoints/README.md)：每个工具一册，把知识点绑到「加一个组件 + 跑出预期差异」上。
 
-五个动手项目在主线上的位置：
+六个动手项目在主线上的位置：
 
 | 项目 | 角色 | 何时做 |
 |------|------|--------|
@@ -107,7 +107,7 @@ AI-Infra/
 |--|------|
 | **读** | 先补 foundations **§9.1–9.3 + §5.4 内存层次**（§9.4–9.5 属自选，跳过）→ [`paper-notes/01-efficient-training-distributed-infra.md`](./paper-notes/01-efficient-training-distributed-infra.md)：先 §2 框架 + §12 最小必要集，再抠 SPMD / 16Φ / 五种并行；三种标注体系对照着扫即可 |
 | **做** | `cd dist-train-lab && bash scripts/run_cpu_smoke.sh`（**无卡即可**，几十秒）→ 有卡后 `bash scripts/run_8gpu_wall.sh` 补显存与吞吐实测 |
-| **验** | 五分钟讲清「70B 怎么切到 128 卡」；背出 16Φ **并说清混合精度与 fp32 两种口径的构成差异**；三种分片标注能对照说同一策略；`param_diff == 0` 与 `grad_diff < 1e-6` 各自证明了什么 |
+| **验** | 五分钟讲清「70B 怎么切到 128 卡」；背出 16Φ **并说清混合精度与 fp32 两种口径的构成差异**；三种分片标注能对照说同一策略（**本阶段口述即可**，动手版是 [L3-DIST-13](./checkpoints/08-distributed.md)，留到有卡之后）；`param_diff == 0` 与 `grad_diff < 1e-6` 各自证明了什么 |
 | **串到后面** | 「并行策略要变成 IR 属性」→ 阶段 2/3 的 MLIR + IREE 才有的放矢 |
 
 ### 阶段 2｜MLIR 入门（P0，约 1 周；对应周次表 W2）
@@ -128,7 +128,7 @@ AI-Infra/
 | **验** | 画出 `linalg→flow→stream→hal`；口述 HAL 对象关系与 timeline semaphore 为何强于 `CUevent`；**数出主角模型的 `flow.dispatch` 个数并解释为什么少于 4** |
 | **串到项目目标** | HAL 的 device/buffer/command_buffer/variant ≈ 算力网「异构设备统一抽象」的现成词汇表 |
 
-### 阶段 4｜图级编译与多后端委托（P1，约 1～1.5 周；对应周次表 W4+W5）
+### 阶段 4｜图级编译与多后端委托（P1，约 2 周，紧凑可压到 1.5 周；对应周次表 W4+W5）
 
 | | 内容 |
 |--|------|
@@ -299,14 +299,16 @@ tvm-fatbin-lab（融合/schedule）     ≈     onnx-delegate-lab（EP/Partition
 - [ ] 「融合 + tiling + 重计算」为何是核心杠杆（Roofline 口径即可；FA 是可选实证）  
 - [ ] 六个研究问题均能说出价值、已有边界与自己的观点（不要求实现方案）  
 
-四条动手硬门槛（入门线；没做等于没学）：
+六条动手硬门槛（入门线；没做等于没学。与根 README §8.2 同一份清单）：
 
 - [ ] `llvm-hello-compile` 跑通，能讲解 mem2reg 前后 IR  
 - [ ] `mlir-toy-dialect` 跑通，能讲解 `--toy-to-low-convert` 与 `--toy-print-cost`  
+- [ ] `iree-lab` 跑通，能读 `out/PHASES.md` 说清每相位新增了什么信息（CPU-only 的 pip 包，**不可降级**）  
 - [ ] `tvm-fatbin-lab` 跑通（至少 TVM 轨），能讲解两份 matmul lower；有 CUDA 时再讲 fatbin dump  
 - [ ] `onnx-delegate-lab` 跑通（至少 ONNX 轨），能讲解 EP 分区边界与 Partitioner tag 策略对比  
+- [ ] `dist-train-lab` 的 `run_cpu_smoke.sh` 跑通，能讲清 `param_diff == 0` 为什么是 DDP 的核心不变量（**无卡即可**；多卡那半允许降级）  
 
-**以上四条只是 L0（跑通 + 能讲）**。要判定「真的会做」，继续走 [`checkpoints/`](./checkpoints/README.md)：每册至少完成两条 L2（自己加一个组件并跑出预期差异）。
+**以上六条只是 L0（跑通 + 能讲）**。要判定「真的会做」，继续走 [`checkpoints/`](./checkpoints/README.md)：每册至少完成两条 L2（自己加一个组件并跑出预期差异）。
 
 ---
 
@@ -319,8 +321,9 @@ tvm-fatbin-lab（融合/schedule）     ≈     onnx-delegate-lab（EP/Partition
 - **每个「示例精讲」标注可跑性**：标题下第一行用三选一的标签起头，让读者一眼知道该不该开终端：  
   `**可跑**` · 源码 `<路径>` · 命令 `<命令>` · 产物 `<路径>`　｜　`**部分可跑**`（说明哪半段能跑、哪半段是推演）　｜　`**无 lab 对应**`（说明为什么不用 lab，以及最接近的 lab 在哪）。  
   判据：读者照着标签行动，不应该出现「跑了半天发现根本跑不了」或「以为要推演其实能跑」。
-- **主角保持唯一**：图级主角是 `tiny_mlp`（`Gemm → Relu → Add`，权重 `[out,in]=[4,3]` + `transB=1`），算子级主角是它 Gemm 的最内层 `axpy`。新写示例尽量沿用，改主角要同步 [`00-end-to-end-pipeline.md`](./learning-guides/00-end-to-end-pipeline.md) 第 1 章。
-- **每份专题指南开头带「本篇在链路中的位置」**：四栏固定为「上游交给我 / 我固化 / 我交给下游 / 本篇的主角」，内容与 [`00-end-to-end-pipeline.md`](./learning-guides/00-end-to-end-pipeline.md) 第 2 章总图保持一致，改一处要同步另一处。
+- **主角保持唯一**：图级主角是 `tiny_mlp`（`Gemm → Relu → Add`，权重 `[out,in]=[4,3]` + `transB=1`），算子级主角是它 Gemm 的最内层 `axpy`，规模级主角是 `tiny_mlp` 放大到 GPU 尺寸的 `FFNBlock`（`dist-train-lab/model.py`，只有分布式轨用）。新写示例尽量沿用，改主角要同步 [`00-end-to-end-pipeline.md`](./learning-guides/00-end-to-end-pipeline.md) 第 1 章。
+- **每份专题指南开头带「本篇在链路中的位置」**：四栏固定为「上游交给我 / 我固化 / 我交给下游 / 本篇的主角」，内容与 [`00-end-to-end-pipeline.md`](./learning-guides/00-end-to-end-pipeline.md) 第 2 章总图保持一致，改一处要同步另一处。  
+  **唯一例外是 [foundations](./learning-guides/ai-compiler-foundations-learning-guide.md)**：它不占任何一站、也没有自己的主角（是七站共用的词典），该小节改为「两篇分工 + 章节↔站点索引」两栏。
 - **新论文笔记** → 放进 `paper-notes/`，按现有七节骨架写，并更新 [`paper-notes/README.md`](./paper-notes/README.md) 与根 README §9。  
 - **新专题文档**（官方文档蒸馏）→ 放在 [`learning-guides/`](./learning-guides/)，在本页 §3.1 与根 README「专题学习文档」表各加一行；若引入新的横切概念，同步补 [`ai-compiler-foundations-learning-guide.md`](./learning-guides/ai-compiler-foundations-learning-guide.md) 对应章节与对照表。  
 - **新增检验条目** → 放进 [`checkpoints/`](./checkpoints/README.md) 对应分册，必须凑齐六栏：检验什么 / 前置 / 资源 / 任务 / **先预测再动手** / 可执行的验收命令 + 机器可判定的通过标准 + 常见失败映射。缺「通过标准」的条目不收——那样又退回成口述题。  

@@ -318,7 +318,7 @@ def main(x: R.Tensor(("n", 3, 224, 224), "float32"),
 **可跑** · 源码 [`tvm-fatbin-lab/tvm_lab/02_fusion_relay.py`](../../tvm-fatbin-lab/tvm_lab/02_fusion_relay.py) · 产物 `out/tvm/02_relay_{before,after}_fuse.ir.txt`
 
 ```bash
-cd tvm-fatbin-lab && pip install -r requirements.txt && bash scripts/run_tvm.sh
+cd tvm-fatbin-lab && bash scripts/run_tvm.sh
 diff out/tvm/02_relay_before_fuse.ir.txt out/tvm/02_relay_after_fuse.ir.txt
 ```
 
@@ -1584,7 +1584,7 @@ lib["default"](dev) → runtime.Module  （已绑定设备的 graph executor 实
 **推荐入口（仓库动手项目）**：[`../../tvm-fatbin-lab/`](../../tvm-fatbin-lab/)
 
 ```bash
-cd tvm-fatbin-lab && pip install -r requirements.txt && bash scripts/run_tvm.sh
+cd tvm-fatbin-lab && bash scripts/run_tvm.sh
 # 先读 out/ANALYSIS.md 与 out/tvm/01_READING.md …
 ```
 
