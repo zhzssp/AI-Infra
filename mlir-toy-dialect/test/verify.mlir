@@ -3,8 +3,8 @@
 // RUN: %toy-opt %s -split-input-file -verify-diagnostics
 //
 // 两个新参数值得记住：
-//   -split-input-file    用 `// -----` 把本文件切成多个独立模块分别处理，
-//                        这样一个非法用例不会阻断后面的用例。
+//   -split-input-file    用「// 后跟五个连字符」的分隔行把本文件切成
+//                        多个独立模块分别处理，这样一个非法用例不会阻断后面的用例。
 //   -verify-diagnostics  不把错误当成失败，而是核对"报出来的错"是否
 //                        与 `expected-error` 标注的一致；一致才算 PASS。
 //                        换句话说：这个测试断言的是"该报错的地方必须报错"。
